@@ -10,6 +10,14 @@ try {
   console.error('Failed to load ethers.js in background script:', error);
 }
 
+// Import security utilities and keyring service
+try {
+  importScripts('crypto-utils.js', 'keyring-service.js');
+  console.log('Security utilities loaded in background script');
+} catch (error) {
+  console.error('Failed to load security utilities in background script:', error);
+}
+
 // Network Configurations
 const networkConfigs = {
   // PulseChain Mainnet (Example - Verify details if needed)
@@ -39,11 +47,22 @@ const DEFAULT_CHAIN_ID = 943; // Default to Testnet V4 for now
 // Session state management
 let walletSessionActive = false;
 let walletData = null; // Holds address, lastLogin etc.
-let ephemeralDecryptedKey = null;
+// REMOVED: ephemeralDecryptedKey - Private keys now handled by KeyringService
 let currentChainId = DEFAULT_CHAIN_ID; // Track the active network
 let sessionTimeout = null;
 let sessionStartTime = null;
 let sessionDuration = 5 * 60 * 1000; // 5 minutes default
+
+// Initialize KeyringService
+let keyringService = null;
+
+// Secure memory for temporary sensitive operations
+let secureMemory = null;
+try {
+  secureMemory = new SecureMemory();
+} catch (error) {
+  console.error('Failed to initialize secure memory:', error);
+}
 
 // Initialize provider for current network
 function initializeProvider() {
@@ -196,7 +215,11 @@ function clearSessionState() {
     // Removed log mentioning key clearing
     walletSessionActive = false;
     walletData = null;
-    ephemeralDecryptedKey = null;
+    // Clear keyring service
+    if (keyringService) {
+        keyringService.clearMemory();
+        keyringService = null;
+    }
     clearTimeout(sessionTimeoutId);
     sessionTimeoutId = null;
     // Also clear any persisted session metadata from storage
@@ -303,13 +326,14 @@ function logoutWalletInternal() {
   walletSessionActive = false;
   // Keep walletData (like address) or clear it? Let's keep it for now.
   // walletData = null;
-  if (ephemeralDecryptedKey) {
-      // Removed log about decrypted key
-      // Attempt to securely clear - effectiveness varies in JS
-      ephemeralDecryptedKey = ''.padStart(ephemeralDecryptedKey.length, '\0');
-      ephemeralDecryptedKey = null;
-  } else {
-      // Removed log about ephemeral key
+  // Clear keyring service memory
+  if (keyringService) {
+      keyringService.clearMemory();
+  }
+  
+  // Clear any temporary data in secure memory
+  if (secureMemory) {
+      secureMemory.clear();
   }
   clearTimeout(sessionTimeoutId);
   sessionTimeoutId = null;
@@ -1109,7 +1133,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             address: message.address,
             lastLogin: new Date().toISOString()
           };
-          ephemeralDecryptedKey = message.decryptedKey || null;
+          // Initialize keyring service with password instead of storing key
+          if (!keyringService) {
+              keyringService = new KeyringService();
+          }
+          await keyringService.initialize(message.password);
 
           let responseSent = false; // Flag to track if response has been sent
 
@@ -1219,7 +1247,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               address: wallet.address,
               lastLogin: new Date().toISOString()
             };
-            ephemeralDecryptedKey = wallet.privateKey;
+            // Initialize keyring service instead of storing private key
+            if (!keyringService) {
+                keyringService = new KeyringService();
+            }
+            await keyringService.initialize(message.password);
+            
+            // Clear the wallet object immediately
+            if (wallet._signingKey) {
+                wallet._signingKey = null;
+            }
             
             // Start session timeout and save state
             startSessionTimeout();
@@ -1283,16 +1320,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case "getDecryptedKey":
           console.log("Processing getDecryptedKey message...");
-          // IMPORTANT: Only return the key if the session is *currently* active
-          if (walletSessionActive && ephemeralDecryptedKey) {
-            console.log("Returning ephemeral key from background memory.");
-            sendResponse({ decryptedKey: ephemeralDecryptedKey });
+          // Session must be active but we don't return keys anymore
+          if (walletSessionActive) {
+              // Return success without exposing any keys
+              sendResponse({ success: true, message: "Session active" });
           } else {
-            console.log("No active session or no ephemeral key available in background memory.");
-            // Ensure key is null if sending null response
-            if (!walletSessionActive) console.log("Reason: Session not active.");
-            if (!ephemeralDecryptedKey) console.log("Reason: Key not stored or background restarted.");
-            sendResponse({ decryptedKey: null });
+              sendResponse({ success: false, message: "Session expired. Please login again." });
           }
           break;
 

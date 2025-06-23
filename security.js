@@ -86,42 +86,52 @@ const secureStorage = {
     }
 };
 
-// Secure memory handling
+// Enhanced secure memory handling with proper clearing
 const secureMemory = {
     // Clear sensitive data from variables
     clearData: (variable) => {
         if (typeof variable === 'string') {
-            // Attempt to overwrite (effectiveness varies in JS)
-            variable = ''.padStart(variable.length, '\0');
+            // Strings are immutable in JS, can't truly clear them
+            // Best practice: use Uint8Array for sensitive data instead
             return '';
         } else if (Array.isArray(variable)) {
-            variable.fill(null, 0, variable.length); // Fill with null
+            // For arrays, clear each element then reset
+            variable.forEach((item, index) => {
+                if (item instanceof Uint8Array) {
+                    crypto.getRandomValues(item); // Overwrite with random
+                    item.fill(0); // Then zeros
+                }
+                variable[index] = null;
+            });
             variable.length = 0;
             return variable;
         } else if (variable instanceof Uint8Array) {
-            variable.fill(0);
+            // Proper secure clearing for typed arrays
+            crypto.getRandomValues(variable); // Overwrite with random
+            variable.fill(0); // Then with zeros
+            return variable;
+        } else if (variable instanceof ArrayBuffer) {
+            // Clear ArrayBuffer through a view
+            const view = new Uint8Array(variable);
+            crypto.getRandomValues(view);
+            view.fill(0);
             return variable;
         } else if (typeof variable === 'object' && variable !== null) {
             Object.keys(variable).forEach(key => {
-                // Check if property is configurable before deleting
                 const descriptor = Object.getOwnPropertyDescriptor(variable, key);
                 if (descriptor && descriptor.configurable) {
                     secureMemory.clearData(variable[key]);
                     try {
                         delete variable[key];
                     } catch (e) {
-                        // If deletion fails (e.g., non-configurable), try setting to null
                         variable[key] = null;
                     }
                 } else {
-                    // If not configurable, just try to nullify
-                     variable[key] = null;
+                    variable[key] = null;
                 }
             });
-            // Attempt to freeze the object to prevent further modification? Might be too aggressive.
             return variable;
         }
-        // For primitive types other than string, just return null/undefined
         return null;
     },
     

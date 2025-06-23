@@ -5,6 +5,94 @@
 
 console.log("HeartWallet content script loaded.");
 
+// Include SecureMessageValidator inline since content scripts can't easily import
+class SecureMessageValidator {
+    constructor() {
+        // Allowed message types
+        this.allowedMethods = new Set([
+            'eth_accounts',
+            'eth_requestAccounts',
+            'eth_sendTransaction',
+            'personal_sign',
+            'eth_signTypedData',
+            'eth_signTypedData_v3',
+            'eth_signTypedData_v4',
+            'eth_chainId',
+            'wallet_switchEthereumChain',
+            'wallet_addEthereumChain',
+            'wallet_watchAsset',
+            'eth_getBalance',
+            'eth_getTransactionCount',
+            'eth_estimateGas',
+            'eth_gasPrice',
+            'eth_getBlockByNumber',
+            'eth_call'
+        ]);
+        
+        // Rate limiting map
+        this.rateLimits = new Map();
+        this.RATE_LIMIT_WINDOW = 60000; // 1 minute
+        this.MAX_REQUESTS_PER_WINDOW = 30;
+    }
+    
+    validateOrigin(origin) {
+        if (!origin || typeof origin !== 'string') return false;
+        
+        let url;
+        try {
+            url = new URL(origin);
+        } catch {
+            return false;
+        }
+        
+        // Block non-HTTPS origins in production (allow localhost for dev)
+        if (url.protocol !== 'https:' && 
+            url.hostname !== 'localhost' && 
+            url.hostname !== '127.0.0.1') {
+            console.warn('Blocked non-HTTPS origin:', origin);
+            return false;
+        }
+        
+        return true;
+    }
+    
+    validateMessage(message) {
+        if (!message || typeof message !== 'object') {
+            return { valid: false, error: 'Invalid message structure' };
+        }
+        
+        if (!message.method || typeof message.method !== 'string') {
+            return { valid: false, error: 'Missing or invalid method' };
+        }
+        
+        if (!this.allowedMethods.has(message.method)) {
+            return { valid: false, error: `Method not allowed: ${message.method}` };
+        }
+        
+        return { valid: true };
+    }
+    
+    checkRateLimit(origin) {
+        const now = Date.now();
+        const windowStart = now - this.RATE_LIMIT_WINDOW;
+        
+        if (!this.rateLimits.has(origin)) {
+            this.rateLimits.set(origin, []);
+        }
+        
+        const requests = this.rateLimits.get(origin);
+        const recentRequests = requests.filter(timestamp => timestamp > windowStart);
+        this.rateLimits.set(origin, recentRequests);
+        
+        if (recentRequests.length >= this.MAX_REQUESTS_PER_WINDOW) {
+            return false;
+        }
+        
+        recentRequests.push(now);
+        return true;
+    }
+}
+
 /**
  * Injects the inpage script into the page's context.
  */
@@ -32,8 +120,23 @@ injectScript();
 
 // --- Message Relaying --- //
 
+// Initialize secure message validator
+const messageValidator = new SecureMessageValidator();
+
 // Store pending requests
 const pendingRequests = new Map();
+
+// Clean up old pending requests periodically
+setInterval(() => {
+    const now = Date.now();
+    const TIMEOUT = 5 * 60 * 1000; // 5 minutes
+    
+    for (const [id, request] of pendingRequests.entries()) {
+        if (now - request.timestamp > TIMEOUT) {
+            pendingRequests.delete(id);
+        }
+    }
+}, 60000); // Check every minute
 
 // 1. Listen for messages FROM the inpage script (window.postMessage)
 window.addEventListener('message', (event) => {
@@ -41,10 +144,31 @@ window.addEventListener('message', (event) => {
     if (event.source !== window) {
         return;
     }
+    
+    // Validate origin
+    if (!messageValidator.validateOrigin(event.origin || window.location.origin)) {
+        console.error('ContentScript: Blocked message from invalid origin:', event.origin);
+        return;
+    }
 
     // Check if the message is intended for us (the content script)
     if (event.data && event.data.target === 'contentscript' && event.data.requestFor === 'heartwallet') {
         const requestPayload = event.data.payload;
+        
+        // Validate message structure and content
+        const validation = messageValidator.validateMessage(requestPayload);
+        if (!validation.valid) {
+            console.error('ContentScript: Invalid message:', validation.error);
+            handleMessageError(requestPayload.id, validation.error);
+            return;
+        }
+        
+        // Check rate limiting
+        if (!messageValidator.checkRateLimit(window.location.origin)) {
+            console.error('ContentScript: Rate limit exceeded');
+            handleMessageError(requestPayload.id, 'Rate limit exceeded. Please wait before making more requests.');
+            return;
+        }
         console.debug('ContentScript: Received request from Inpage:', requestPayload);
         
         // Store the request for potential response later

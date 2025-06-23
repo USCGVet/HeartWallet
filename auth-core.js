@@ -93,23 +93,94 @@ class AuthManager {
     }
 
     async validatePassword(password) {
-        if (!password || password.length < 8) {
-            return { valid: false, error: 'Password must be at least 8 characters long' };
+        if (!password || password.length < 12) {
+            return { valid: false, error: 'Password must be at least 12 characters long' };
         }
         
-        // Add more password validation rules as needed
+        // Enhanced password validation for better security
         const hasUpperCase = /[A-Z]/.test(password);
         const hasLowerCase = /[a-z]/.test(password);
         const hasNumbers = /\d/.test(password);
+        const hasSpecialChars = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
         
-        if (!hasUpperCase || !hasLowerCase || !hasNumbers) {
+        if (!hasUpperCase || !hasLowerCase || !hasNumbers || !hasSpecialChars) {
             return { 
                 valid: false, 
-                error: 'Password must contain at least one uppercase letter, one lowercase letter, and one number' 
+                error: 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character' 
+            };
+        }
+        
+        // Check for common weak patterns
+        const commonPatterns = [
+            /^12345/, /^password/i, /^qwerty/i, /^admin/i, /^letmein/i,
+            /^welcome/i, /^monkey/i, /^dragon/i
+        ];
+        
+        for (const pattern of commonPatterns) {
+            if (pattern.test(password)) {
+                return {
+                    valid: false,
+                    error: 'Password contains common weak patterns. Please choose a stronger password'
+                };
+            }
+        }
+        
+        // Calculate password entropy (basic estimation)
+        let charSpace = 0;
+        if (hasLowerCase) charSpace += 26;
+        if (hasUpperCase) charSpace += 26;
+        if (hasNumbers) charSpace += 10;
+        if (hasSpecialChars) charSpace += 32;
+        
+        const entropy = password.length * Math.log2(charSpace);
+        
+        // Require at least 60 bits of entropy
+        if (entropy < 60) {
+            return {
+                valid: false,
+                error: 'Password is not strong enough. Please use a longer password or more character variety'
             };
         }
         
         return { valid: true };
+    }
+    
+    /**
+     * Calculate password strength for UI feedback
+     * @param {string} password - Password to check
+     * @returns {object} Strength level and score
+     */
+    calculatePasswordStrength(password) {
+        if (!password) return { strength: 'none', score: 0 };
+        
+        let score = 0;
+        
+        // Length scoring
+        if (password.length >= 8) score += 10;
+        if (password.length >= 12) score += 10;
+        if (password.length >= 16) score += 10;
+        if (password.length >= 20) score += 10;
+        
+        // Character variety scoring
+        if (/[a-z]/.test(password)) score += 10;
+        if (/[A-Z]/.test(password)) score += 10;
+        if (/\d/.test(password)) score += 10;
+        if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) score += 20;
+        
+        // Pattern penalty
+        if (/(.)\1{2,}/.test(password)) score -= 10; // Repeated characters
+        if (/^[0-9]+$/.test(password)) score -= 10; // Only numbers
+        if (/^[a-zA-Z]+$/.test(password)) score -= 10; // Only letters
+        
+        // Determine strength level
+        let strength;
+        if (score < 20) strength = 'very weak';
+        else if (score < 40) strength = 'weak';
+        else if (score < 60) strength = 'medium';
+        else if (score < 80) strength = 'strong';
+        else strength = 'very strong';
+        
+        return { strength, score: Math.max(0, Math.min(100, score)) };
     }    async changePassword(oldPassword, newPassword) {
         try {
             // First verify old password by unlocking wallet
