@@ -204,36 +204,49 @@ function displayWalletList(wallets) {
 
 // Export private key for a wallet
 async function exportPrivateKey(walletId, walletAddress) {
+    console.log('[Settings] exportPrivateKey called with:', { walletId, walletAddress });
+    
     // First, ask for confirmation
     if (!confirm(`Are you sure you want to export the private key for wallet ${walletAddress.substring(0, 10)}...?\n\nWARNING: Keep your private key secure! Anyone with access to it can control your wallet.`)) {
+        console.log('[Settings] Export cancelled by user');
         return;
     }
     
-    // Ask for password
-    const password = prompt('Please enter your wallet password to export the private key:');
+    // Ask for password using custom modal
+    const password = await PasswordPromptModal.prompt(
+        'Please enter your wallet password to export the private key:',
+        'Export Private Key'
+    );
     if (!password) {
+        console.log('[Settings] No password provided');
         return;
     }
+    
+    console.log('[Settings] Password provided, attempting export...');
     
     try {
         // Use wallet core to export private key
         const privateKey = await walletCore.exportPrivateKey(walletId, password);
+        console.log('[Settings] Private key exported successfully, length:', privateKey?.length);
         
         // Display the private key in a modal
         showPrivateKeyModal(privateKey, walletAddress);
+        console.log('[Settings] Modal should be displayed');
         
     } catch (error) {
-        console.error('Error exporting private key:', error);
+        console.error('[Settings] Error exporting private key:', error);
         if (error.message.includes('password') || error.message.includes('invalid')) {
             showNotification('Incorrect password', 'error');
         } else {
-            showNotification('Failed to export private key', 'error');
+            showNotification('Failed to export private key: ' + error.message, 'error');
         }
     }
 }
 
 // Show private key in a modal dialog
 function showPrivateKeyModal(privateKey, walletAddress) {
+    console.log('[Settings] showPrivateKeyModal called with privateKey length:', privateKey?.length);
+    
     // Create modal overlay
     const modalOverlay = document.createElement('div');
     modalOverlay.className = 'modal-overlay';
@@ -287,6 +300,7 @@ function showPrivateKeyModal(privateKey, walletAddress) {
     
     // Add to page
     document.body.appendChild(modalOverlay);
+    console.log('[Settings] Modal added to document.body');
     
     // Add copy functionality
     document.getElementById('copyPrivateKey').addEventListener('click', function() {

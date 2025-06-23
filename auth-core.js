@@ -200,12 +200,21 @@ class AuthManager {
             console.error('Error changing password:', error);
             throw error;
         }
-    }    async exportPrivateKey(password) {
+    }    async exportPrivateKey(password, walletId = null) {
         try {
+            // If no walletId provided, get the active wallet
+            if (!walletId) {
+                walletId = await this.walletCore.getActiveWalletId();
+                if (!walletId) {
+                    throw new Error('No active wallet found');
+                }
+            }
+            
             // Export private key through background script
             return new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
                     action: 'exportPrivateKey',
+                    walletId: walletId,
                     password: password
                 }, response => {
                     if (chrome.runtime.lastError) {

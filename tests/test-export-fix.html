@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Export Private Key Fix</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        pre {
+            background: #000;
+            padding: 15px;
+            border: 1px solid #00ff00;
+            overflow-x: auto;
+        }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            margin: 5px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #00cc00;
+        }
+        input {
+            background: #000;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 5px;
+            font-family: monospace;
+            margin: 5px;
+        }
+        .error {
+            color: #ff0000;
+        }
+        .success {
+            color: #00ff00;
+        }
+        .info {
+            color: #ffff00;
+        }
+    </style>
+</head>
+<body>
+    <h1>Heart Wallet - Export Private Key Test</h1>
+    
+    <div>
+        <button id="checkWallets">1. Check Wallets</button>
+        <button id="checkSession">2. Check Session</button>
+        <button id="testExport">3. Test Export</button>
+        <button id="clearConsole">Clear Console</button>
+    </div>
+    
+    <div style="margin-top: 20px;">
+        <label>Password: <input type="password" id="password" placeholder="Enter password for testing"></label>
+    </div>
+    
+    <pre id="console"></pre>
+    
+    <script>
+        const consoleEl = document.getElementById('console');
+        const passwordInput = document.getElementById('password');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            consoleEl.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+        
+        // Check wallets
+        document.getElementById('checkWallets').addEventListener('click', async () => {
+            log('Checking wallets...', 'info');
+            
+            try {
+                const walletList = await new Promise(resolve => {
+                    chrome.storage.local.get(['walletList'], result => {
+                        resolve(result.walletList || []);
+                    });
+                });
+                
+                log(`Found ${walletList.length} wallet(s)`, 'success');
+                
+                for (const wallet of walletList) {
+                    log(`  - ${wallet.address} (${wallet.name})`, 'info');
+                    log(`    ID: ${wallet.id}`, 'info');
+                    
+                    // Check if wallet data exists
+                    const walletData = await new Promise(resolve => {
+                        chrome.storage.local.get([wallet.id], result => {
+                            resolve(result[wallet.id]);
+                        });
+                    });
+                    
+                    if (walletData) {
+                        log(`    ✓ Encrypted data exists (${walletData.length} chars)`, 'success');
+                    } else {
+                        log(`    ✗ No encrypted data found!`, 'error');
+                    }
+                }
+                
+                // Check active wallet
+                const activeWalletId = await new Promise(resolve => {
+                    chrome.storage.local.get(['activeWalletId'], result => {
+                        resolve(result.activeWalletId);
+                    });
+                });
+                
+                if (activeWalletId) {
+                    log(`Active wallet: ${activeWalletId}`, 'info');
+                } else {
+                    log('No active wallet set', 'error');
+                }
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        });
+        
+        // Check session
+        document.getElementById('checkSession').addEventListener('click', async () => {
+            log('Checking session status...', 'info');
+            
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({ action: 'getSessionInfo' }, response => {
+                        if (chrome.runtime.lastError) {
+                            reject(chrome.runtime.lastError);
+                        } else {
+                            resolve(response);
+                        }
+                    });
+                });
+                
+                log(`Session: ${response.isLoggedIn ? 'LOGGED IN' : 'NOT LOGGED IN'}`, response.isLoggedIn ? 'success' : 'error');
+                
+                if (!response.isLoggedIn) {
+                    log('You need to log in before exporting private keys', 'info');
+                }
+                
+            } catch (error) {
+                log(`Error checking session: ${error.message}`, 'error');
+            }
+        });
+        
+        // Test export
+        document.getElementById('testExport').addEventListener('click', async () => {
+            log('Testing export private key...', 'info');
+            
+            const password = passwordInput.value;
+            if (!password) {
+                log('Please enter a password first', 'error');
+                return;
+            }
+            
+            try {
+                // Get wallet list
+                const walletList = await new Promise(resolve => {
+                    chrome.storage.local.get(['walletList'], result => {
+                        resolve(result.walletList || []);
+                    });
+                });
+                
+                if (walletList.length === 0) {
+                    log('No wallets found', 'error');
+                    return;
+                }
+                
+                const testWallet = walletList[0];
+                log(`Testing with wallet: ${testWallet.address}`, 'info');
+                log(`Wallet ID: ${testWallet.id}`, 'info');
+                
+                // Test export
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
+                        action: 'exportPrivateKey',
+                        walletId: testWallet.id,
+                        password: password
+                    }, response => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(response);
+                        }
+                    });
+                });
+                
+                if (response.success) {
+                    log('✓ Private key exported successfully!', 'success');
+                    log(`Private key: ${response.privateKey.substring(0, 10)}...${response.privateKey.substring(response.privateKey.length - 4)}`, 'success');
+                    log(`Length: ${response.privateKey.length} (should be 66 for 0x + 64 hex chars)`, 'info');
+                } else {
+                    log(`✗ Export failed: ${response.error}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        });
+        
+        // Clear console
+        document.getElementById('clearConsole').addEventListener('click', () => {
+            consoleEl.innerHTML = '';
+            log('Console cleared', 'info');
+        });
+        
+        // Initial message
+        log('Heart Wallet Export Private Key Test Ready', 'success');
+        log('1. First click "Check Wallets" to see available wallets', 'info');
+        log('2. Then click "Check Session" to verify login status', 'info');
+        log('3. Enter your password and click "Test Export"', 'info');
+    </script>
+</body>
+</html>

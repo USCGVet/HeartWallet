@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Export Private Key - Visual</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="../styles.css">
+    <link rel="stylesheet" href="../fontawesome-extension.css">
+    <link rel="stylesheet" href="../settings-improvements.css">
+    <style>
+        body {
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .test-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        h1 {
+            color: #6b413f;
+        }
+        .test-button {
+            background: #6b413f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background: #8b5553;
+        }
+        pre {
+            background: #fff;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            padding: 2px 0;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        .log-entry.error {
+            color: #dc3545;
+        }
+        .log-entry.success {
+            color: #28a745;
+        }
+        .log-entry.info {
+            color: #17a2b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>Export Private Key Visual Test</h1>
+        
+        <p>This page tests the export private key functionality with visual feedback.</p>
+        
+        <div>
+            <button class="test-button" onclick="testExportModal()">Test Modal Display</button>
+            <button class="test-button" onclick="testFullExport()">Test Full Export Flow</button>
+            <button class="test-button" onclick="clearLog()">Clear Log</button>
+        </div>
+        
+        <div class="log" id="log">
+            <div class="log-entry info">Test page loaded. Click a button to begin.</div>
+        </div>
+    </div>
+    
+    <script>
+        const logEl = document.getElementById('log');
+        
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        function clearLog() {
+            logEl.innerHTML = '<div class="log-entry info">Log cleared</div>';
+        }
+        
+        // Test modal display directly
+        function testExportModal() {
+            log('Testing modal display...', 'info');
+            
+            // Create a test modal using the same structure as settings.js
+            const modalOverlay = document.createElement('div');
+            modalOverlay.className = 'modal-overlay';
+            
+            const modal = document.createElement('div');
+            modal.className = 'private-key-modal';
+            
+            const modalHeader = document.createElement('div');
+            modalHeader.className = 'modal-header';
+            modalHeader.innerHTML = `
+                <h3><i class="fas fa-key"></i> Private Key Export Test</h3>
+                <button class="modal-close" onclick="closeTestModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+            
+            const modalBody = document.createElement('div');
+            modalBody.innerHTML = `
+                <div class="security-warning">
+                    <h4>⚠️ SECURITY WARNING</h4>
+                    <ul>
+                        <li>This is a test modal</li>
+                        <li>CSS styles should be working</li>
+                        <li>Modal should be visible</li>
+                    </ul>
+                </div>
+                
+                <div class="wallet-info-modal">
+                    <label>Test Wallet Address:</label>
+                    <div class="address-display">0x1234567890abcdef1234567890abcdef12345678</div>
+                </div>
+                
+                <div class="private-key-section">
+                    <label>Test Private Key:</label>
+                    <div class="private-key-display">
+                        <input type="text" id="privateKeyInput" value="0xTEST_PRIVATE_KEY_1234567890abcdef" readonly>
+                        <button class="copy-btn" onclick="log('Copy button clicked', 'success')">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button onclick="closeTestModal()" class="close-modal-btn">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            `;
+            
+            modal.appendChild(modalHeader);
+            modal.appendChild(modalBody);
+            modalOverlay.appendChild(modal);
+            
+            document.body.appendChild(modalOverlay);
+            window.testModal = modalOverlay;
+            
+            log('Modal added to DOM', 'success');
+            log('Check if modal is visible on screen', 'info');
+        }
+        
+        function closeTestModal() {
+            if (window.testModal) {
+                document.body.removeChild(window.testModal);
+                window.testModal = null;
+                log('Modal closed', 'success');
+            }
+        }
+        
+        // Test full export flow
+        async function testFullExport() {
+            log('Testing full export flow...', 'info');
+            
+            try {
+                // Get wallet list
+                const walletList = await new Promise(resolve => {
+                    chrome.storage.local.get(['walletList'], result => {
+                        resolve(result.walletList || []);
+                    });
+                });
+                
+                if (walletList.length === 0) {
+                    log('No wallets found', 'error');
+                    return;
+                }
+                
+                const wallet = walletList[0];
+                log(`Found wallet: ${wallet.address}`, 'success');
+                
+                // Simulate the export flow
+                const confirmed = confirm('Test confirmation dialog - click OK to continue');
+                if (!confirmed) {
+                    log('Export cancelled by user', 'info');
+                    return;
+                }
+                
+                const password = prompt('Enter password (this will be visible):');
+                if (!password) {
+                    log('No password provided', 'info');
+                    return;
+                }
+                
+                log('Sending export request to background...', 'info');
+                
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendMessage({
+                        action: 'exportPrivateKey',
+                        walletId: wallet.id,
+                        password: password
+                    }, response => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(response);
+                        }
+                    });
+                });
+                
+                if (response.success) {
+                    log('Private key exported successfully!', 'success');
+                    log(`Key length: ${response.privateKey.length}`, 'info');
+                    
+                    // Now show the modal with real data
+                    showRealPrivateKeyModal(response.privateKey, wallet.address);
+                } else {
+                    log(`Export failed: ${response.error}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Show real private key modal (copied from settings.js)
+        function showRealPrivateKeyModal(privateKey, walletAddress) {
+            log('Showing real private key modal...', 'info');
+            
+            const modalOverlay = document.createElement('div');
+            modalOverlay.className = 'modal-overlay';
+            
+            const modal = document.createElement('div');
+            modal.className = 'private-key-modal';
+            
+            const modalHeader = document.createElement('div');
+            modalHeader.className = 'modal-header';
+            modalHeader.innerHTML = `
+                <h3><i class="fas fa-key"></i> Private Key Export</h3>
+                <button class="modal-close" onclick="closeRealModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+            
+            const modalBody = document.createElement('div');
+            modalBody.innerHTML = `
+                <div class="security-warning">
+                    <h4>⚠️ SECURITY WARNING</h4>
+                    <ul>
+                        <li>Never share your private key with anyone</li>
+                        <li>Store it securely offline</li>
+                        <li>Anyone with this key can control your wallet</li>
+                        <li>HeartWallet support will never ask for this key</li>
+                    </ul>
+                </div>
+                
+                <div class="wallet-info-modal">
+                    <label>Wallet Address:</label>
+                    <div class="address-display">${walletAddress}</div>
+                </div>
+                
+                <div class="private-key-section">
+                    <label>Private Key:</label>
+                    <div class="private-key-display">
+                        <input type="text" id="privateKeyInput" value="${privateKey}" readonly>
+                        <button id="copyPrivateKey" class="copy-btn">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button onclick="closeRealModal()" class="close-modal-btn">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            `;
+            
+            modal.appendChild(modalHeader);
+            modal.appendChild(modalBody);
+            modalOverlay.appendChild(modal);
+            
+            document.body.appendChild(modalOverlay);
+            
+            // Add copy functionality
+            document.getElementById('copyPrivateKey').addEventListener('click', function() {
+                const input = document.getElementById('privateKeyInput');
+                input.select();
+                document.execCommand('copy');
+                log('Private key copied to clipboard', 'success');
+                this.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                setTimeout(() => {
+                    this.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                }, 2000);
+            });
+            
+            window.currentModal = modalOverlay;
+            log('Real modal displayed', 'success');
+        }
+        
+        function closeRealModal() {
+            if (window.currentModal) {
+                document.body.removeChild(window.currentModal);
+                window.currentModal = null;
+                log('Real modal closed', 'success');
+            }
+        }
+        
+        // Close modal function for onclick
+        window.closeTestModal = closeTestModal;
+        window.closeRealModal = closeRealModal;
+    </script>
+</body>
+</html>

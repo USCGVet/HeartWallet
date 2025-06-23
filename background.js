@@ -2245,30 +2245,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log("Processing exportPrivateKey request...");
           (async () => {
             try {
-              if (!globalWalletUnlocked) {
-                throw new Error('Wallet not unlocked');
-              }
-              
               // Verify password
               if (!message.password) {
                 throw new Error('Password required for private key export');
               }
               
-              // Get the active wallet ID
-              const activeWalletId = await new Promise(resolve => {
-                chrome.storage.local.get(['activeWalletId'], result => {
-                  resolve(result.activeWalletId);
-                });
-              });
-              
-              if (!activeWalletId) {
-                throw new Error('No active wallet found');
+              // Verify wallet ID
+              if (!message.walletId) {
+                throw new Error('Wallet ID required for private key export');
               }
               
-              // Get encrypted wallet data
+              // Get encrypted wallet data for the specified wallet
               const walletData = await new Promise(resolve => {
-                chrome.storage.local.get([activeWalletId], result => {
-                  resolve(result[activeWalletId]);
+                chrome.storage.local.get([message.walletId], result => {
+                  resolve(result[message.walletId]);
                 });
               });
               
