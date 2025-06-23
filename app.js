@@ -110,11 +110,11 @@ class HeartWalletApp {
                 console.log('Active session found, restoring wallet state');
                 this.walletCore.setCurrentAddress(sessionStatus.address);
                 this.authManager.isAuthenticated = true;
-                this.uiManager.showDashboard();
-                this.uiManager.updateWalletUI(sessionStatus.address, sessionStatus.balance || '0');
+                this.uiManager.showWalletDashboard();
+                this.uiManager.updateWalletDisplay(sessionStatus.address, sessionStatus.balance || '0');
                 
                 // Load token balances
-                await this.loadTokenBalances();
+                await this.updateTokenBalances();
                 return;
             }
         } catch (error) {

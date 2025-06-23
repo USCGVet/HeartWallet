@@ -1256,7 +1256,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const provider = ensureProvider();
                 if (provider) {
                   const balanceWei = await provider.getBalance(walletData.address);
-                  balance = ethers.utils.formatEther(balanceWei);
+                  // In ethers v5 UMD, formatEther is directly on ethers object
+                  balance = ethers.formatEther ? ethers.formatEther(balanceWei) : ethers.utils.formatEther(balanceWei);
                 }
               } catch (error) {
                 console.error("Error fetching balance:", error);
