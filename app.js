@@ -503,7 +503,7 @@ class HeartWalletApp {
             }
             
             // Debug storage after successful wallet import
-            console.log('Wallet imported successfully, current wallet:', currentWallet?.address);
+            // Removed log that exposed wallet address
             
             await this.showDashboard();
 

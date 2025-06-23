@@ -8,8 +8,7 @@ class WalletCore {
     }    async _getWalletList() {
         const result = await this.storage.get([this.walletListName]);
         const walletList = result[this.walletListName] || [];
-        console.log("_getWalletList: Storage result:", result);
-        console.log("_getWalletList: Returning wallet list:", walletList);
+        // Removed sensitive logs
         return walletList;
     }
 
@@ -51,7 +50,7 @@ class WalletCore {
                 console.error("addWallet: Invalid wallet type specified:", type); // Added log
                 throw new Error('Invalid wallet type specified.');
             }
-            console.log("addWallet: ethers.Wallet object created, address:", newWallet.address); // Added log
+            // Removed log that exposed wallet address
 
             const encryptedJson = await newWallet.encrypt(password);
             console.log("addWallet: Wallet encrypted."); // Added log
@@ -59,7 +58,7 @@ class WalletCore {
             console.log("addWallet: Generated walletId:", walletId); // Added log
             
             const walletList = await this._getWalletList();
-            console.log("addWallet: Current walletList:", walletList); // Added log
+            // Removed log that exposed wallet list
             if (walletList.some(w => w.id === walletId || w.address.toLowerCase() === newWallet.address.toLowerCase())) {
                 console.warn("addWallet: Wallet with this address already exists.", newWallet.address); // Added log
                 throw new Error('Wallet with this address already exists.');
@@ -72,7 +71,7 @@ class WalletCore {
                 name: defaultName,
                 createdAt: new Date().toISOString()
             };
-            console.log("addWallet: Created walletEntry:", walletEntry); // Added log
+            // Removed log that exposed wallet entry details
 
             await this.storage.set({ [walletId]: encryptedJson });
             console.log("addWallet: Encrypted JSON saved to storage for walletId:", walletId); // Added log
@@ -143,7 +142,7 @@ class WalletCore {
                     const result = await this.storage.get([firstWalletId]);
                     console.log('Storage result for first wallet:', result); // Added log
                     const encryptedWallet = result[firstWalletId];
-                    console.log('Encrypted data for first wallet:', encryptedWallet); // Added log
+                    // Removed log that exposed encrypted wallet data
                     if (!encryptedWallet) throw new Error('Encrypted data for the first wallet not found.');
                     
                     const wallet = await ethers.Wallet.fromEncryptedJson(encryptedWallet, password);
@@ -158,7 +157,7 @@ class WalletCore {
             const result = await this.storage.get([activeWalletId]);
             console.log('Storage result for active wallet ID:', result); // Added log
             const encryptedWallet = result[activeWalletId];
-            console.log('Encrypted data for active wallet ID ' + activeWalletId + ':', encryptedWallet); // Added log
+            // Removed log that exposed encrypted wallet data
 
             if (!encryptedWallet) {
                 throw new Error('Active wallet data not found. It might have been removed.');
@@ -270,7 +269,7 @@ class WalletCore {
     
     // Set current address for session restoration
     setCurrentAddress(address) {
-        console.log('Setting current address for session:', address);
+        // Removed log that exposed wallet address
         // Create a minimal wallet object for UI operations
         const sessionWallet = {
             address: address,

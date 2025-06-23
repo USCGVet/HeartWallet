@@ -193,7 +193,7 @@ if (typeof chrome.runtime.onStartup !== 'undefined') {
 
 // Helper to clear session state completely
 function clearSessionState() {
-    console.log("Clearing all session state (active, data, key, timer).");
+    // Removed log mentioning key clearing
     walletSessionActive = false;
     walletData = null;
     ephemeralDecryptedKey = null;
@@ -299,17 +299,17 @@ function restoreState() {
 
 // Helper function for internal logout
 function logoutWalletInternal() {
-  console.log("Executing internal logout: Clearing active state, key, and timer.");
+  // Removed log mentioning key clearing
   walletSessionActive = false;
   // Keep walletData (like address) or clear it? Let's keep it for now.
   // walletData = null;
   if (ephemeralDecryptedKey) {
-      console.log("Clearing ephemeral decrypted key from memory.");
+      // Removed log about decrypted key
       // Attempt to securely clear - effectiveness varies in JS
       ephemeralDecryptedKey = ''.padStart(ephemeralDecryptedKey.length, '\0');
       ephemeralDecryptedKey = null;
   } else {
-      console.log("No ephemeral key present to clear.");
+      // Removed log about ephemeral key
   }
   clearTimeout(sessionTimeoutId);
   sessionTimeoutId = null;
@@ -504,7 +504,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Session is active - handle normally
                 if (method === 'eth_requestAccounts') {
                     // For requestAccounts, always return address if session is active
-                    console.log(`Background: Session active, returning address: ${walletData.address}`);
+                    // Removed log that exposed wallet address
                     // Update last accessed time if site is already connected
                     const isConnected = await isSiteConnected(origin, walletData.address);
                     if (isConnected) {
@@ -515,7 +515,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     // For eth_accounts, only return accounts if site is connected
                     const isConnected = await isSiteConnected(origin, walletData.address);
                     if (isConnected) {
-                        console.log(`Background: Site ${origin} is connected, returning address: ${walletData.address}`);
+                        // Removed log that exposed wallet address and connected site
                         updateSiteLastAccessed(origin);
                         sendResponse({ id, result: [walletData.address] });
                     } else {
@@ -1154,7 +1154,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 
           if (ephemeralDecryptedKey) {
-              console.log("Ephemeral decrypted key stored in background memory.");
+              // Removed log about decrypted key storage
           } else {
               console.warn("Login successful, but no ephemeral key was provided or stored.");
           }
@@ -1225,7 +1225,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             startSessionTimeout();
             saveState();
             
-            console.log("Wallet unlocked successfully in background:", wallet.address);
+            // Removed log that exposed wallet address
             
             sendResponse({
               success: true,
@@ -1251,7 +1251,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // Handle async balance fetch
           (async () => {
             if (walletSessionActive && walletData && walletData.address) {
-              console.log("Active session found for address:", walletData.address);
+              // Removed log that exposed wallet address
               // Get current balance if possible
               let balance = '0';
               try {
@@ -1391,7 +1391,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               
               if (shouldApprove && walletData && walletData.address) {
                 // Approved or auto-approved reconnection - store/update the connected site and return the address
-                console.log(`Background: Connection ${request.isReconnection ? 'auto-' : ''}approved for origin: ${request.origin}, wallet: ${walletData.address}`);
+                // Removed log that exposed wallet address and origin
                 storeConnectedSite(request.origin, walletData.address);
                 
                 // Create a unique response channel
