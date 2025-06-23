@@ -2086,51 +2086,97 @@ class HeartWalletApp {
         console.log('Loading connected sites...');
         chrome.runtime.sendMessage({ action: 'getConnectedSites' }, (response) => {
             if (response && response.success) {
+                console.log('Connected sites loaded:', response.sites);
                 this.displayConnectedSites(response.sites);
             } else {
-                console.error('Failed to load connected sites');
+                console.error('Failed to load connected sites:', response);
+                // Show empty state if there's an error
+                this.displayConnectedSites({});
             }
         });
     }
     
     displayConnectedSites(sites) {
         const sitesList = document.getElementById('connected-sites-list');
+        const loadingDiv = document.getElementById('connected-sites-loading');
+        const noSitesDiv = document.getElementById('no-connected-sites');
+        
         if (!sitesList) return;
         
+        // Hide loading
+        if (loadingDiv) {
+            loadingDiv.classList.add('hidden');
+        }
+        
+        // Clear existing content in the list
         sitesList.innerHTML = '';
         
         if (!sites || Object.keys(sites).length === 0) {
-            sitesList.innerHTML = '<div class="no-sites">No connected sites.</div>';
+            // Show no sites message
+            if (noSitesDiv) {
+                noSitesDiv.classList.remove('hidden');
+            }
             return;
+        }
+        
+        // Hide no sites message
+        if (noSitesDiv) {
+            noSitesDiv.classList.add('hidden');
         }
         
         Object.entries(sites).forEach(([origin, siteData]) => {
             const siteItem = document.createElement('div');
             siteItem.className = 'connected-site-item';
+            siteItem.style.cssText = `
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px;
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                margin-bottom: 8px;
+            `;
             
             const siteInfo = document.createElement('div');
             siteInfo.className = 'site-info';
+            siteInfo.style.flex = '1';
             
             const originDiv = document.createElement('div');
             originDiv.className = 'site-origin';
+            originDiv.style.cssText = 'font-weight: bold; margin-bottom: 4px;';
             originDiv.textContent = origin;
             siteInfo.appendChild(originDiv);
             
             const addressDiv = document.createElement('div');
             addressDiv.className = 'site-address';
-            addressDiv.textContent = siteData.address;
+            addressDiv.style.cssText = 'font-size: 0.85rem; color: #666; font-family: monospace;';
+            const address = siteData.walletAddress || siteData.address || 'Unknown';
+            addressDiv.textContent = `${address.substring(0, 6)}...${address.substring(38)}`;
             siteInfo.appendChild(addressDiv);
             
             const dateDiv = document.createElement('div');
             dateDiv.className = 'site-date';
-            dateDiv.textContent = `Connected: ${new Date(siteData.dateConnected).toLocaleDateString()}`;
+            dateDiv.style.cssText = 'font-size: 0.8rem; color: #888; margin-top: 4px;';
+            const connectedTime = siteData.connectedAt || siteData.dateConnected || Date.now();
+            dateDiv.textContent = `Connected: ${new Date(connectedTime).toLocaleDateString()}`;
             siteInfo.appendChild(dateDiv);
+            
+            // Show network if available
+            if (siteData.networkName || siteData.chainId) {
+                const networkDiv = document.createElement('div');
+                networkDiv.className = 'site-network';
+                networkDiv.style.cssText = 'font-size: 0.8rem; color: #666; margin-top: 2px;';
+                networkDiv.textContent = `Network: ${siteData.networkName || `Chain ID ${siteData.chainId}`}`;
+                siteInfo.appendChild(networkDiv);
+            }
             
             siteItem.appendChild(siteInfo);
             
             // Create disconnect button
             const disconnectBtn = document.createElement('button');
-            disconnectBtn.className = 'disconnect-site-btn';
+            disconnectBtn.className = 'disconnect-site-btn danger-btn';
+            disconnectBtn.style.cssText = 'padding: 6px 12px; font-size: 0.85rem;';
             disconnectBtn.innerHTML = '<i class="fas fa-unlink"></i> Disconnect';
             disconnectBtn.onclick = () => this.disconnectSite(origin);
             siteItem.appendChild(disconnectBtn);

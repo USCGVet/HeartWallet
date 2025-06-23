@@ -355,7 +355,9 @@ async function storeConnectedSite(origin, walletAddress) {
             origin: origin,
             walletAddress: walletAddress,
             connectedAt: Date.now(),
-            lastAccessed: Date.now()
+            lastAccessed: Date.now(),
+            chainId: currentChainId,
+            networkName: networkConfigs[currentChainId]?.networkName || 'Unknown'
         };
         
         await chrome.storage.local.set({ connectedSites });
@@ -391,8 +393,8 @@ function getConnectedSites(callback) {
     chrome.storage.local.get('connectedSites', (data) => {
         const connectedSites = data.connectedSites || {};
         console.log('Background: connectedSites from storage:', connectedSites);
-        console.log('Background: returning sites array:', Object.values(connectedSites));
-        callback(Object.values(connectedSites));
+        // Return the full object, not just values
+        callback(connectedSites);
     });
 }
 
@@ -2201,8 +2203,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false; // Default return for synchronous message handlers
 });
 
+// Function to migrate connected sites data to ensure proper structure
+async function migrateConnectedSites() {
+    try {
+        const result = await chrome.storage.local.get('connectedSites');
+        const connectedSites = result.connectedSites || {};
+        let needsUpdate = false;
+        
+        // Check each site and fix missing data
+        for (const [origin, siteData] of Object.entries(connectedSites)) {
+            // If site data is malformed (e.g., just a string or missing required fields)
+            if (typeof siteData !== 'object' || !siteData.walletAddress) {
+                console.log(`Migrating malformed connected site data for ${origin}`);
+                
+                // Try to preserve any existing data
+                const migratedData = {
+                    origin: origin,
+                    walletAddress: typeof siteData === 'string' ? siteData : (siteData.walletAddress || siteData.address || walletData?.address || 'Unknown'),
+                    connectedAt: siteData.connectedAt || siteData.dateConnected || Date.now(),
+                    lastAccessed: siteData.lastAccessed || Date.now(),
+                    chainId: siteData.chainId || currentChainId,
+                    networkName: siteData.networkName || networkConfigs[currentChainId]?.networkName || 'Unknown'
+                };
+                
+                connectedSites[origin] = migratedData;
+                needsUpdate = true;
+            }
+        }
+        
+        if (needsUpdate) {
+            await chrome.storage.local.set({ connectedSites });
+            console.log('Connected sites data migration completed');
+        }
+    } catch (error) {
+        console.error('Error migrating connected sites:', error);
+    }
+}
+
 // Restore state and initialize provider when the script loads
 restoreState();
+
+// Run migration after a short delay to ensure state is loaded
+setTimeout(() => {
+    migrateConnectedSites();
+}, 1000);
 
 // The session timeout should work like this:
 function startSessionTimeout() {
