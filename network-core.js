@@ -113,6 +113,19 @@ class NetworkCore {
                 this.updateConnectionIndicator(true, network.name);
             }
             
+            // Notify background script of network change
+            try {
+                await chrome.runtime.sendMessage({
+                    action: 'networkChanged',
+                    chainId: network.chainId,
+                    networkName: network.name,
+                    rpcUrl: network.rpcUrl
+                });
+                console.log('NetworkCore: Notified background script of network change');
+            } catch (error) {
+                console.error('NetworkCore: Failed to notify background script:', error);
+            }
+            
             return this.provider;
         } catch (error) {
             console.error('NetworkCore: Error switching network:', error);

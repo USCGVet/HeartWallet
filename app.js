@@ -1117,6 +1117,15 @@ class HeartWalletApp {
                 this.notificationManager.networkSwitched(previousNetwork.name, currentNetwork.name);
             }
             
+            // Update all network select dropdowns to reflect the change
+            const networkSelects = ['network-select', 'settings-network-select', 'footer-network-select'];
+            networkSelects.forEach(selectId => {
+                const select = document.getElementById(selectId);
+                if (select && select.value !== networkKey) {
+                    select.value = networkKey;
+                }
+            });
+            
         } catch (error) {
             console.error('Error switching network:', error);
             this.notificationManager.show(`Failed to switch network: ${error.message}`, 'error');

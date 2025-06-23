@@ -1311,6 +1311,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({ status: "error", message: "Invalid timeout value provided." });
             }
             break;
+            
+        // Handle network changes from popup
+        case "networkChanged":
+            console.log("Processing networkChanged message...");
+            const { chainId, networkName, rpcUrl } = message;
+            
+            // Update current network
+            currentChainId = chainId;
+            
+            // Update network config if needed
+            if (!networkConfigs[chainId]) {
+                networkConfigs[chainId] = {
+                    networkName: networkName,
+                    rpcUrl: rpcUrl,
+                    chainId: chainId,
+                    currencySymbol: "ETH", // Default, should be updated
+                    blockExplorer: ""
+                };
+            }
+            
+            // Reinitialize provider with new network
+            provider = initializeProvider();
+            
+            // Notify all connected dApps about the network change
+            notifyAllTabsNetworkChanged(chainId);
+            
+            sendResponse({ status: "success", message: "Network changed successfully." });
+            break;
 
         // Handle connection progress notifications
         case 'connection_progress':
@@ -2187,6 +2215,26 @@ function startSessionTimeout() {
             logoutWalletInternal();
         }, sessionTimeoutDuration);
     }
+}
+
+// Function to notify all connected dApps about network change
+function notifyAllTabsNetworkChanged(newChainId) {
+    console.log(`Notifying all connected dApps about network change to chainId: ${newChainId}`);
+    
+    // Get all tabs and send network change event
+    chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+            // Send to content script which will forward to the dApp
+            chrome.tabs.sendMessage(tab.id, {
+                target: 'contentscript',
+                action: 'networkChanged',
+                chainId: `0x${newChainId.toString(16)}`, // Convert to hex as per EIP-3326
+                networkVersion: newChainId.toString()
+            }).catch(e => {
+                // Ignore errors for tabs without content scripts
+            });
+        });
+    });
 }
 
 // Reset the timer on any wallet activity

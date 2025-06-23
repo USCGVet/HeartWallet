@@ -214,6 +214,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: true });
             return false; // We've sent response synchronously
         }
+        
+        // Handle network change notifications
+        if (message?.target === 'contentscript' && message?.action === 'networkChanged') {
+            console.debug('ContentScript: Received network change notification:', message);
+            
+            // Forward to inpage script which will emit the event to the dApp
+            window.postMessage({
+                target: 'inpage',
+                eventFor: 'heartwallet',
+                payload: {
+                    eventName: 'chainChanged',
+                    params: [message.chainId] // Array with hex chainId as per EIP-1193
+                }
+            }, window.location.origin);
+            
+            // Also emit the deprecated networkChanged event for compatibility
+            window.postMessage({
+                target: 'inpage',
+                eventFor: 'heartwallet',
+                payload: {
+                    eventName: 'networkChanged',
+                    params: [message.networkVersion] // String network version
+                }
+            }, window.location.origin);
+            
+            sendResponse({ success: true });
+            return false; // We've sent response synchronously
+        }
     } catch (error) {
         console.error('Error in content script message handler:', error);
         sendResponse({ success: false, error: error.message });
