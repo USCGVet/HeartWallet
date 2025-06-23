@@ -1142,6 +1142,10 @@ class HeartWalletApp {
         await this.updateBalance();
         this.uiManager.clearInputs();
         
+        // Ensure tokens are loaded and displayed
+        await this.tokenManager.loadDefaultTokens();
+        await this.updateTokenBalances();
+        
         // Pre-load token list in background for faster settings display
         setTimeout(() => {
             console.log('Pre-loading token list for settings');
@@ -1271,7 +1275,22 @@ class HeartWalletApp {
                 console.log('Created token element for:', tokenInfo.symbol);
                 tokenListContainer.appendChild(tokenElement);
             });
-        }// Update the token header to show count (distinguish between total tokens and tokens with balance)
+        }
+        
+        // If we have tokens, make sure the container is visible
+        if (tokensToShow.length > 0) {
+            const tokenContainer = document.getElementById('token-list-container');
+            if (tokenContainer && tokenContainer.classList.contains('hidden')) {
+                tokenContainer.classList.remove('hidden');
+                // Update chevron to up arrow
+                const chevron = document.querySelector('#toggle-tokens i');
+                if (chevron) {
+                    chevron.className = 'fas fa-chevron-up';
+                }
+            }
+        }
+        
+        // Update the token header to show count (distinguish between total tokens and tokens with balance)
         const tokenHeader = document.getElementById('toggle-tokens');
         const tokenContainer = document.getElementById('token-list-container');
         
