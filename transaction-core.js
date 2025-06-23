@@ -12,31 +12,31 @@ class TransactionManager {
                 throw new Error('No wallet available');
             }
 
-            const provider = this.networkCore.getProvider();
-            if (!provider) {
-                throw new Error('No network provider available');
-            }
-
-            const connectedWallet = wallet.connect(provider);
-            
-            // Get current gas price
-            const gasPrice = await this.networkCore.getGasPrice();
-            
-            // Create transaction
-            const transaction = {
-                to: recipientAddress,
-                value: ethers.parseEther(amount.toString()),
-                gasLimit: gasLimit,
-                gasPrice: gasPrice
-            };
-
-            // Send transaction
-            const tx = await connectedWallet.sendTransaction(transaction);
-            
-            return {
-                hash: tx.hash,
-                transaction: tx
-            };
+            // Send transaction through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'sendTransaction',
+                    transaction: {
+                        to: recipientAddress,
+                        from: wallet.address,
+                        value: ethers.parseEther(amount.toString()).toString(),
+                        data: '0x'
+                    }
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve({
+                            hash: response.txHash,
+                            transaction: { hash: response.txHash }
+                        });
+                    } else {
+                        reject(new Error(response?.error || 'Failed to send transaction'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error sending transaction:', error);
             throw error;

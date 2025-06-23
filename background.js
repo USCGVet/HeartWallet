@@ -965,6 +965,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 txParams.from = walletData.address;
             }
             
+            // Add chainId if not specified
+            if (!txParams.chainId) {
+                txParams.chainId = currentChainId;
+            }
+            
             // Validate transaction
             let validationResult = null;
             let simulationResult = null;
@@ -1801,25 +1806,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   throw new Error('Keyring service not initialized');
                 }
                 
+                // Prepare transaction with all necessary fields
+                const txToSign = {
+                  ...confirmTxRequest.params,
+                  from: message.transaction.from || confirmTxRequest.params.from,
+                  chainId: currentChainId
+                };
+                
+                // Get the current nonce if not provided
+                if (!txToSign.nonce && txToSign.nonce !== 0) {
+                  const nonce = await provider.getTransactionCount(txToSign.from, 'latest');
+                  txToSign.nonce = nonce;
+                }
+                
+                // Estimate gas if not provided
+                if (!txToSign.gasLimit && !txToSign.gas) {
+                  const gasEstimate = await provider.estimateGas(txToSign);
+                  txToSign.gasLimit = gasEstimate;
+                }
+                
+                // Get gas price if not provided
+                if (!txToSign.gasPrice && !txToSign.maxFeePerGas) {
+                  const feeData = await provider.getFeeData();
+                  txToSign.gasPrice = feeData.gasPrice;
+                }
+                
                 // First sign the transaction
                 const signedTx = await keyringService.signTransaction(
-                  message.transaction.from,
-                  message.transaction
+                  txToSign.from,
+                  txToSign
                 );
                 
                 // Then send it via provider
-                const tx = await provider.sendTransaction(signedTx);
+                const txResponse = await provider.broadcastTransaction(signedTx);
                 
                 // Send success response to dApp
                 confirmTxRequest.sendResponse({
                   id: confirmTxRequest.id,
-                  result: tx.hash
+                  result: txResponse.hash
                 });
                 
                 // Clean up
                 activeTransactionRequests.delete(message.requestId);
                 
-                sendResponse({ success: true, txHash: tx.hash });
+                sendResponse({ success: true, txHash: txResponse.hash });
               } catch (error) {
                 console.error('Error sending transaction:', error);
                 sendResponse({ success: false, error: error.message });
@@ -2160,6 +2190,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               
               const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
               
+              // Get the current nonce
+              const nonce = await provider.getTransactionCount(walletData.address, 'latest');
+              
               // Encode the contract function call
               const contractInterface = new ethers.Interface(message.abi || []);
               const data = contractInterface.encodeFunctionData(
@@ -2173,7 +2206,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 from: walletData.address,
                 data: data,
                 value: message.value && message.value !== '0' ? 
-                  ethers.parseEther(message.value).toString() : '0x0'
+                  ethers.parseEther(message.value).toString() : '0x0',
+                chainId: currentChainId,
+                nonce: nonce
               };
               
               // Estimate gas
@@ -2191,9 +2226,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               );
               
               // Send the signed transaction
-              const tx = await provider.sendTransaction(signedTx);
+              const txResponse = await provider.broadcastTransaction(signedTx);
               
-              sendResponse({ success: true, hash: tx.hash });
+              sendResponse({ success: true, hash: txResponse.hash });
             } catch (error) {
               console.error('Error calling write function:', error);
               sendResponse({ success: false, error: error.message });
@@ -2215,12 +2250,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               
               const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
               
+              // Get the current nonce
+              const nonce = await provider.getTransactionCount(message.transaction.from, 'latest');
+              
               // Prepare transaction
               const transaction = {
                 to: message.transaction.to,
                 from: message.transaction.from,
                 data: message.transaction.data,
-                value: message.transaction.value || '0x0'
+                value: message.transaction.value || '0x0',
+                chainId: currentChainId,
+                nonce: nonce
               };
               
               // Estimate gas
@@ -2238,9 +2278,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               );
               
               // Send the signed transaction
-              const tx = await provider.sendTransaction(signedTx);
+              const txResponse = await provider.broadcastTransaction(signedTx);
               
-              sendResponse({ success: true, txHash: tx.hash });
+              sendResponse({ success: true, txHash: txResponse.hash });
             } catch (error) {
               console.error('Error sending transaction:', error);
               sendResponse({ success: false, error: error.message });
