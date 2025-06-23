@@ -89,28 +89,47 @@ class TokenManager {
     }
 
     async sendToken(tokenAddress, recipientAddress, amount) {
-        try {            const wallet = this.walletCore.getCurrentWallet();
+        try {
+            const wallet = this.walletCore.getCurrentWallet();
             if (!wallet) {
                 throw new Error('No wallet available');
             }
 
-            const provider = this.networkCore.getProvider();
-            const connectedWallet = wallet.connect(provider);
-            
             const tokenInfo = this.tokenList.get(tokenAddress.toLowerCase());
             if (!tokenInfo) {
                 throw new Error('Token not found in list');
             }
             
-            const contract = new ethers.Contract(tokenAddress, this.getTokenABI(), connectedWallet);
+            // Encode the transfer function call
+            const contractInterface = new ethers.Interface(this.getTokenABI());
             const amountBN = ethers.parseUnits(amount.toString(), tokenInfo.decimals);
+            const data = contractInterface.encodeFunctionData('transfer', [recipientAddress, amountBN]);
             
-            const tx = await contract.transfer(recipientAddress, amountBN);
-            
-            return {
-                hash: tx.hash,
-                transaction: tx
-            };
+            // Send transaction through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'sendTransaction',
+                    transaction: {
+                        to: tokenAddress,
+                        from: wallet.address,
+                        data: data,
+                        value: '0x0'
+                    }
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve({
+                            hash: response.txHash,
+                            transaction: { hash: response.txHash }
+                        });
+                    } else {
+                        reject(new Error(response?.error || 'Failed to send token'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error sending token:', error);
             throw error;
@@ -124,25 +143,43 @@ class TokenManager {
                 throw new Error('No wallet available');
             }
 
-            const provider = this.networkCore.getProvider();
-            const connectedWallet = wallet.connect(provider);
-            
             const tokenInfo = this.tokenList.get(tokenAddress.toLowerCase());
             if (!tokenInfo) {
                 throw new Error('Token not found in list');
             }
             
-            const contract = new ethers.Contract(tokenAddress, this.getTokenABI(), connectedWallet);
+            // Encode the approve function call
+            const contractInterface = new ethers.Interface(this.getTokenABI());
             const amountBN = amount === 'unlimited' ? 
                 ethers.MaxUint256 : 
                 ethers.parseUnits(amount.toString(), tokenInfo.decimals);
+            const data = contractInterface.encodeFunctionData('approve', [spenderAddress, amountBN]);
             
-            const tx = await contract.approve(spenderAddress, amountBN);
-            
-            return {
-                hash: tx.hash,
-                transaction: tx
-            };
+            // Send transaction through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'sendTransaction',
+                    transaction: {
+                        to: tokenAddress,
+                        from: wallet.address,
+                        data: data,
+                        value: '0x0'
+                    }
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve({
+                            hash: response.txHash,
+                            transaction: { hash: response.txHash }
+                        });
+                    } else {
+                        reject(new Error(response?.error || 'Failed to approve token'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error approving token:', error);
             throw error;

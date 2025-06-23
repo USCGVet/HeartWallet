@@ -2148,37 +2148,105 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           
         case "CONTRACT_WRITE":
           console.log("Executing write function:", message.functionName);
-          try {
-            if (!globalWalletUnlocked) {
-              throw new Error('Wallet not unlocked');
+          (async () => {
+            try {
+              if (!globalWalletUnlocked) {
+                throw new Error('Wallet not unlocked');
+              }
+              
+              if (!keyringService) {
+                throw new Error('Keyring service not initialized');
+              }
+              
+              const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
+              
+              // Encode the contract function call
+              const contractInterface = new ethers.Interface(message.abi || []);
+              const data = contractInterface.encodeFunctionData(
+                message.functionName, 
+                message.params || []
+              );
+              
+              // Prepare transaction
+              const transaction = {
+                to: message.contractAddress,
+                from: walletData.address,
+                data: data,
+                value: message.value && message.value !== '0' ? 
+                  ethers.parseEther(message.value).toString() : '0x0'
+              };
+              
+              // Estimate gas
+              const gasEstimate = await provider.estimateGas(transaction);
+              transaction.gasLimit = gasEstimate;
+              
+              // Get current gas price
+              const feeData = await provider.getFeeData();
+              transaction.gasPrice = feeData.gasPrice;
+              
+              // Sign transaction using keyring service
+              const signedTx = await keyringService.signTransaction(
+                walletData.address,
+                transaction
+              );
+              
+              // Send the signed transaction
+              const tx = await provider.sendTransaction(signedTx);
+              
+              sendResponse({ success: true, hash: tx.hash });
+            } catch (error) {
+              console.error('Error calling write function:', error);
+              sendResponse({ success: false, error: error.message });
             }
-            
-            const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
-            
-            // Use keyring service for contract interactions
-            if (!keyringService) {
-              throw new Error('Keyring service not initialized');
+          })();
+          return true; // Async response
+          
+        case "sendTransaction":
+          console.log("Processing sendTransaction from popup...");
+          (async () => {
+            try {
+              if (!globalWalletUnlocked) {
+                throw new Error('Wallet not unlocked');
+              }
+              
+              if (!keyringService) {
+                throw new Error('Keyring service not initialized');
+              }
+              
+              const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
+              
+              // Prepare transaction
+              const transaction = {
+                to: message.transaction.to,
+                from: message.transaction.from,
+                data: message.transaction.data,
+                value: message.transaction.value || '0x0'
+              };
+              
+              // Estimate gas
+              const gasEstimate = await provider.estimateGas(transaction);
+              transaction.gasLimit = gasEstimate;
+              
+              // Get current gas price
+              const feeData = await provider.getFeeData();
+              transaction.gasPrice = feeData.gasPrice;
+              
+              // Sign transaction using keyring service
+              const signedTx = await keyringService.signTransaction(
+                message.transaction.from,
+                transaction
+              );
+              
+              // Send the signed transaction
+              const tx = await provider.sendTransaction(signedTx);
+              
+              sendResponse({ success: true, txHash: tx.hash });
+            } catch (error) {
+              console.error('Error sending transaction:', error);
+              sendResponse({ success: false, error: error.message });
             }
-            
-            // Get the wallet temporarily for contract interaction
-            const wallet = await keyringService.getWalletForSigning(walletData.address);
-            const connectedWallet = wallet.connect(provider);
-            const contract = new ethers.Contract(message.contractAddress, message.abi || [], connectedWallet);
-            
-            // Note: wallet will be cleared after the transaction
-            
-            const txOptions = {};
-            if (message.value && message.value !== '0') {
-              txOptions.value = ethers.parseEther(message.value);
-            }
-            
-            const tx = await contract[message.functionName](...(message.params || []), txOptions);
-            sendResponse({ success: true, hash: tx.hash });
-          } catch (error) {
-            console.error('Error calling write function:', error);
-            sendResponse({ success: false, error: error.message });
-          }
-          break;
+          })();
+          return true; // Async response
           
         case "GET_EXPLORER_URL":
           sendResponse({ url: networkConfigs[currentChainId].blockExplorer });
