@@ -1343,12 +1343,10 @@ class HeartWalletApp {
      * Handle opening the settings panel
      */
     async handleSettingsOpen() {
-        // Load token list when settings are opened for the first time
-        console.log('Settings opened, ensuring token list is loaded');
-        this.loadTokenList();
+        console.log('Settings opened, loading all settings data...');
         
         // Load wallet list for settings
-        console.log('Settings opened, loading wallet list...');
+        console.log('Loading wallet list...');
         try {
             const wallets = await this.walletCore.getWalletList();
             const activeWalletId = await this.walletCore.getActiveWalletId();
@@ -1360,6 +1358,20 @@ class HeartWalletApp {
         } catch (error) {
             console.error('Error loading wallet list for settings:', error);
             this.uiManager.showStatus('Failed to load wallet list', 'error');
+        }
+        
+        // Load token list
+        console.log('Loading token list...');
+        await this.loadTokenList();
+        
+        // Load connected sites
+        console.log('Loading connected sites...');
+        await this.loadConnectedSites();
+        
+        // Load contracts if section is open
+        const contractSection = document.querySelector('details.settings-group summary');
+        if (contractSection && contractSection.textContent.includes('Contract Interaction')) {
+            await this.loadContractList();
         }
     }
 
@@ -2033,17 +2045,6 @@ class HeartWalletApp {
     /**
      * Handle settings opening to load contracts
      */
-    async handleSettingsOpen() {
-        // Load contracts when settings open
-        const contractSection = document.querySelector('details.settings-group summary');
-        if (contractSection && contractSection.textContent.includes('Contract Interaction')) {
-            await this.loadContractList();
-        }
-        
-        // Also load other settings data
-        await this.loadConnectedSites();
-        await this.loadTokenList();
-    }
     
     // Connected Sites Management
     async loadConnectedSites() {

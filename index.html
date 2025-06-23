@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="notification-styles.css">
     <link rel="stylesheet" href="fontawesome-extension.css">
     <link rel="stylesheet" href="send-token-modal.css">
+    <link rel="stylesheet" href="settings-improvements.css">
 </head>
 <body>
     <div class="container">
@@ -181,15 +182,14 @@
                         <input type="text" id="explorer-url" placeholder="e.g., https://scan.pulsechain.com">
                     </div>
                     <div class="button-group">
-                        <button id="add-network">Add New Network</button>
-                        <button id="save-network-settings">Save Network Settings</button>
+                        <button id="add-network" class="secondary-btn">Add New Network</button>
+                        <button id="save-network-settings" class="primary-btn">Save Network Settings</button>
                     </div>
                 </details>                <details class="settings-group">  <!-- Wallet Management -->
                     <summary>Wallet Management</summary>
                     <label>Your Wallets</label>
                     <div id="wallet-list" class="wallet-list">
                         <!-- Wallets will be listed here dynamically -->
-                        <p class="no-wallets">No additional wallets</p>
                     </div>
                     
                     <h5>Add New Wallet</h5>
@@ -211,7 +211,7 @@
                             <label for="new-wallet-password-seed">Password</label>
                             <input type="password" id="new-wallet-password-seed" placeholder="Enter password to encrypt this wallet">
                         </div>
-                        <button id="add-wallet-seed">Add Wallet</button>
+                        <button id="add-wallet-seed" class="primary-btn">Add Wallet</button>
                     </div>
                     
                     <div id="private-key-import-tab" class="tab-content hidden">
@@ -227,7 +227,7 @@
                             <label for="new-wallet-password-key">Password</label>
                             <input type="password" id="new-wallet-password-key" placeholder="Enter password to encrypt this wallet">
                         </div>
-                        <button id="add-wallet-key">Add Wallet</button>
+                        <button id="add-wallet-key" class="primary-btn">Add Wallet</button>
                     </div>
                 </details>
 
@@ -247,7 +247,7 @@
                             <input type="checkbox" id="clear-clipboard" checked>
                             <label for="clear-clipboard">Auto-clear clipboard after copying sensitive data</label>
                         </div>
-                    </div>                    <button id="save-security-settings">Save Security Settings</button>                </details>
+                    </div>                    <button id="save-security-settings" class="primary-btn">Save Security Settings</button>                </details>
 
                 <details class="settings-group"> <!-- PRC-20 Token Management -->
                     <summary>PRC-20 Token Management</summary>

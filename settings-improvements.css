@@ -1,0 +1,321 @@
+/* Settings UI Improvements */
+
+/* Override default button width for settings */
+.settings-section button {
+    width: auto;
+    padding: 10px 20px;
+    display: inline-block;
+}
+
+/* Specific button styling for different button types */
+.settings-section .primary-btn {
+    background-color: #6b413f;
+    color: white;
+    border: none;
+    min-width: 120px;
+}
+
+.settings-section .primary-btn:hover {
+    background-color: #563330;
+}
+
+.settings-section .secondary-btn {
+    background-color: #f8f9fa;
+    color: #333;
+    border: 1px solid #dee2e6;
+    min-width: 100px;
+}
+
+.settings-section .secondary-btn:hover {
+    background-color: #e9ecef;
+    color: #495057;
+    border-color: #adb5bd;
+}
+
+.settings-section .danger-btn {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    min-width: 130px;
+}
+
+.settings-section .danger-btn:hover {
+    background-color: #c82333;
+}
+
+/* Fix icon visibility in buttons */
+.settings-section .primary-btn i,
+.settings-section .secondary-btn i,
+.settings-section .danger-btn i {
+    margin-right: 6px;
+    opacity: 0.9;
+}
+
+/* Ensure white icons on dark backgrounds */
+.settings-section .primary-btn i,
+.settings-section .danger-btn i {
+    color: white;
+}
+
+/* Button groups should be properly spaced */
+.settings-section .button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+}
+
+/* Tab buttons styling */
+.settings-section .tab-button {
+    background-color: #f8f9fa;
+    color: #666;
+    border: 1px solid #dee2e6;
+    border-radius: 4px 4px 0 0;
+    padding: 8px 20px;
+    margin-right: 5px;
+    min-width: 100px;
+}
+
+.settings-section .tab-button.active {
+    background-color: #6b413f;
+    color: white;
+    border-color: #6b413f;
+}
+
+.settings-section .tab-button:hover:not(.active) {
+    background-color: #e9ecef;
+}
+
+/* Settings group improvements */
+.settings-group {
+    background-color: #fff;
+    border: 1px solid #e6e9ef;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.settings-group summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #6b413f;
+    padding: 10px 0;
+    user-select: none;
+}
+
+.settings-group summary:hover {
+    color: #563330;
+}
+
+/* Settings content spacing */
+.settings-content {
+    padding-top: 15px;
+}
+
+/* Improve form styling in settings */
+.settings-section .form-group {
+    margin-bottom: 15px;
+}
+
+.settings-section .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #333;
+}
+
+/* Full width buttons where appropriate */
+.settings-section #add-wallet-seed,
+.settings-section #add-wallet-key,
+.settings-section #save-security-settings {
+    width: 100%;
+    margin-top: 20px;
+}
+
+/* Network settings buttons */
+.settings-section #add-network,
+.settings-section #save-network-settings {
+    min-width: 150px;
+}
+
+/* Token management specific styles */
+.token-add-section {
+    border-top: 1px solid #e6e9ef;
+    padding-top: 20px;
+    margin-top: 20px;
+}
+
+.token-add-section h5 {
+    color: #6b413f;
+    margin-bottom: 15px;
+}
+
+/* Connected sites styling */
+.connected-sites-list {
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+    margin: 15px 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.connected-sites-buttons {
+    justify-content: space-between;
+}
+
+/* Contract interaction section */
+.contract-add-section {
+    border-top: 1px solid #e6e9ef;
+    padding-top: 20px;
+    margin-top: 20px;
+}
+
+.contract-list {
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+    margin: 15px 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+/* Refresh buttons should be smaller */
+.refresh-btn {
+    background: none;
+    border: 1px solid #dee2e6;
+    color: #666;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    width: auto;
+    min-width: auto;
+}
+
+.refresh-btn:hover {
+    background-color: #f8f9fa;
+    border-color: #adb5bd;
+}
+
+.refresh-btn i {
+    margin-right: 4px;
+    font-size: 0.8rem;
+}
+
+/* Wallet list styling */
+#wallet-list ul.wallet-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.wallet-list-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    border: 1px solid #e6e9ef;
+    transition: border-color 0.2s;
+}
+
+.wallet-list-item.active-wallet {
+    border-color: #6b413f;
+    background-color: #fdf8f5;
+}
+
+.wallet-list-item button {
+    width: auto;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
+.wallet-info-display {
+    flex: 1;
+}
+
+.wallet-name {
+    font-weight: 500;
+    color: #333;
+}
+
+.wallet-address {
+    font-size: 0.85rem;
+    color: #666;
+    font-family: monospace;
+    margin-top: 4px;
+}
+
+.no-wallets-message {
+    text-align: center;
+    color: #666;
+    padding: 20px;
+    font-style: italic;
+}
+
+/* Loading states */
+.settings-section .loading {
+    text-align: center;
+    color: #666;
+    padding: 20px;
+    font-style: italic;
+}
+
+/* No content messages */
+.settings-section .no-tokens,
+.settings-section .no-sites,
+.settings-section .no-contracts,
+.settings-section .no-wallets {
+    text-align: center;
+    color: #666;
+    padding: 20px;
+}
+
+.settings-section .no-tokens small,
+.settings-section .no-sites small,
+.settings-section .no-contracts small {
+    display: block;
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: #999;
+}
+
+/* Section headers */
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.section-header h5 {
+    margin: 0;
+    color: #6b413f;
+}
+
+/* Form row for side-by-side inputs */
+.form-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.form-row .form-group {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+/* Half width form groups */
+.half-width {
+    width: calc(50% - 7.5px);
+}
+
+/* Auto-logout select styling */
+#auto-logout {
+    width: auto;
+    min-width: 120px;
+}
