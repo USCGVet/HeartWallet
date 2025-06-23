@@ -1106,8 +1106,15 @@ class HeartWalletApp {
             
             await this.networkCore.switchNetwork(networkKey);
             
+            networkProgress.updateProgress(50, 'Loading tokens for new network...');
+            // Reload tokens for the new network
+            await this.tokenManager.loadTokensFromStorage();
+            
             networkProgress.updateProgress(75, 'Updating wallet balance...');
             await this.updateBalance();
+            
+            // Update token balances for new network
+            await this.updateTokenBalances();
             
             const currentNetwork = await this.networkCore.getCurrentNetwork();
             networkProgress.complete(`Connected to ${currentNetwork?.name || 'network'}`, true);

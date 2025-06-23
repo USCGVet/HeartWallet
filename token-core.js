@@ -4,7 +4,13 @@ class TokenManager {
         this.networkCore = networkCore;
         this.walletCore = walletCore;
         this.tokenList = new Map();
-        this.storageKey = 'heartWallet_tokens';
+        this.storageKey = 'heartWallet_tokens'; // Base key, will append network ID
+    }
+    
+    // Get network-specific storage key
+    getNetworkStorageKey() {
+        const networkKey = this.networkCore.getCurrentNetworkKey();
+        return `${this.storageKey}_${networkKey}`;
     }
 
     // Full ERC-20/PRC-20 Token ABI
@@ -64,10 +70,20 @@ class TokenManager {
                 throw new Error('Token not found in list');
             }
             
+            // First check if contract exists at this address on current network
+            const provider = this.networkCore.getProvider();
+            const code = await provider.getCode(tokenAddress);
+            
+            if (code === '0x' || code === '0x0') {
+                // No contract at this address on current network
+                console.log(`Token ${tokenInfo.symbol} does not exist on current network`);
+                return '0';
+            }
+            
             const balance = await tokenInfo.contract.balanceOf(walletAddress);
             return ethers.formatUnits(balance, tokenInfo.decimals);
         } catch (error) {
-            console.error('Error getting token balance:', error);
+            console.error(`Error getting balance for token ${tokenAddress}:`, error.message);
             return '0';
         }
     }
@@ -188,14 +204,28 @@ class TokenManager {
             return false;
         }
     }    async loadDefaultTokens() {
-        // First load any saved tokens from storage
+        // First try to migrate any old tokens
+        await this.migrateOldTokens();
+        
+        // Then load any saved tokens from storage
         await this.loadTokensFromStorage();
         
         // Add some common PulseChain tokens (only if not already loaded)
-        const defaultTokens = [
-            // Add default tokens here as needed
-            // { address: '0x...', symbol: 'TOKEN', decimals: 18 }
-        ];
+        const networkKey = this.networkCore.getCurrentNetworkKey();
+        let defaultTokens = [];
+        
+        if (networkKey === 369) { // PulseChain Mainnet
+            defaultTokens = [
+                { address: '0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d', symbol: 'HEX', decimals: 8 },
+                { address: '0x95B303987A60C71504D99Aa1b13B4DA07b0790ab', symbol: 'PLSX', decimals: 18 },
+                { address: '0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39', symbol: 'HEX', decimals: 8 }, // HEX from Ethereum
+                { address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', symbol: 'PEPE', decimals: 18 }
+            ];
+        } else if (networkKey === 943) { // PulseChain Testnet V4
+            defaultTokens = [
+                // Add testnet tokens if known
+            ];
+        }
 
         for (const token of defaultTokens) {
             try {
@@ -206,6 +236,33 @@ class TokenManager {
             } catch (error) {
                 console.error(`Failed to load default token ${token.symbol}:`, error);
             }
+        }
+    }
+    
+    /**
+     * Migrate tokens from old storage format to network-specific format
+     */
+    async migrateOldTokens() {
+        try {
+            // Check if old tokens exist
+            const oldKey = 'heartWallet_tokens';
+            const result = await chrome.storage.local.get([oldKey]);
+            const oldTokens = result[oldKey];
+            
+            if (oldTokens && oldTokens.length > 0) {
+                console.log('Found old tokens to migrate:', oldTokens);
+                
+                // Save to current network
+                const networkKey = this.getNetworkStorageKey();
+                await chrome.storage.local.set({ [networkKey]: oldTokens });
+                
+                // Remove old key
+                await chrome.storage.local.remove([oldKey]);
+                
+                console.log(`Migrated ${oldTokens.length} tokens to network-specific storage`);
+            }
+        } catch (error) {
+            console.error('Error migrating old tokens:', error);
         }
     }
 
@@ -244,22 +301,35 @@ class TokenManager {
                 // Don't save the contract object, we'll recreate it
             }));
             
-            await chrome.storage.local.set({ [this.storageKey]: tokensArray });
-            console.log('Saved tokens to storage:', tokensArray);
+            const networkKey = this.getNetworkStorageKey();
+            await chrome.storage.local.set({ [networkKey]: tokensArray });
+            console.log(`Saved tokens to storage for network ${this.networkCore.getCurrentNetworkKey()}:`, tokensArray);
         } catch (error) {
             console.error('Error saving tokens to storage:', error);
         }
     }
 
     /**
+     * Clear current token list (used when switching networks)
+     */
+    clearTokenList() {
+        this.tokenList.clear();
+        console.log('Cleared token list');
+    }
+    
+    /**
      * Load tokens from browser storage
      */
     async loadTokensFromStorage() {
         try {
-            const result = await chrome.storage.local.get([this.storageKey]);
-            const tokensArray = result[this.storageKey] || [];
+            // Clear existing tokens first
+            this.clearTokenList();
             
-            console.log('Loading tokens from storage:', tokensArray);
+            const networkKey = this.getNetworkStorageKey();
+            const result = await chrome.storage.local.get([networkKey]);
+            const tokensArray = result[networkKey] || [];
+            
+            console.log(`Loading tokens from storage for network ${this.networkCore.getCurrentNetworkKey()}:`, tokensArray);
             
             for (const tokenData of tokensArray) {
                 try {
