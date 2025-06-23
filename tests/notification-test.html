@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HeartWallet Notification System Test</title>
+    <link rel="stylesheet" href="notification-styles.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .test-button:hover {
+            background: #0056b3;
+        }
+        .test-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>HeartWallet Notification System Test</h1>
+        
+        <div class="test-section">
+            <h3>Basic Notifications</h3>
+            <button class="test-button" onclick="testBasicInfo()">Info Notification</button>
+            <button class="test-button" onclick="testBasicSuccess()">Success Notification</button>
+            <button class="test-button" onclick="testBasicWarning()">Warning Notification</button>
+            <button class="test-button" onclick="testBasicError()">Error Notification</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Wallet Operations</h3>
+            <button class="test-button" onclick="testWalletUnlocked()">Wallet Unlocked</button>
+            <button class="test-button" onclick="testWalletLocked()">Wallet Locked</button>
+            <button class="test-button" onclick="testWalletImported()">Wallet Imported</button>
+            <button class="test-button" onclick="testWalletSwitched()">Wallet Switched</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Transaction Operations</h3>
+            <button class="test-button" onclick="testTransactionSubmitted()">Transaction Submitted</button>
+            <button class="test-button" onclick="testTransactionConfirmed()">Transaction Confirmed</button>
+            <button class="test-button" onclick="testTransactionFailed()">Transaction Failed</button>
+            <button class="test-button" onclick="testProgressOperation()">Progress Operation</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Token Operations</h3>
+            <button class="test-button" onclick="testTokenAdded()">Token Added</button>
+            <button class="test-button" onclick="testTokenTransfer()">Token Transfer</button>
+            <button class="test-button" onclick="testBalanceUpdate()">Balance Update</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Network Operations</h3>
+            <button class="test-button" onclick="testNetworkSwitch()">Network Switch</button>
+            <button class="test-button" onclick="testNetworkConnected()">Network Connected</button>
+        </div>
+
+        <div class="test-section">
+            <button class="test-button" onclick="dismissAll()" style="background: #dc3545;">Dismiss All Notifications</button>
+        </div>
+    </div>
+
+    <script src="notification-core.js"></script>
+    <script>
+        // Initialize notification manager
+        const notificationManager = new NotificationManager();
+
+        // Basic notification tests
+        function testBasicInfo() {
+            notificationManager.show('This is an info notification', 'info');
+        }
+
+        function testBasicSuccess() {
+            notificationManager.show('This is a success notification', 'success');
+        }
+
+        function testBasicWarning() {
+            notificationManager.show('This is a warning notification', 'warning');
+        }
+
+        function testBasicError() {
+            notificationManager.show('This is an error notification', 'error');
+        }
+
+        // Wallet operation tests
+        function testWalletUnlocked() {
+            notificationManager.walletUnlocked('0x1234567890abcdef1234567890abcdef12345678');
+        }
+
+        function testWalletLocked() {
+            notificationManager.walletLocked();
+        }
+
+        function testWalletImported() {
+            notificationManager.walletImported('0x1234567890abcdef1234567890abcdef12345678');
+        }
+
+        function testWalletSwitched() {
+            notificationManager.walletSwitched('0x9876543210fedcba9876543210fedcba98765432');
+        }
+
+        // Transaction operation tests
+        function testTransactionSubmitted() {
+            notificationManager.transactionSubmitted('0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab');
+        }
+
+        function testTransactionConfirmed() {
+            notificationManager.transactionConfirmed('0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab', 'PulseChain', 3);
+        }
+
+        function testTransactionFailed() {
+            notificationManager.transactionFailed(new Error('Insufficient gas fee'));
+        }
+
+        function testProgressOperation() {
+            const progressId = notificationManager.blockchainOperation('send');
+            
+            setTimeout(() => {
+                notificationManager.updateProgress(progressId, 50, 'Validating transaction...');
+            }, 1000);
+            
+            setTimeout(() => {
+                notificationManager.completeProgress(progressId, 'Transaction prepared successfully!', true);
+            }, 3000);
+        }
+
+        // Token operation tests
+        function testTokenAdded() {
+            notificationManager.tokenAdded('USDC', '0xa0b86a33e6be8c2b0d0b7e8a0a2b7a8c9c9a2b7a');
+        }
+
+        function testTokenTransfer() {
+            notificationManager.tokenTransferSubmitted('100.5', 'USDC', '0x9876543210fedcba9876543210fedcba98765432', '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab');
+        }
+
+        function testBalanceUpdate() {
+            notificationManager.balanceUpdated('PLS', '1,234.56');
+        }
+
+        // Network operation tests
+        function testNetworkSwitch() {
+            notificationManager.networkSwitched('Ethereum', 'PulseChain');
+        }
+
+        function testNetworkConnected() {
+            notificationManager.networkConnected('PulseChain Mainnet');
+        }
+
+        // Utility
+        function dismissAll() {
+            notificationManager.dismissAll();
+        }
+    </script>
+</body>
+</html>

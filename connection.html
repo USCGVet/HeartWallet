@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Connect Wallet Request</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="fontawesome-extension.css">
+    <!-- Include ethers.js directly in this page -->
+    <script src="ethers.umd.min.js"></script>
+    <style>
+        .connection-container {
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .site-origin {
+            font-weight: bold;
+            word-break: break-all;
+            margin: 15px 0;
+            padding: 10px;
+            background-color: #f8f9fb;
+            border-radius: 5px;
+        }
+        
+        .warning {
+            color: #b33a3a;
+            margin: 15px 0;
+        }
+        
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+        
+        #reject-btn {
+            background-color: #6c757d;
+        }
+        
+        .wallet-info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fb;
+            border-radius: 5px;
+            text-align: left;
+        }
+        
+        .wallet-locked {
+            color: #b33a3a;
+            font-weight: bold;
+        }
+        
+        .unlock-section {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #fdf8f5;
+            border-radius: 5px;
+            border-left: 4px solid #b33a3a;
+        }
+        
+        .unlock-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+        }
+          .unlock-form input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #dde1e7;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            background-color: #f8f9fb;
+            box-sizing: border-box;
+            transition: border-color 0.2s ease;
+        }
+        
+        .unlock-form input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+          .unlock-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background-color 0.2s ease;
+            width: 100%;
+        }
+        
+        .unlock-btn:hover {
+            background-color: #0056b3;
+        }
+        
+        .unlock-btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .connect-instructions {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        
+        .error-message {
+            color: #b33a3a;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #fff1f1;
+            border-radius: 4px;
+            display: none;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .mv3-note {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #17a2b8;
+            font-size: 0.9rem;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1>
+                    <img src="images/icon128.png" alt="Heart Wallet Logo" class="header-logo">
+                    Heart Wallet
+                </h1>
+            </div>
+            <p class="subtitle">Connection Request</p>
+        </header>
+        
+        <main>
+            <div class="connection-container">
+                <h2>Connect Wallet</h2>
+                <p>This site is requesting to connect to your wallet:</p>
+                
+                <div class="site-origin" id="origin-display">
+                    loading...
+                </div>
+                
+                <p class="warning">
+                    <i class="fas fa-exclamation-triangle"></i> 
+                    Only connect to sites you trust. By approving, you allow this site to see your wallet address.
+                </p>
+                
+                <div class="wallet-info">
+                    <p>Active wallet: <span id="active-wallet">Not logged in</span></p>
+                </div>
+                
+                <div id="unlock-section" class="unlock-section hidden">
+                    <h3>Unlock Your Wallet</h3>
+                    <p>You need to unlock your wallet before connecting to this site.</p>
+                    <div class="unlock-form">
+                        <input type="password" id="wallet-password" placeholder="Enter your wallet password">
+                        <button id="unlock-btn" class="unlock-btn">Unlock Wallet</button>
+                        <p id="unlock-error" class="unlock-error hidden"></p>
+                    </div>
+                </div>
+                
+                <div class="error-message" id="error-message"></div>
+                
+                <div class="buttons">
+                    <button id="approve-btn" disabled>Connect</button>
+                    <button id="reject-btn">Reject</button>
+                </div>
+                
+                <p id="alternative-unlock" class="connect-instructions hidden">
+                    Alternatively, you can reject this request, unlock your wallet from the main extension popup,
+                    then try connecting again.
+                </p>
+                
+                <div class="mv3-note">
+                    <strong>Note:</strong> Heart Wallet uses Chrome's modern extension model (MV3), which means the wallet
+                    may need to be unlocked if the browser has been idle. This enhances security by not keeping your 
+                    private key persistently in memory.
+                </div>
+            </div>
+        </main>
+    </div>    
+    <script src="security-utils.js"></script>
+    <script src="connection.js"></script>
+</body>
+</html>

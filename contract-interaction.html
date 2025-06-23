@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contract Interaction - Heart Wallet</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="fontawesome-extension.css">
+    <style>
+        .contract-interaction-container {
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .contract-header {
+            background: #6b413f;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .contract-name {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .contract-address {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            font-family: monospace;
+        }
+        
+        .function-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }
+        
+        .function-tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            color: #666;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .function-tab.active {
+            color: #6b413f;
+            border-bottom-color: #6b413f;
+        }
+        
+        .function-list {
+            margin-bottom: 20px;
+        }
+        
+        .function-item {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .function-item:hover {
+            border-color: #6b413f;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .function-item.selected {
+            border-color: #6b413f;
+            background: #f9f9f9;
+        }
+        
+        .function-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .function-inputs {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .function-form {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+        
+        .input-type {
+            font-size: 0.8rem;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .function-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.95rem;
+        }
+        
+        .payable-amount {
+            background: #fff9e6;
+            border: 1px solid #ffcc00;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .execute-button {
+            background: #6b413f;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .execute-button:hover {
+            background: #563330;
+        }
+        
+        .execute-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .result-container {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f0f8ff;
+            border: 1px solid #4169e1;
+            border-radius: 8px;
+        }
+        
+        .result-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #4169e1;
+        }
+        
+        .result-content {
+            font-family: monospace;
+            font-size: 0.9rem;
+            word-break: break-all;
+        }
+        
+        .error-container {
+            margin-top: 20px;
+            padding: 15px;
+            background: #ffebee;
+            border: 1px solid #f44336;
+            border-radius: 8px;
+            color: #d32f2f;
+        }
+        
+        .back-button {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: #6b413f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .back-button:hover {
+            background: #563330;
+        }
+    </style>
+</head>
+<body>
+    <button id="back-button" class="back-button">
+        <i class="fas fa-arrow-left"></i> Back to Wallet
+    </button>
+    
+    <div class="contract-interaction-container">
+        <div class="contract-header">
+            <div class="contract-name" id="contract-name">Loading Contract...</div>
+            <div class="contract-address" id="contract-address"></div>
+        </div>
+        
+        <div class="function-tabs">
+            <button class="function-tab active" data-tab="read">Read Functions</button>
+            <button class="function-tab" data-tab="write">Write Functions</button>
+            <button class="function-tab" data-tab="payable">Payable Functions</button>
+        </div>
+        
+        <div class="function-list" id="function-list">
+            <!-- Functions will be populated here -->
+        </div>
+        
+        <div id="function-form-container">
+            <!-- Function form will be populated here -->
+        </div>
+        
+        <div id="result-container" style="display: none;">
+            <!-- Results will be shown here -->
+        </div>
+    </div>
+    
+    <script src="ethers.umd.min.js"></script>
+    <script src="security-utils.js"></script>
+    <script src="contract-interaction.js"></script>
+</body>
+</html>

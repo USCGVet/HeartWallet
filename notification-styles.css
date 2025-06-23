@@ -1,0 +1,227 @@
+/* Notification System Styles */
+.notification-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    max-width: 400px;
+    pointer-events: none;
+}
+
+.notification {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    margin-bottom: 12px;
+    padding: 16px;
+    transform: translateX(400px);
+    transition: all 0.3s ease-in-out;
+    opacity: 0;
+    pointer-events: auto;
+    position: relative;
+    border-left: 4px solid #ccc;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.notification.show {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.notification.hide {
+    transform: translateX(400px);
+    opacity: 0;
+}
+
+/* Notification Types */
+.notification.info {
+    border-left-color: #3498db;
+    background: linear-gradient(135deg, #f8fbff 0%, #f0f8ff 100%);
+}
+
+.notification.success {
+    border-left-color: #27ae60;
+    background: linear-gradient(135deg, #f8fff8 0%, #f0fff0 100%);
+}
+
+.notification.warning {
+    border-left-color: #f39c12;
+    background: linear-gradient(135deg, #fffcf8 0%, #fff8f0 100%);
+}
+
+.notification.error {
+    border-left-color: #e74c3c;
+    background: linear-gradient(135deg, #fff8f8 0%, #fff0f0 100%);
+}
+
+/* Notification Content */
+.notification-message {
+    margin: 0;
+    font-weight: 500;
+    color: #2c3e50;
+    word-wrap: break-word;
+    margin-right: 20px; /* Space for close button */
+}
+
+.notification-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    color: #95a5a6;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.notification-close:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: #7f8c8d;
+}
+
+/* Progress Bar */
+.notification-progress {
+    margin-top: 12px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 4px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2980b9);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.notification.success .progress-fill {
+    background: linear-gradient(90deg, #27ae60, #229954);
+}
+
+.notification.error .progress-fill {
+    background: linear-gradient(90deg, #e74c3c, #c0392b);
+}
+
+/* Action Buttons */
+.notification-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.notification-btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.notification-btn.primary {
+    background: #3498db;
+    color: white;
+}
+
+.notification-btn.primary:hover {
+    background: #2980b9;
+}
+
+.notification-btn.secondary {
+    background: #95a5a6;
+    color: white;
+}
+
+.notification-btn.secondary:hover {
+    background: #7f8c8d;
+}
+
+.notification-btn.default {
+    background: #ecf0f1;
+    color: #2c3e50;
+    border: 1px solid #bdc3c7;
+}
+
+.notification-btn.default:hover {
+    background: #d5dbdb;
+}
+
+/* Responsive Design */
+@media (max-width: 480px) {
+    .notification-container {
+        top: 10px;
+        right: 10px;
+        left: 10px;
+        max-width: none;
+    }
+    
+    .notification {
+        margin-bottom: 8px;
+        padding: 12px;
+    }
+    
+    .notification-message {
+        font-size: 13px;
+    }
+}
+
+/* Animation Keyframes */
+@keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+}
+
+/* Special notification types for blockchain operations */
+.notification.blockchain {
+    border-left-color: #9b59b6;
+    background: linear-gradient(135deg, #faf8ff 0%, #f5f0ff 100%);
+}
+
+.notification.blockchain .progress-fill {
+    background: linear-gradient(90deg, #9b59b6, #8e44ad);
+}
+
+/* Transaction hash styling */
+.tx-hash {
+    font-family: 'Courier New', monospace;
+    background: rgba(0, 0, 0, 0.05);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+}

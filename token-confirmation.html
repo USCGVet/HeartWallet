@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Add Token - HeartWallet</title>
+    <link rel="stylesheet" href="token-confirmation-styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Add Token</h2>
+            <div class="subtitle">Review token details before adding</div>
+        </div>
+
+        <div id="tokenContent">
+            <div class="origin-info">
+                <strong>Requested by:</strong> <span id="requestOrigin">Loading...</span>
+            </div>
+
+            <div class="token-info">                <div class="token-logo">
+                    <img id="tokenImage" src="" alt="Token Logo" class="token-image-hidden">
+                    <div id="tokenPlaceholder" class="placeholder token-placeholder-hidden">?</div>
+                </div>
+
+                <div class="token-details">
+                    <div class="detail-row">
+                        <span class="detail-label">Symbol:</span>
+                        <span class="detail-value" id="tokenSymbol">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Contract Address:</span>
+                        <span class="detail-value address" id="tokenAddress">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Decimals:</span>
+                        <span class="detail-value" id="tokenDecimals">-</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Type:</span>
+                        <span class="detail-value" id="tokenType">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="warning">
+                <span class="icon">⚠️</span>
+                <strong>Warning:</strong> Only add tokens from trusted sources. Always verify the contract address matches the official token. Malicious tokens can have similar names and symbols.
+            </div>
+
+            <div class="buttons">
+                <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
+                <button id="addBtn" class="btn btn-primary">Add Token</button>
+            </div>
+        </div>
+
+        <div id="loadingState" class="loading">
+            <div class="spinner"></div>
+            <div>Adding token...</div>
+        </div>
+    </div>
+
+    <script src="security-utils.js"></script>
+    <script src="token-confirmation.js"></script>
+</body>
+</html>

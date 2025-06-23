@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Heart Wallet - PulseChain</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="notification-styles.css">
+    <link rel="stylesheet" href="fontawesome-extension.css">
+    <link rel="stylesheet" href="send-token-modal.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1>
+                    <img src="images/icon128.png" alt="Heart Wallet Logo" class="header-logo">
+                    Heart Wallet 
+                    <span id="connection-indicator" class="connection-indicator" title="Checking connection..."></span>
+                </h1>
+                <button id="settings-btn" class="settings-toggle"><i class="fas fa-gear"></i></button>
+                <button id="logout-wallet-btn" class="icon-btn small-icon" title="Logout">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16 17 21 12 16 7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                </button>
+            </div>
+            <p class="subtitle">A native PulseChain wallet</p>
+        </header>
+        <main>
+            <div id="main-content">
+                <div id="wallet-setup" class="wallet-section">
+                    <h2>Wallet Setup</h2>
+                    <div class="setup-options">
+                        <button id="create-wallet">Create New Wallet</button>
+                        <button id="import-wallet">Import Existing Wallet</button>
+                    </div>
+                    
+                    <div id="create-wallet-form" class="hidden wallet-form">
+                        <h3>Create New Wallet</h3>
+                        <p class="info-text">Your wallet will be encrypted with your password. Make sure to save your password and backup your seed phrase!</p>
+                        <div class="form-group">
+                            <label for="new-password">Password</label>
+                            <input type="password" id="new-password" placeholder="Enter secure password">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-password">Confirm Password</label>
+                            <input type="password" id="confirm-password" placeholder="Confirm your password">
+                        </div>
+                        <button id="generate-wallet">Create Wallet</button>
+                    </div>
+                    
+                    <div id="import-wallet-form" class="hidden wallet-form">
+                        <h3>Import Existing Wallet</h3>
+                        <div class="form-group">
+                            <label for="seed-phrase">Seed Phrase</label>
+                            <textarea id="seed-phrase" placeholder="Enter your 12-word seed phrase" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="import-password">Password</label>
+                            <input type="password" id="import-password" placeholder="Create a password">
+                        </div>
+                        <button id="import-wallet-btn">Import Wallet</button>
+                    </div>
+                    
+                    <div id="seed-phrase-backup" class="hidden wallet-form">
+                        <h3>Backup Your Seed Phrase</h3>
+                        <p class="warning-text">IMPORTANT: Write down these words in order and keep them in a safe place. Anyone with these words can access your wallet. Do not share them!</p>
+                        <div class="seed-container">
+                            <div id="seed-words" class="seed-words"></div>
+                        </div>
+                        <div class="form-group">
+                            <div class="checkbox-container">
+                                <input type="checkbox" id="confirm-backup">
+                                <label for="confirm-backup">I have written down my seed phrase</label>
+                            </div>
+                        </div>
+                        <button id="confirm-seed-backup" disabled>Continue to Wallet</button>
+                    </div>
+                </div>
+                
+                <div id="wallet-dashboard" class="wallet-section hidden">
+                    <h2>Wallet Dashboard</h2>
+                    <div class="dashboard-header">
+                        <div class="wallet-info">
+                            <p>Address: <span id="wallet-address"></span></p>
+                            <p>Balance: <span id="wallet-balance">0</span> PLS</p>
+                        </div>
+                    </div>
+                    
+                    <div class="prc20-section">
+                        <div class="prc20-header" id="toggle-tokens">
+                            <h4>PRC-20 Tokens <i class="fas fa-chevron-down"></i></h4>
+                        </div>
+                        <div class="prc20-content hidden" id="token-list-container">
+                            <div class="token-list" id="token-list">
+                                <p class="no-tokens">No tokens found in this wallet</p>
+                                <!-- Tokens will be added here dynamically -->
+                                <!-- Example token structure:
+                                <div class="token-item">
+                                    <div class="token-icon">HEX</div>
+                                    <div class="token-details">
+                                        <span class="token-name">HEX</span>
+                                        <span class="token-balance">1,000.00</span>
+                                    </div>
+                                </div>
+                                -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="transaction-section">
+                        <h3>Send PLS</h3>
+                        <div class="form-group">
+                            <label for="recipient-address">Recipient Address</label>
+                            <input type="text" id="recipient-address" placeholder="0x...">
+                        </div>
+                        <div class="form-group">
+                            <label for="send-amount">Amount (PLS)</label>
+                            <input type="number" id="send-amount" placeholder="0.0" step="0.001">
+                        </div>
+                        <button id="send-transaction">Send PLS</button>
+                    </div>
+                    
+                    <div class="transaction-history">
+                        <h3>Transaction History</h3>
+                        <div id="transactions-list" class="transactions-list">
+                            <p class="no-transactions">No transactions yet</p>
+                        </div>
+                    </div>
+                </div>
+                  <div id="login-section" class="wallet-section hidden">
+                    <h2>Unlock Wallet</h2>
+                    <div class="form-group">
+                        <label for="wallet-selector">Select Wallet</label>
+                        <select id="wallet-selector">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Enter Password</label>
+                        <input type="password" id="login-password" placeholder="Enter your wallet password">
+                    </div>
+                    <button id="unlock-wallet">Unlock</button>
+                </div>
+            </div>
+
+            <div id="settings-section" class="settings-section hidden">
+                <div class="settings-header">
+                    <h3>Settings</h3>
+                    <button id="close-settings" class="close-settings"><i class="fas fa-times"></i></button>
+                </div>
+                
+                <details class="settings-group">  <!-- Network Settings -->
+                    <summary>Network Settings</summary>
+                    <div class="form-group">
+                        <label for="network-select">Select Network</label>
+                        <select id="network-select">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="network-name">Network Name</label>
+                        <input type="text" id="network-name" placeholder="e.g., PulseChain">
+                    </div>
+                    <div class="form-group">
+                        <label for="rpc-url">RPC URL</label>
+                        <input type="text" id="rpc-url" placeholder="e.g., https://rpc.pulsechain.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="chain-id">Chain ID</label>
+                        <input type="number" id="chain-id" placeholder="e.g., 369">
+                    </div>
+                    <div class="form-group">
+                        <label for="network-symbol-input">Currency Symbol</label>
+                        <input type="text" id="network-symbol-input" placeholder="e.g., PLS">
+                    </div>
+                    <div class="form-group">
+                        <label for="explorer-url">Block Explorer URL (Optional)</label>
+                        <input type="text" id="explorer-url" placeholder="e.g., https://scan.pulsechain.com">
+                    </div>
+                    <div class="button-group">
+                        <button id="add-network">Add New Network</button>
+                        <button id="save-network-settings">Save Network Settings</button>
+                    </div>
+                </details>                <details class="settings-group">  <!-- Wallet Management -->
+                    <summary>Wallet Management</summary>
+                    <label>Your Wallets</label>
+                    <div id="wallet-list" class="wallet-list">
+                        <!-- Wallets will be listed here dynamically -->
+                        <p class="no-wallets">No additional wallets</p>
+                    </div>
+                    
+                    <h5>Add New Wallet</h5>
+                    <div class="tabs">
+                        <button id="seed-phrase-tab" class="tab-button active">Seed Phrase</button>
+                        <button id="private-key-tab" class="tab-button">Private Key</button>
+                    </div>
+                    
+                    <div id="seed-phrase-import-tab" class="tab-content">
+                        <div class="form-group">
+                            <label for="new-wallet-seed-phrase">Seed Phrase</label>
+                            <textarea id="new-wallet-seed-phrase" placeholder="Enter your 12-word seed phrase" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-wallet-name-seed">Wallet Name (Optional)</label>
+                            <input type="text" id="new-wallet-name-seed" placeholder="e.g., My Main Wallet">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-wallet-password-seed">Password</label>
+                            <input type="password" id="new-wallet-password-seed" placeholder="Enter password to encrypt this wallet">
+                        </div>
+                        <button id="add-wallet-seed">Add Wallet</button>
+                    </div>
+                    
+                    <div id="private-key-import-tab" class="tab-content hidden">
+                        <div class="form-group">
+                            <label for="new-wallet-private-key">Private Key</label>
+                            <input type="password" id="new-wallet-private-key" placeholder="Enter private key">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-wallet-name-key">Wallet Name (Optional)</label>
+                            <input type="text" id="new-wallet-name-key" placeholder="e.g., My Secondary Wallet">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-wallet-password-key">Password</label>
+                            <input type="password" id="new-wallet-password-key" placeholder="Enter password to encrypt this wallet">
+                        </div>
+                        <button id="add-wallet-key">Add Wallet</button>
+                    </div>
+                </details>
+
+                <details class="settings-group"> <!-- Security Settings -->
+                    <summary>Security Settings</summary>
+                    <div class="form-group">
+                        <label for="auto-logout">Auto-logout after inactivity (minutes)</label>
+                        <select id="auto-logout">
+                            <option value="5">5 minutes</option>
+                            <option value="10">10 minutes</option>
+                            <option value="15">15 minutes</option>
+                            <option value="30">30 minutes</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="clear-clipboard" checked>
+                            <label for="clear-clipboard">Auto-clear clipboard after copying sensitive data</label>
+                        </div>
+                    </div>                    <button id="save-security-settings">Save Security Settings</button>                </details>
+
+                <details class="settings-group"> <!-- PRC-20 Token Management -->
+                    <summary>PRC-20 Token Management</summary>
+                    <div class="settings-content">                        <div class="token-section">
+                            <div class="section-header">
+                                <h5>Your Tokens</h5>
+                                <button id="refresh-token-list" class="refresh-btn" title="Refresh token list">
+                                    <i class="fas fa-refresh"></i>
+                                </button>
+                            </div>
+                            <div id="settings-token-list" class="token-list">
+                                <div class="loading" id="token-list-loading">Loading tokens...</div>
+                                <div class="no-tokens hidden" id="no-tokens-message">
+                                    <p>No tokens added yet</p>
+                                    <small>Add PRC-20 tokens to track their balances in your wallet.</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="token-add-section">
+                            <h5>Add New Token</h5>
+                            <div class="form-group">
+                                <label for="new-token-address">Contract Address</label>
+                                <input type="text" id="new-token-address" placeholder="0x..." maxlength="42">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group half-width">
+                                    <label for="new-token-symbol">Symbol</label>
+                                    <input type="text" id="new-token-symbol" placeholder="e.g., HEART" maxlength="10">
+                                </div>
+                                <div class="form-group half-width">
+                                    <label for="new-token-decimals">Decimals</label>
+                                    <input type="number" id="new-token-decimals" placeholder="18" min="0" max="18" value="18">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-token-image">Image URL (Optional)</label>
+                                <input type="url" id="new-token-image" placeholder="https://...">
+                            </div>
+                            <div class="button-group">
+                                <button id="add-custom-token" class="primary-btn">
+                                    <i class="fas fa-plus"></i> Add Token
+                                </button>
+                                <button id="auto-detect-token" class="secondary-btn">
+                                    <i class="fas fa-search"></i> Auto-Detect
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="settings-group"> <!-- Connected Sites -->
+                    <summary>Connected Sites</summary>
+                    <div class="settings-content">
+                        <p>Manage websites that have permission to connect to your wallet:</p>
+                        <div id="connected-sites-list" class="connected-sites-list">
+                            <div class="loading" id="connected-sites-loading">Loading connected sites...</div>
+                            <div class="no-sites hidden" id="no-connected-sites">
+                                <p>No connected sites</p>
+                                <small>When you connect to DApps, they will appear here.</small>
+                            </div>
+                        </div>
+                        <div class="button-group connected-sites-buttons">
+                            <button id="refresh-connected-sites" class="secondary-btn">
+                                <i class="fas fa-refresh"></i> Refresh
+                            </button>
+                            <button id="disconnect-all-sites" class="danger-btn">
+                                <i class="fas fa-unlink"></i> Disconnect All
+                            </button>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="settings-group"> <!-- Contract Interaction -->
+                    <summary>Contract Interaction</summary>
+                    <div class="settings-content">
+                        <div class="contract-section">
+                            <div class="section-header">
+                                <h5>Saved Contracts</h5>
+                                <button id="refresh-contract-list" class="refresh-btn" title="Refresh contract list">
+                                    <i class="fas fa-refresh"></i>
+                                </button>
+                            </div>
+                            <div id="contract-list" class="contract-list">
+                                <div class="no-contracts" id="no-contracts-message">
+                                    <p>No contracts added yet</p>
+                                    <small>Add smart contract addresses and ABIs to interact with them.</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="contract-add-section">
+                            <h5>Add New Contract</h5>
+                            <div class="form-group">
+                                <label for="new-contract-address">Contract Address</label>
+                                <input type="text" id="new-contract-address" placeholder="0x..." maxlength="42">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-contract-name">Contract Name (Optional)</label>
+                                <input type="text" id="new-contract-name" placeholder="e.g., My DeFi Contract">
+                            </div>
+                            <div class="form-group">
+                                <label for="new-contract-abi">Contract ABI</label>
+                                <textarea id="new-contract-abi" placeholder='Paste contract ABI JSON here...' rows="4"></textarea>
+                                <small>Paste the contract's ABI from the block explorer or your contract source.</small>
+                            </div>
+                            <div class="button-group">
+                                <button id="add-contract" class="primary-btn">
+                                    <i class="fas fa-plus"></i> Add Contract
+                                </button>
+                                <button id="fetch-contract-abi" class="secondary-btn" disabled>
+                                    <i class="fas fa-download"></i> Fetch ABI
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </main>
+        <footer>
+            <div class="footer-content">                
+                <div class="footer-right">
+                    <div class="network-switcher">
+                        <select id="footer-network-select" title="Switch Network">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>    <!-- Token Send Modal -->
+    <div id="send-token-modal-container"></div>
+    
+    <script src="ethers.umd.min.js" type="application/javascript"></script>    <script src="constants.js"></script>    <script src="security-utils.js"></script>
+    <script src="security.js"></script>
+    <script src="ui-utils.js"></script>
+    <script src="ui-utils-inline.js"></script>
+    <script src="debug/debug.js"></script>
+    <script src="notification-core.js"></script>
+    <!-- New modular components -->
+    <script src="wallet-core.js"></script>
+    <script src="network-core.js"></script>
+    <script src="ui-core.js"></script>
+    <script src="transaction-core.js"></script>
+    <script src="token-core.js"></script>
+    <script src="contract-core.js"></script>
+    <script src="auth-core.js"></script>
+    <script src="app.js"></script>
+    <!-- Debug helper for troubleshooting -->
+    <script src="debug/debug-helper.js"></script>
+    <!-- Modal loader -->
+    <script src="modal-loader.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!-- Send Token Modal -->
+<div id="send-token-modal" class="modal hidden">
+    <div class="modal-overlay"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Send <span id="modal-token-symbol">Token</span></h3>
+            <button class="modal-close" id="close-send-token-modal">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        
+        <div class="modal-body">
+            <div class="token-info-display">
+                <div class="token-icon-large" id="modal-token-icon">TKN</div>
+                <div class="token-balance-info">
+                    <div class="balance-label">Available Balance</div>
+                    <div class="balance-value" id="modal-token-balance">0.00</div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="token-recipient-address">Recipient Address</label>
+                <input type="text" id="token-recipient-address" placeholder="0x..." autocomplete="off">
+            </div>
+            
+            <div class="form-group">
+                <label for="token-send-amount">
+                    Amount (<span id="modal-token-symbol-amount">Token</span>)
+                </label>
+                <div class="input-with-max">
+                    <input type="number" id="token-send-amount" placeholder="0.0" step="any" min="0">
+                    <button class="max-button" id="token-send-max">MAX</button>
+                </div>
+            </div>
+            
+            <div class="gas-estimate">
+                <div class="gas-label">
+                    <i class="fas fa-gas-pump"></i>
+                    Estimated Gas Fee
+                </div>
+                <div class="gas-value" id="token-gas-estimate">Calculating...</div>
+            </div>
+            
+            <div class="send-summary hidden" id="token-send-summary">
+                <div class="summary-row">
+                    <span>Sending:</span>
+                    <span id="summary-amount">0 TOKEN</span>
+                </div>
+                <div class="summary-row">
+                    <span>To:</span>
+                    <span id="summary-recipient" class="address-display">0x...</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-token-send">Cancel</button>
+            <button class="btn btn-primary" id="confirm-token-send" disabled>Send Token</button>
+        </div>
+    </div>
+</div>

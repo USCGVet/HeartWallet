@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HeartWallet Settings Test</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="fontawesome-extension.css">
+</head>
+<body>
+    <div class="settings-container">
+        <div class="settings-header">
+            <h1>HeartWallet Settings</h1>
+        </div>
+
+        <div class="settings-content">
+            <!-- Wallet Management Section -->
+            <div class="settings-section">
+                <h2>Wallet Management</h2>
+                <div class="wallet-management">
+                    <div class="wallet-list-container">
+                        <div id="walletList" class="wallet-list">
+                            <!-- Sample wallet for demonstration -->
+                            <div class="wallet-item">
+                                <div class="wallet-info">
+                                    <div class="wallet-icon">
+                                        <i class="fas fa-wallet"></i>
+                                    </div>
+                                    <div class="wallet-details">
+                                        <div class="wallet-name">Main Wallet</div>
+                                        <div class="wallet-address">0x1234...5678</div>
+                                        <div class="wallet-meta">Created: 12/1/2024</div>
+                                    </div>
+                                </div>
+                                <div class="wallet-actions">
+                                    <button class="export-key-btn">
+                                        <i class="fas fa-key"></i> Export Private Key
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="wallet-item">
+                                <div class="wallet-info">
+                                    <div class="wallet-icon">
+                                        <i class="fas fa-wallet"></i>
+                                    </div>
+                                    <div class="wallet-details">
+                                        <div class="wallet-name">Secondary Wallet</div>
+                                        <div class="wallet-address">0xabcd...ef01</div>
+                                        <div class="wallet-meta">Created: 11/15/2024</div>
+                                    </div>
+                                </div>
+                                <div class="wallet-actions">
+                                    <button class="export-key-btn">
+                                        <i class="fas fa-key"></i> Export Private Key
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="settings-footer">
+            <button class="close-btn"><i class="fas fa-times"></i> Close</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add click handlers for testing
+            document.querySelectorAll('.export-key-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    alert('Export Private Key clicked! In the actual extension, this would show a password prompt and then display the private key.');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

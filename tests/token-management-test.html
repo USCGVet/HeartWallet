@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Management Settings Test - HeartWallet</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        
+        .test-header {
+            border-bottom: 2px solid #e0d3c5;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .test-section {
+            margin-bottom: 30px;
+        }
+        
+        .test-button {
+            background: #b33a3a;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            transition: background-color 0.2s;
+        }
+        
+        .test-button:hover {
+            background: #8b2c2c;
+        }
+        
+        .test-button.secondary {
+            background: #6c757d;
+        }
+        
+        .test-button.secondary:hover {
+            background: #5a6268;
+        }
+        
+        .test-log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        
+        .status.info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        
+        .input-group input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <div class="test-header">
+            <h1>🪙 Token Management Settings Test</h1>
+            <p>Test the new PRC-20 token management functionality in Settings</p>
+        </div>
+        
+        <div id="connection-status" class="status info">
+            <strong>Connection Status:</strong> <span id="status-text">Checking HeartWallet connection...</span>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 Prerequisites</h3>
+            <ol>
+                <li>HeartWallet extension is loaded and unlocked</li>
+                <li>Extension is connected to a wallet</li>
+                <li>HeartWallet Settings are accessible</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 Settings Token Management Tests</h3>
+            
+            <div class="input-group">
+                <label for="test-token-address">Test Token Contract Address:</label>
+                <input type="text" id="test-token-address" placeholder="0x..." value="0x1234567890123456789012345678901234567890">
+            </div>
+            
+            <div class="input-group">
+                <label for="test-token-symbol">Test Token Symbol:</label>
+                <input type="text" id="test-token-symbol" placeholder="TOKEN" value="TEST">
+            </div>
+            
+            <div class="input-group">
+                <label for="test-token-decimals">Test Token Decimals:</label>
+                <input type="number" id="test-token-decimals" placeholder="18" value="18">
+            </div>
+            
+            <button class="test-button" onclick="openSettings()">📂 Open Settings</button>
+            <button class="test-button" onclick="testAddToken()">➕ Test Add Token</button>
+            <button class="test-button" onclick="testAutoDetect()">🔍 Test Auto-Detect</button>
+            <button class="test-button" onclick="testLoadTokenList()">📃 Test Load Token List</button>
+            <button class="test-button secondary" onclick="clearLog()">🧹 Clear Log</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📊 Test Log</h3>
+            <div id="test-log" class="test-log"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>📚 Instructions</h3>
+            <ol>
+                <li><strong>Open Settings:</strong> Opens HeartWallet settings - navigate to "PRC-20 Token Management" section</li>
+                <li><strong>Test Add Token:</strong> Fills out the form in settings and tests adding a token</li>
+                <li><strong>Test Auto-Detect:</strong> Tests the auto-detection functionality for contract info</li>
+                <li><strong>Test Load Token List:</strong> Tests loading and displaying existing tokens</li>
+                <li><strong>Manual Testing:</strong> You can also manually test by:
+                    <ul>
+                        <li>Opening settings and navigating to PRC-20 Token Management</li>
+                        <li>Entering a contract address and testing auto-detect</li>
+                        <li>Adding tokens and seeing them appear in the list</li>
+                        <li>Removing tokens using the trash button</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        let logCount = 0;
+        
+        function log(message, isError = false) {
+            logCount++;
+            const timestamp = new Date().toLocaleTimeString();
+            const logElement = document.getElementById('test-log');
+            const prefix = isError ? '❌' : '✅';
+            logElement.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+            
+            console.log(`Token Management Test: ${message}`);
+            if (isError) {
+                console.error(`Token Management Test Error: ${message}`);
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('test-log').textContent = '';
+            logCount = 0;
+            log('Test log cleared');
+        }
+        
+        async function checkWalletConnection() {
+            try {
+                if (typeof window.ethereum === 'undefined') {
+                    updateStatus('HeartWallet not detected', 'error');
+                    return false;
+                }
+                
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                if (accounts.length === 0) {
+                    updateStatus('HeartWallet not connected', 'error');
+                    log('Please connect HeartWallet first', true);
+                    return false;
+                }
+                
+                updateStatus(`Connected: ${accounts[0]}`, 'success');
+                log(`HeartWallet connected: ${accounts[0].substring(0, 10)}...`);
+                return true;
+                
+            } catch (error) {
+                updateStatus(`Connection error: ${error.message}`, 'error');
+                log(`Connection error: ${error.message}`, true);
+                return false;
+            }
+        }
+        
+        function updateStatus(message, type) {
+            const statusElement = document.getElementById('connection-status');
+            const textElement = document.getElementById('status-text');
+            textElement.textContent = message;
+            statusElement.className = `status ${type}`;
+        }
+        
+        async function openSettings() {
+            log('Opening HeartWallet Settings...');
+            
+            if (!(await checkWalletConnection())) return;
+            
+            try {
+                // Try to trigger settings opening through extension popup
+                log('Please manually open HeartWallet extension popup and navigate to Settings > PRC-20 Token Management');
+                log('The settings should show:');
+                log('1. "Your Tokens" section with existing tokens (if any)');
+                log('2. "Add New Token" form with Contract Address, Symbol, Decimals, and Image URL fields');
+                log('3. "Add Token" and "Auto-Detect" buttons');
+                
+            } catch (error) {
+                log(`Error opening settings: ${error.message}`, true);
+            }
+        }
+        
+        async function testAddToken() {
+            log('Testing token addition via Settings...');
+            
+            if (!(await checkWalletConnection())) return;
+            
+            const address = document.getElementById('test-token-address').value.trim();
+            const symbol = document.getElementById('test-token-symbol').value.trim();
+            const decimals = document.getElementById('test-token-decimals').value.trim();
+            
+            if (!address || !symbol || !decimals) {
+                log('Please fill in all token fields for testing', true);
+                return;
+            }
+            
+            try {
+                log(`Testing with token: ${symbol} at ${address}`);
+                log('To test manually:');
+                log('1. Open Settings > PRC-20 Token Management');
+                log(`2. Enter contract address: ${address}`);
+                log(`3. Enter symbol: ${symbol}`);
+                log(`4. Enter decimals: ${decimals}`);
+                log('5. Click "Add Token" button');
+                log('6. Token should appear in "Your Tokens" list');
+                
+                // Could also try to programmatically add via wallet_watchAsset
+                const result = await window.ethereum.request({
+                    method: 'wallet_watchAsset',
+                    params: {
+                        type: 'ERC20',
+                        options: {
+                            address: address,
+                            symbol: symbol,
+                            decimals: parseInt(decimals)
+                        }
+                    }
+                });
+                
+                if (result) {
+                    log('✅ Token added successfully via wallet_watchAsset!');
+                    log('Now check Settings > PRC-20 Token Management to see if it appears in the list');
+                } else {
+                    log('❌ Token addition was cancelled by user', true);
+                }
+                
+            } catch (error) {
+                log(`Error testing token addition: ${error.message}`, true);
+            }
+        }
+        
+        async function testAutoDetect() {
+            log('Testing auto-detect functionality...');
+            
+            if (!(await checkWalletConnection())) return;
+            
+            const address = document.getElementById('test-token-address').value.trim();
+            
+            if (!address) {
+                log('Please enter a contract address for auto-detect testing', true);
+                return;
+            }
+            
+            try {
+                log(`Testing auto-detect for address: ${address}`);
+                log('To test manually:');
+                log('1. Open Settings > PRC-20 Token Management');
+                log(`2. Enter contract address: ${address}`);
+                log('3. Click "Auto-Detect" button');
+                log('4. Symbol and Decimals fields should be automatically filled');
+                log('Note: Auto-detect will only work for valid token contracts');
+                
+            } catch (error) {
+                log(`Error testing auto-detect: ${error.message}`, true);
+            }
+        }
+        
+        async function testLoadTokenList() {
+            log('Testing token list loading...');
+            
+            if (!(await checkWalletConnection())) return;
+            
+            try {
+                log('To test token list loading:');
+                log('1. Open Settings > PRC-20 Token Management');
+                log('2. The "Your Tokens" section should show:');
+                log('   - Loading indicator initially');
+                log('   - List of added tokens (if any exist)');
+                log('   - "No tokens added yet" message if none exist');
+                log('3. Each token should show:');
+                log('   - Token icon with symbol letters');
+                log('   - Token name and symbol');
+                log('   - Contract address (shortened)');
+                log('   - Remove button (trash icon)');
+                log('4. Clicking remove should show confirmation and remove the token');
+                
+            } catch (error) {
+                log(`Error testing token list loading: ${error.message}`, true);
+            }
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            log('🧪 Token Management Settings Test initialized');
+            await checkWalletConnection();
+        });
+    </script>
+</body>
+</html>

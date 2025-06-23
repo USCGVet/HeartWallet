@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "Heart Wallet",
+  "version": "1.0.0",
+  "description": "A native PulseChain wallet for Chrome",
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },  "permissions": [
+    "storage"
+  ],  "content_security_policy": {
+    "extension_pages": "script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src https:; object-src 'self'; font-src 'self';"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["contentscript.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["debug/debug.js"]
+    }
+  ],  "web_accessible_resources": [
+    {
+      "resources": [        "inpage.js", 
+        "app.js", 
+        "debug/debug.js", 
+        "ethers.umd.min.js", 
+        "connection.html", 
+        "contract-interaction.html",
+        "contract-interaction.js",
+        "transaction-confirmation.html",
+        "transaction-confirmation.js",
+        "message-signing.html",
+        "message-signing.js",
+        "typed-data-signing.html",
+        "typed-data-signing.js",
+        "token-confirmation.html", 
+        "token-confirmation.js",
+        "token-confirmation-styles.css", 
+        "send-token-modal.html",
+        "security-utils.js",
+        "fontawesome-extension.css",
+        "lib/fontawesome/webfonts/fa-solid-900.woff2",
+        "lib/fontawesome/webfonts/fa-solid-900.ttf",
+        "lib/fontawesome/webfonts/fa-regular-400.woff2",
+        "lib/fontawesome/webfonts/fa-regular-400.ttf",
+        "lib/fontawesome/webfonts/fa-brands-400.woff2",
+        "lib/fontawesome/webfonts/fa-brands-400.ttf"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

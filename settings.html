@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>HeartWallet Settings</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="fontawesome-extension.css">
+</head>
+<body>    <div class="settings-container">        <div class="settings-header">
+            <div class="header-spacer"></div>
+            <h1>HeartWallet Settings</h1>
+            <button id="closeSettings" class="close-btn header-close"><i class="fas fa-times"></i></button>
+        </div>
+
+        <div class="settings-content">
+            <!-- Session Settings -->
+            <div class="settings-section">
+                <h2>Session Settings</h2>
+                <div class="setting-item">
+                    <label for="sessionTimeout">Auto-lock after (minutes):</label>
+                    <input type="number" id="sessionTimeout" min="1" max="1440" value="30">
+                    <button id="saveSessionTimeout"><i class="fas fa-save"></i> Save</button>
+                </div>
+            </div>
+
+            <!-- Token Management Section -->
+            <div class="settings-section">
+                <h2>Your Tokens</h2>
+                <div class="token-management">
+                    <div class="token-controls">
+                        <button id="refreshTokens" class="refresh-btn"><i class="fas fa-sync-alt"></i> Refresh Token List</button>
+                    </div>
+                    
+                    <div class="token-list-container">
+                        <div id="tokenList" class="token-list">
+                            <!-- Tokens will be dynamically loaded here -->
+                        </div>
+                    </div>
+
+                    <div class="add-token-section">
+                        <h3>Add Custom Token</h3>
+                        <form id="addTokenForm" class="add-token-form">
+                            <div class="form-group">
+                                <label for="tokenAddress">Token Contract Address:</label>
+                                <input type="text" id="tokenAddress" placeholder="0x..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="tokenSymbol">Token Symbol:</label>
+                                <input type="text" id="tokenSymbol" placeholder="e.g. USDC" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="tokenDecimals">Decimals:</label>
+                                <input type="number" id="tokenDecimals" min="0" max="18" value="18" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="tokenImage">Token Image URL (optional):</label>
+                                <input type="text" id="tokenImage" placeholder="https://...">
+                            </div>
+                            <button type="submit" class="add-token-btn"><i class="fas fa-plus"></i> Add Token</button>
+                        </form>
+                    </div>
+                </div>
+            </div>            <!-- Wallet Management Section -->
+            <div class="settings-section">
+                <h2>Wallet Management</h2>
+                <div class="wallet-management">
+                    <div class="wallet-controls">
+                        <button id="refreshWallets" class="refresh-btn"><i class="fas fa-sync-alt"></i> Refresh Wallet List</button>
+                        <button id="debugWallets" class="debug-btn"><i class="fas fa-bug"></i> Debug Storage</button>
+                    </div>
+                    <div class="wallet-list-container">
+                        <div id="walletList" class="wallet-list">
+                            <!-- Wallets will be dynamically loaded here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Connected Sites -->
+            <div class="settings-section">
+                <h2>Connected Sites</h2>
+                <div id="connectedSitesList" class="connected-sites-list">
+                    <!-- Connected sites will be loaded here -->
+                </div>
+                <button id="disconnectAllSites" class="disconnect-all-btn"><i class="fas fa-unlink"></i> Disconnect All Sites</button>            </div>
+        </div>
+    </div><script src="ethers.umd.min.js"></script>
+    <script src="wallet-core.js"></script>
+    <script src="security-utils.js"></script>
+    <script src="settings.js"></script>
+</body>
+</html>

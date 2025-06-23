@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HeartWallet Transaction Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        .warning { background: #fff3cd; color: #856404; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HeartWallet Transaction Test</h1>
+        
+        <div id="status" class="status info">Ready to test transaction functionality</div>
+        
+        <h3>Test Steps:</h3>
+        <ol>
+            <li><button onclick="testStep1()">1. Test Components</button></li>
+            <li><button onclick="testStep2()">2. Test waitForTransactionConfirmation Method</button></li>
+            <li><button onclick="testStep3()">3. Test Progress Notifications</button></li>
+            <li><button onclick="testStep4()">4. Test Transaction Flow</button></li>
+        </ol>
+        
+        <h3>Transaction Simulation:</h3>
+        <button onclick="simulateTransaction()">Simulate PLS Transaction</button>
+        <button onclick="simulateTokenTransaction()">Simulate Token Transaction</button>
+        <button onclick="clearStatus()">Clear Status</button>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        let statusDiv = document.getElementById('status');
+        let resultsDiv = document.getElementById('results');
+        
+        function updateStatus(message, type = 'info') {
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+        
+        function addResult(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `status ${type}`;
+            div.textContent = message;
+            resultsDiv.appendChild(div);
+        }
+        
+        function clearStatus() {
+            statusDiv.className = 'status info';
+            statusDiv.textContent = 'Ready to test transaction functionality';
+            resultsDiv.innerHTML = '';
+        }
+        
+        function testStep1() {
+            updateStatus('Testing if app components are available...', 'info');
+            
+            // Check if running in HeartWallet context
+            if (typeof window.app === 'undefined') {
+                addResult('❌ This test should be run in the HeartWallet extension context', 'error');
+                addResult('Open HeartWallet extension and run this test from there', 'warning');
+                return;
+            }
+            
+            // Check components
+            const components = {
+                'app': window.app,
+                'notificationManager': window.app?.notificationManager,
+                'waitForTransactionConfirmation': window.app?.waitForTransactionConfirmation
+            };
+            
+            let allOk = true;
+            for (const [name, component] of Object.entries(components)) {
+                if (component) {
+                    addResult(`✅ ${name}: Available`, 'success');
+                } else {
+                    addResult(`❌ ${name}: Missing`, 'error');
+                    allOk = false;
+                }
+            }
+            
+            if (allOk) {
+                updateStatus('✅ All components available', 'success');
+            } else {
+                updateStatus('❌ Some components missing', 'error');
+            }
+        }
+        
+        function testStep2() {
+            updateStatus('Testing waitForTransactionConfirmation method...', 'info');
+            
+            if (typeof window.app?.waitForTransactionConfirmation !== 'function') {
+                addResult('❌ waitForTransactionConfirmation method not found', 'error');
+                return;
+            }
+            
+            addResult('✅ waitForTransactionConfirmation method exists', 'success');
+            addResult('Method signature: ' + window.app.waitForTransactionConfirmation.toString().substring(0, 100) + '...', 'info');
+        }
+        
+        function testStep3() {
+            updateStatus('Testing progress notification methods...', 'info');
+            
+            const nm = window.app?.notificationManager;
+            if (!nm) {
+                addResult('❌ NotificationManager not available', 'error');
+                return;
+            }
+            
+            try {
+                // Test showProgress
+                const progressId = nm.showProgress('Testing progress...', 'info');
+                addResult('✅ showProgress works', 'success');
+                
+                // Test updateProgress
+                setTimeout(() => {
+                    nm.updateProgress(progressId, 50, 'Half way...');
+                    addResult('✅ updateProgress works', 'success');
+                }, 1000);
+                
+                // Test completeProgress
+                setTimeout(() => {
+                    nm.completeProgress(progressId, 'Test completed!', true);
+                    addResult('✅ completeProgress works', 'success');
+                }, 2000);
+                
+            } catch (error) {
+                addResult('❌ Progress notification error: ' + error.message, 'error');
+            }
+        }
+        
+        function testStep4() {
+            updateStatus('Testing transaction flow components...', 'info');
+            
+            const components = [
+                'transactionManager',
+                'networkCore',
+                'walletCore'
+            ];
+            
+            let allOk = true;
+            for (const component of components) {
+                if (window.app?.[component]) {
+                    addResult(`✅ ${component}: Available`, 'success');
+                } else {
+                    addResult(`❌ ${component}: Missing`, 'error');
+                    allOk = false;
+                }
+            }
+            
+            if (allOk) {
+                updateStatus('✅ Transaction components ready', 'success');
+            } else {
+                updateStatus('❌ Some transaction components missing', 'error');
+            }
+        }
+        
+        function simulateTransaction() {
+            updateStatus('Simulating PLS transaction flow...', 'info');
+            
+            const nm = window.app?.notificationManager;
+            if (!nm) {
+                addResult('❌ NotificationManager not available', 'error');
+                return;
+            }
+            
+            // Simulate the fixed transaction flow
+            try {
+                // Step 1: Start progress
+                const progressId = nm.blockchainOperation('send');
+                addResult('✅ Started blockchain operation', 'success');
+                
+                // Step 2: Update progress
+                setTimeout(() => {
+                    nm.updateProgress(progressId, 25, 'Creating transaction...');
+                    addResult('✅ Progress updated: 25%', 'info');
+                }, 500);
+                
+                // Step 3: More progress
+                setTimeout(() => {
+                    nm.updateProgress(progressId, 75, 'Transaction submitted to PulseChain...');
+                    addResult('✅ Progress updated: 75%', 'info');
+                }, 1000);
+                
+                // Step 4: Show transaction submitted
+                setTimeout(() => {
+                    const mockTxHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab';
+                    nm.transactionSubmitted(mockTxHash, 'PulseChain');
+                    addResult('✅ Transaction submitted notification', 'success');
+                }, 1500);
+                
+                // Step 5: Complete progress
+                setTimeout(() => {
+                    nm.completeProgress(progressId, 'Transaction sent successfully!', true);
+                    addResult('✅ Progress completed', 'success');
+                    updateStatus('✅ Transaction simulation completed successfully', 'success');
+                }, 2000);
+                
+            } catch (error) {
+                addResult('❌ Simulation error: ' + error.message, 'error');
+                updateStatus('❌ Transaction simulation failed', 'error');
+            }
+        }
+        
+        function simulateTokenTransaction() {
+            updateStatus('Simulating token transaction flow...', 'info');
+            
+            const nm = window.app?.notificationManager;
+            if (!nm) {
+                addResult('❌ NotificationManager not available', 'error');
+                return;
+            }
+            
+            try {
+                // Simulate token transaction
+                const progressId = nm.blockchainOperation('token-transfer');
+                addResult('✅ Started token transfer operation', 'success');
+                
+                setTimeout(() => {
+                    nm.updateProgress(progressId, 25, 'Preparing USDC transfer...');
+                    addResult('✅ Token transfer progress: 25%', 'info');
+                }, 500);
+                
+                setTimeout(() => {
+                    nm.updateProgress(progressId, 75, 'Sending USDC transaction...');
+                    addResult('✅ Token transfer progress: 75%', 'info');
+                }, 1000);
+                
+                setTimeout(() => {
+                    const mockTxHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+                    nm.tokenTransferSubmitted('100.5', 'USDC', '0x9876543210fedcba9876543210fedcba98765432', mockTxHash);
+                    addResult('✅ Token transfer submitted notification', 'success');
+                }, 1500);
+                
+                setTimeout(() => {
+                    nm.completeProgress(progressId, 'USDC sent successfully!', true);
+                    addResult('✅ Token transfer completed', 'success');
+                    updateStatus('✅ Token transaction simulation completed', 'success');
+                }, 2000);
+                
+            } catch (error) {
+                addResult('❌ Token simulation error: ' + error.message, 'error');
+                updateStatus('❌ Token transaction simulation failed', 'error');
+            }
+        }
+        
+        // Auto-check on load if in HeartWallet context
+        window.addEventListener('load', () => {
+            if (typeof window.app !== 'undefined') {
+                addResult('🎉 Running in HeartWallet context - ready for testing!', 'success');
+            } else {
+                addResult('ℹ️ Not in HeartWallet context - open this in the extension', 'warning');
+            }
+        });
+    </script>
+</body>
+</html>
