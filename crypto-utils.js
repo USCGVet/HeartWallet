@@ -216,7 +216,4 @@ class SecureMemory {
     }
 }
 
-// Export for use in extension
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { CryptoUtils, SecureMemory };
-}
+// Classes are available globally in service worker context

@@ -149,6 +149,89 @@
             color: #d32f2f;
         }
         
+        .validation-section {
+            margin-bottom: 20px;
+        }
+        
+        .validation-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .validation-safe {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        
+        .validation-warning {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        
+        .validation-danger {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .validation-issues {
+            padding: 0 12px;
+        }
+        
+        .validation-issue {
+            display: flex;
+            align-items: start;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding: 8px;
+            background: #f5f5f5;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        
+        .issue-icon {
+            flex-shrink: 0;
+            width: 20px;
+            text-align: center;
+        }
+        
+        .risk-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .risk-minimal { background: #4caf50; }
+        .risk-low { background: #8bc34a; }
+        .risk-medium { background: #ff9800; }
+        .risk-high { background: #ff5722; }
+        .risk-critical { background: #f44336; }
+        
+        .simulation-section {
+            background: #f0f4f8;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .simulation-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .simulation-result {
+            font-size: 0.9rem;
+        }
+        
         .action-buttons {
             display: flex;
             gap: 10px;
@@ -291,6 +374,23 @@
                     <span>Total (Amount + Fee):</span>
                     <span id="total-amount">0 PLS</span>
                 </div>
+            </div>
+            
+            <div class="validation-section" id="validation-section" style="display: none;">
+                <div class="validation-header" id="validation-header">
+                    <i class="fas fa-shield-alt"></i>
+                    <span id="validation-status">Checking transaction...</span>
+                    <span class="risk-indicator" id="risk-indicator"></span>
+                </div>
+                <div class="validation-issues" id="validation-issues"></div>
+            </div>
+            
+            <div class="simulation-section" id="simulation-section" style="display: none;">
+                <div class="simulation-title">
+                    <i class="fas fa-flask"></i>
+                    Transaction Simulation
+                </div>
+                <div class="simulation-result" id="simulation-result"></div>
             </div>
             
             <div class="warning-section" id="warning-section" style="display: none;">

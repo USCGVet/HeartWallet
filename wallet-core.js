@@ -85,6 +85,17 @@ class WalletCore {
             
             this.secureMemory.set('currentWallet', newWallet);
             console.log("addWallet: New wallet object set to secureMemory ('currentWallet')."); // Added log
+            
+            // Store additional metadata in vault if available
+            if (typeof VaultUtils !== 'undefined') {
+                await VaultUtils.storeWalletMetadata(walletId, {
+                    name: defaultName,
+                    type: type,
+                    createdAt: new Date().toISOString(),
+                    lastBackup: null,
+                    notes: ''
+                });
+            }
 
             return { wallet: newWallet, walletEntry, seedPhrase: type === 'seed' ? data : newWallet.mnemonic?.phrase };
 

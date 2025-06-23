@@ -646,12 +646,18 @@ class HeartWalletApp {
             const autoLogoutMinutes = securitySettings?.securitySettings?.autoLogoutMinutes || 5;
             const sessionTimeout = autoLogoutMinutes * 60 * 1000;
             
+            // Get the encrypted wallet data for the active wallet
+            const activeWalletId = await this.walletCore.getActiveWalletId();
+            const walletData = await this.storage.get([activeWalletId]);
+            const encryptedWallet = walletData[activeWalletId];
+            
             // Notify background about login with proper timeout
             await chrome.runtime.sendMessage({
                 action: "loginWallet",
                 address: currentWallet.address,
                 sessionTimeout: sessionTimeout,
-                decryptedKey: currentWallet.privateKey
+                password: password,
+                encryptedWallet: encryptedWallet
             });
             
             unlockProgress.updateProgress(75, 'Loading wallet dashboard...');

@@ -49,6 +49,9 @@ class KeyringService {
      * @param {string} password - User's password
      */
     async initialize(password) {
+        // Temporarily store password for current session
+        this.password = password;
+        
         // Generate or retrieve salt
         const saltData = await this.getStorage('keyring-salt');
         let salt;
@@ -86,6 +89,9 @@ class KeyringService {
             default:
                 throw new Error('Unknown keyring type');
         }
+        
+        // Set parent reference
+        keyring.parent = this;
         
         // Initialize the keyring
         await keyring.initialize(opts);
@@ -193,6 +199,7 @@ class KeyringService {
                     continue;
             }
             
+            keyring.parent = this;
             await keyring.deserialize(data.data);
             this.keyrings.push(keyring);
         }
@@ -236,6 +243,78 @@ class KeyringService {
      */
     getAccounts() {
         return this.keyrings.flatMap(keyring => keyring.getAccounts());
+    }
+    
+    /**
+     * Adds an existing encrypted wallet to the keyring
+     * @param {string} encryptedJson - Encrypted wallet JSON
+     * @param {string} password - Password used to decrypt
+     * @returns {Promise<string>} Wallet address
+     */
+    async addEncryptedWallet(encryptedJson, password) {
+        // First check if we already have this wallet
+        const tempWallet = await ethers.Wallet.fromEncryptedJson(encryptedJson, password);
+        const address = tempWallet.address;
+        
+        // Clear temp wallet
+        if (tempWallet._signingKey) {
+            tempWallet._signingKey = null;
+        }
+        
+        // Check if already exists
+        const existingKeyring = this.getKeyringForAddress(address);
+        if (existingKeyring) {
+            console.log('Wallet already exists in keyring');
+            return address;
+        }
+        
+        // Create a new private key keyring for this wallet
+        const keyring = new PrivateKeyKeyring();
+        keyring.parent = this;
+        keyring.wallets.push({
+            address: address,
+            encryptedJson: encryptedJson
+        });
+        
+        // Add to our keyrings
+        this.keyrings.push(keyring);
+        
+        // Persist
+        await this.persistKeyrings();
+        
+        return address;
+    }
+    
+    /**
+     * Gets a wallet instance for signing (temporary use only)
+     * This is a temporary method until all signing is handled internally
+     * @param {string} address - Wallet address
+     * @returns {Promise<ethers.Wallet>} Wallet instance
+     */
+    async getWalletForSigning(address) {
+        const keyring = this.getKeyringForAddress(address);
+        if (!keyring) {
+            throw new Error('No keyring found for address');
+        }
+        
+        // For now, only support PrivateKeyKeyring
+        if (keyring instanceof PrivateKeyKeyring) {
+            const walletData = keyring.wallets.find(w => 
+                w.address.toLowerCase() === address.toLowerCase()
+            );
+            
+            if (!walletData) {
+                throw new Error('Wallet not found in keyring');
+            }
+            
+            // Temporarily decrypt the wallet using stored password
+            const wallet = await ethers.Wallet.fromEncryptedJson(walletData.encryptedJson, this.password || '');
+            
+            // Return the wallet - caller is responsible for clearing it
+            return wallet;
+        }
+        
+        throw new Error('Wallet type not supported for direct access');
     }
 }
 
@@ -336,11 +415,13 @@ class PrivateKeyKeyring extends BaseKeyring {
         // Decrypt wallet temporarily for signing
         let wallet = null;
         try {
-            // This is where we would need the password temporarily
-            // In practice, this would be passed in or retrieved securely
+            // Get password from parent keyring service
+            const keyringService = this.parent || global.keyringService;
+            const password = keyringService?.password || '';
+            
             wallet = await ethers.Wallet.fromEncryptedJson(
                 walletData.encryptedJson,
-                '' // Password would be provided here
+                password
             );
             
             const signedTx = await wallet.signTransaction(transaction);
@@ -366,9 +447,13 @@ class PrivateKeyKeyring extends BaseKeyring {
         
         let wallet = null;
         try {
+            // Get password from parent keyring service
+            const keyringService = this.parent || global.keyringService;
+            const password = keyringService?.password || '';
+            
             wallet = await ethers.Wallet.fromEncryptedJson(
                 walletData.encryptedJson,
-                '' // Password would be provided here
+                password
             );
             
             const signature = await wallet.signMessage(message);
@@ -464,7 +549,4 @@ class MnemonicKeyring extends BaseKeyring {
     }
 }
 
-// Export for use in extension
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { KeyringService, PrivateKeyKeyring, MnemonicKeyring };
-}
+// Classes are available globally in service worker context

@@ -62,12 +62,24 @@ class TransactionConfirmation {
 
             this.txParams = response.request.params;
             this.networkConfig = response.networkConfig;
+            this.validation = response.request.validation;
+            this.simulation = response.request.simulation;
             
             // Display origin
             document.getElementById('site-origin').textContent = this.origin;
             
             // Display transaction details
             await this.displayTransactionDetails();
+            
+            // Display validation results
+            if (this.validation) {
+                this.displayValidationResults();
+            }
+            
+            // Display simulation results
+            if (this.simulation) {
+                this.displaySimulationResults();
+            }
             
             // Load gas prices
             await this.loadGasPrices();
@@ -76,8 +88,9 @@ class TransactionConfirmation {
             document.getElementById('loading-section').style.display = 'none';
             document.getElementById('transaction-content').style.display = 'block';
             
-            // Enable confirm button
-            document.getElementById('confirm-btn').disabled = false;
+            // Enable confirm button only if validation passed or user overrides
+            const shouldEnableConfirm = !this.validation || this.validation.valid || this.validation.riskScore < 80;
+            document.getElementById('confirm-btn').disabled = !shouldEnableConfirm;
             
         } catch (error) {
             console.error('Error loading transaction:', error);
@@ -376,6 +389,129 @@ class TransactionConfirmation {
         }
     }
 
+    displayValidationResults() {
+        const section = document.getElementById('validation-section');
+        const header = document.getElementById('validation-header');
+        const status = document.getElementById('validation-status');
+        const indicator = document.getElementById('risk-indicator');
+        const issues = document.getElementById('validation-issues');
+        
+        section.style.display = 'block';
+        
+        // Set header based on validation status
+        if (!this.validation.valid) {
+            header.className = 'validation-header validation-danger';
+            status.textContent = 'Transaction Failed Validation';
+            indicator.className = 'risk-indicator risk-critical';
+        } else if (this.validation.riskScore >= 60) {
+            header.className = 'validation-header validation-warning';
+            status.textContent = 'High Risk Transaction';
+            indicator.className = 'risk-indicator risk-high';
+        } else if (this.validation.riskScore >= 20) {
+            header.className = 'validation-header validation-warning';
+            status.textContent = 'Medium Risk Transaction';
+            indicator.className = 'risk-indicator risk-medium';
+        } else {
+            header.className = 'validation-header validation-safe';
+            status.textContent = 'Transaction Appears Safe';
+            indicator.className = 'risk-indicator risk-minimal';
+        }
+        
+        // Clear previous issues
+        issues.innerHTML = '';
+        
+        // Display errors
+        for (const error of this.validation.errors || []) {
+            const issue = document.createElement('div');
+            issue.className = 'validation-issue';
+            issue.innerHTML = `
+                <span class="issue-icon" style="color: #f44336;">
+                    <i class="fas fa-times-circle"></i>
+                </span>
+                <span>${SecurityUtils.escapeHtml(error)}</span>
+            `;
+            issues.appendChild(issue);
+        }
+        
+        // Display high/critical risks
+        for (const risk of this.validation.risks || []) {
+            if (risk.severity === 'HIGH' || risk.severity === 'CRITICAL') {
+                const issue = document.createElement('div');
+                issue.className = 'validation-issue';
+                issue.innerHTML = `
+                    <span class="issue-icon" style="color: ${risk.severity === 'CRITICAL' ? '#f44336' : '#ff9800'};">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </span>
+                    <span>${SecurityUtils.escapeHtml(risk.message)}</span>
+                `;
+                issues.appendChild(issue);
+            }
+        }
+        
+        // Display warnings
+        for (const warning of this.validation.warnings || []) {
+            const issue = document.createElement('div');
+            issue.className = 'validation-issue';
+            issue.innerHTML = `
+                <span class="issue-icon" style="color: #ff9800;">
+                    <i class="fas fa-info-circle"></i>
+                </span>
+                <span>${SecurityUtils.escapeHtml(warning)}</span>
+            `;
+            issues.appendChild(issue);
+        }
+        
+        // Special handling for token approvals
+        if (this.validation.summary?.type === 'Token Approval') {
+            const approvalWarning = document.createElement('div');
+            approvalWarning.style.cssText = `
+                background: #fff3e0;
+                border: 1px solid #ff9800;
+                padding: 12px;
+                border-radius: 6px;
+                margin-top: 10px;
+                font-size: 0.9rem;
+            `;
+            approvalWarning.innerHTML = `
+                <strong>Token Approval Request:</strong><br>
+                This transaction will allow another address to spend your tokens. 
+                Only approve if you trust the spender and understand the risks.
+            `;
+            issues.appendChild(approvalWarning);
+        }
+    }
+    
+    displaySimulationResults() {
+        const section = document.getElementById('simulation-section');
+        const result = document.getElementById('simulation-result');
+        
+        if (!this.simulation) return;
+        
+        section.style.display = 'block';
+        
+        if (this.simulation.success) {
+            result.innerHTML = `
+                <div style="color: #2e7d32;">
+                    <i class="fas fa-check-circle"></i>
+                    Transaction simulation successful
+                </div>
+                <div style="margin-top: 8px; font-size: 0.85rem; color: #666;">
+                    Estimated gas: ${this.simulation.gasEstimate ? parseInt(this.simulation.gasEstimate).toLocaleString() : 'Unknown'}
+                </div>
+            `;
+        } else {
+            result.innerHTML = `
+                <div style="color: #d32f2f;">
+                    <i class="fas fa-times-circle"></i>
+                    Transaction would fail: ${SecurityUtils.escapeHtml(this.simulation.error || 'Unknown error')}
+                </div>
+            `;
+            
+            // Disable confirm button if simulation failed
+            document.getElementById('confirm-btn').disabled = true;
+        }
+    }
+    
     async confirmTransaction() {
         try {
             // Disable buttons

@@ -12,7 +12,7 @@ try {
 
 // Import security utilities and keyring service
 try {
-  importScripts('crypto-utils.js', 'keyring-service.js');
+  importScripts('crypto-utils.js', 'keyring-service.js', 'session-manager.js', 'transaction-validator.js', 'vault-storage.js');
   console.log('Security utilities loaded in background script');
 } catch (error) {
   console.error('Failed to load security utilities in background script:', error);
@@ -44,25 +44,35 @@ let provider = null;
 // Default network if none is stored
 const DEFAULT_CHAIN_ID = 943; // Default to Testnet V4 for now
 
-// Session state management
-let walletSessionActive = false;
+// Session state management - NOW PER-ORIGIN
+let globalWalletUnlocked = false; // Global wallet unlock state
 let walletData = null; // Holds address, lastLogin etc.
 // REMOVED: ephemeralDecryptedKey - Private keys now handled by KeyringService
 let currentChainId = DEFAULT_CHAIN_ID; // Track the active network
-let sessionTimeout = null;
-let sessionStartTime = null;
-let sessionDuration = 5 * 60 * 1000; // 5 minutes default
 
-// Initialize KeyringService
+// Permission types will be imported from session-manager.js
+// PERMISSIONS global variable is defined in session-manager.js
+
+// Initialize services
 let keyringService = null;
-
-// Secure memory for temporary sensitive operations
+let sessionManager = null;
 let secureMemory = null;
-try {
-  secureMemory = new SecureMemory();
-} catch (error) {
-  console.error('Failed to initialize secure memory:', error);
-}
+let transactionValidator = null;
+let vaultStorage = null;
+
+// Delay initialization to ensure all scripts are loaded
+setTimeout(() => {
+  try {
+    secureMemory = new SecureMemory();
+    sessionManager = new SessionManager();
+    transactionValidator = new TransactionValidator();
+    vaultStorage = new VaultStorage();
+    console.log('Services initialized: session manager, transaction validator, vault storage');
+    console.log('PERMISSIONS available:', typeof PERMISSIONS !== 'undefined');
+  } catch (error) {
+    console.error('Failed to initialize services:', error);
+  }
+}, 100);
 
 // Initialize provider for current network
 function initializeProvider() {
@@ -213,7 +223,11 @@ if (typeof chrome.runtime.onStartup !== 'undefined') {
 // Helper to clear session state completely
 function clearSessionState() {
     // Removed log mentioning key clearing
-    walletSessionActive = false;
+    globalWalletUnlocked = false;
+    // Clear all origin sessions when wallet locks
+    if (sessionManager) {
+      sessionManager.clearAll();
+    }
     walletData = null;
     // Clear keyring service
     if (keyringService) {
@@ -235,7 +249,7 @@ function clearSessionState() {
 // Helper to clear session after timeout
 function startSessionTimeout() {
   clearTimeout(sessionTimeoutId); // Clear existing timer if any
-  if (walletSessionActive) { // Only start timer if session is active
+  if (globalWalletUnlocked) { // Only start timer if session is active
       console.log(`Starting session timeout for ${sessionTimeoutDuration / 60000} minutes.`);
       sessionTimeoutId = setTimeout(() => {
         console.log("Session timeout reached - logging out wallet internally.");
@@ -248,7 +262,7 @@ function startSessionTimeout() {
 
 // Reset timeout on activity (e.g., message from popup)
 function resetSessionTimeout() {
-  if (walletSessionActive) {
+  if (globalWalletUnlocked) {
     // console.log("Resetting session timeout."); // Can be noisy, enable if needed
     startSessionTimeout(); // Restart the timer with the current duration
   }
@@ -257,7 +271,7 @@ function resetSessionTimeout() {
 // Save session metadata AND current chainId
 function saveState() {
   const stateToSave = {};
-  if (walletSessionActive && walletData) {
+  if (globalWalletUnlocked && walletData) {
     stateToSave.sessionData = {
       active: true,
       data: walletData,
@@ -312,7 +326,7 @@ function restoreState() {
     if (result.sessionData && result.sessionData.active && result.sessionData.data) {
       console.log("Restoring session metadata (address, etc.) from storage.");
       walletData = result.sessionData.data;
-      // DO NOT set walletSessionActive = true here.
+      // DO NOT set globalWalletUnlocked = true here.
     } else {
         console.log("No valid session metadata found in storage to restore.");
         walletData = null;
@@ -323,12 +337,21 @@ function restoreState() {
 // Helper function for internal logout
 function logoutWalletInternal() {
   // Removed log mentioning key clearing
-  walletSessionActive = false;
+  globalWalletUnlocked = false;
+  // Clear all origin sessions when wallet locks
+  if (sessionManager) {
+    sessionManager.clearAll();
+  }
   // Keep walletData (like address) or clear it? Let's keep it for now.
   // walletData = null;
   // Clear keyring service memory
   if (keyringService) {
       keyringService.clearMemory();
+  }
+  
+  // Lock vault storage
+  if (vaultStorage) {
+      vaultStorage.lock();
   }
   
   // Clear any temporary data in secure memory
@@ -502,9 +525,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const isFromContentScript = message.target === 'background' && message.requestFor === 'heartwallet';
     const isFromPopup = message.action !== undefined; // Assuming popup uses 'action' property
 
-    // Reset timeout on any relevant activity *if* the session is active
-    if (walletSessionActive && (isFromPopup || isFromContentScript)) {
-        resetSessionTimeout();
+    // For content script messages, check per-origin session
+    if (isFromContentScript && sender.origin) {
+        const originSession = sessionManager.getSession(sender.origin);
+        if (originSession && originSession.isActive) {
+            // Extend session on activity
+            sessionManager.extendSession(sender.origin, 60000); // Extend by 1 minute
+        }
     }
 
     // --- Handle Messages from Content Script (dApp requests) ---
@@ -524,27 +551,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'eth_accounts':
             console.log(`Background: Processing ${method}...`);
             
-            if (walletSessionActive && walletData && walletData.address) {
-                // Session is active - handle normally
+            // Check if wallet is globally unlocked first
+            if (globalWalletUnlocked && walletData && walletData.address) {
+                // Check per-origin session
+                const hasOriginSession = sessionManager.hasActiveSession(origin);
+                
                 if (method === 'eth_requestAccounts') {
-                    // For requestAccounts, always return address if session is active
-                    // Removed log that exposed wallet address
-                    // Update last accessed time if site is already connected
-                    const isConnected = await isSiteConnected(origin, walletData.address);
-                    if (isConnected) {
-                        updateSiteLastAccessed(origin);
+                    if (!hasOriginSession) {
+                        // Need to create session and get permission for this origin
+                        const connectionApproved = await requestConnectionApproval(origin);
+                        if (!connectionApproved) {
+                            sendResponse({ id, error: { code: 4001, message: 'User rejected the request' } });
+                            return;
+                        }
+                        
+                        // Create session for this origin
+                        sessionManager.createSession(origin, { duration: 30 * 60 * 1000 }); // 30 min session
+                        sessionManager.addPermission(origin, PERMISSIONS.ACCOUNTS);
+                        
+                        // Store connection
+                        await storeConnectedSite(origin, walletData.address);
                     }
+                    
                     sendResponse({ id, result: [walletData.address] });
                 } else {
-                    // For eth_accounts, only return accounts if site is connected
-                    const isConnected = await isSiteConnected(origin, walletData.address);
-                    if (isConnected) {
-                        // Removed log that exposed wallet address and connected site
-                        updateSiteLastAccessed(origin);
-                        sendResponse({ id, result: [walletData.address] });
-                    } else {
-                        console.log(`Background: Site ${origin} is not connected, returning empty array`);
-                        sendResponse({ id, result: [] });
+                    // For eth_accounts, check if origin has permission
+                    if (hasOriginSession && sessionManager.hasPermission(origin, PERMISSIONS.ACCOUNTS)) {
+                        const isConnected = await isSiteConnected(origin, walletData.address);
+                        if (isConnected) {
+                            updateSiteLastAccessed(origin);
+                            sendResponse({ id, result: [walletData.address] });
+                        } else {
+                            console.log(`Background: Site ${origin} is not connected, returning empty array`);
+                            sendResponse({ id, result: [] });
+                        }
                     }
                 }
             } else {
@@ -901,7 +941,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log(`Background: Processing ${method}...`, params);
             
             // Check if wallet is unlocked
-            if (!walletSessionActive || !ephemeralDecryptedKey) {
+            if (!globalWalletUnlocked) {
                 sendResponse({ 
                     id, 
                     error: { code: 4100, message: 'Wallet is locked. Please unlock your wallet first.' }
@@ -920,13 +960,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             
             const txParams = params[0];
             
-            // Create transaction confirmation request
+            // Add from address if not specified
+            if (!txParams.from) {
+                txParams.from = walletData.address;
+            }
+            
+            // Validate transaction
+            let validationResult = null;
+            let simulationResult = null;
+            
+            try {
+                // Get wallet balance for validation context
+                const balance = await provider.getBalance(walletData.address);
+                const context = {
+                    balance: balance.toString(),
+                    chainId: currentChainId
+                };
+                
+                // Validate transaction parameters
+                validationResult = await transactionValidator.validateTransaction(txParams, context);
+                
+                // Simulate transaction if validation passed
+                if (validationResult.valid && provider) {
+                    simulationResult = await transactionValidator.simulateTransaction(txParams, provider);
+                }
+            } catch (error) {
+                console.error('Transaction validation error:', error);
+                // Continue even if validation fails - let user decide
+            }
+            
+            // Create transaction confirmation request with validation results
             const confirmationRequest = {
                 id: id,
                 method: method,
                 params: txParams,
                 origin: origin,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                validation: validationResult,
+                simulation: simulationResult
             };
             
             // Show transaction confirmation popup
@@ -937,10 +1008,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log(`Background: Processing ${method}...`);
             
             // Check if wallet is unlocked
-            if (!walletSessionActive || !ephemeralDecryptedKey) {
+            if (!globalWalletUnlocked) {
                 sendResponse({ 
                     id, 
                     error: { code: 4100, message: 'Wallet is locked. Please unlock your wallet first.' }
+                });
+                return true;
+            }
+            
+            // Check per-origin session and permission
+            if (!sessionManager.hasActiveSession(origin)) {
+                sendResponse({ 
+                    id, 
+                    error: { code: 4100, message: 'No active session. Please connect first.' }
                 });
                 return true;
             }
@@ -966,6 +1046,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 return true;
             }
             
+            // Check if origin has permission to sign messages
+            if (!sessionManager.hasPermission(origin, PERMISSIONS.SIGN_MESSAGE)) {
+                // Add note that permission will be requested in popup
+                console.log(`Origin ${origin} doesn't have message signing permission yet`);
+            }
+            
             // Create message signing request
             const signingRequest = {
                 id: id,
@@ -973,10 +1059,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 message: messageToSign,
                 address: signingAddress,
                 origin: origin,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                needsPermission: !sessionManager.hasPermission(origin, PERMISSIONS.SIGN_MESSAGE)
             };
             
-            // Show message signing popup
+            // Show message signing popup (will handle permission request)
             showMessageSigningPopup(signingRequest, sendResponse);
             return true;
             
@@ -986,10 +1073,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log(`Background: Processing ${method}...`);
             
             // Check if wallet is unlocked
-            if (!walletSessionActive || !ephemeralDecryptedKey) {
+            if (!globalWalletUnlocked) {
                 sendResponse({ 
                     id, 
                     error: { code: 4100, message: 'Wallet is locked. Please unlock your wallet first.' }
+                });
+                return true;
+            }
+            
+            // Check per-origin session
+            if (!sessionManager.hasActiveSession(origin)) {
+                sendResponse({ 
+                    id, 
+                    error: { code: 4100, message: 'No active session. Please connect first.' }
                 });
                 return true;
             }
@@ -1042,7 +1138,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.warn(`Background: Unhandled RPC method received from dApp: ${method}`);
             
             // If provider exists, try to forward the request to the provider
-            if (provider && walletSessionActive) {
+            if (provider && globalWalletUnlocked) {
                 (async () => {
                     try {
                         // Use the provider's send method to forward the request
@@ -1122,13 +1218,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "checkWalletStatus": // This might be less useful now, superseded by getSessionInfo
           sendResponse({
             status: "success",
-            isLoggedIn: walletSessionActive
+            isLoggedIn: globalWalletUnlocked
           });
           break;
 
         case "loginWallet":
           console.log("Processing loginWallet message...");
-          walletSessionActive = true;
+          globalWalletUnlocked = true; // Wallet is unlocked globally
           walletData = {
             address: message.address,
             lastLogin: new Date().toISOString()
@@ -1138,6 +1234,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               keyringService = new KeyringService();
           }
           await keyringService.initialize(message.password);
+          
+          // Add the current wallet to keyring if we have encryptedWallet
+          if (message.encryptedWallet) {
+              await keyringService.addEncryptedWallet(message.encryptedWallet, message.password);
+          }
+          
+          // Initialize vault storage with same password
+          if (!vaultStorage) {
+              vaultStorage = new VaultStorage();
+          }
+          const vaultInitialized = await vaultStorage.initialize(message.password);
+          if (!vaultInitialized) {
+              console.warn('Failed to initialize vault storage');
+          }
 
           let responseSent = false; // Flag to track if response has been sent
 
@@ -1181,10 +1291,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
 
-          if (ephemeralDecryptedKey) {
-              // Removed log about decrypted key storage
-          } else {
-              console.warn("Login successful, but no ephemeral key was provided or stored.");
+          // Key management now handled by keyring service
+          if (keyringService) {
+              console.log("Keyring service initialized successfully");
           }
 
           // Return true ONLY if the response is asynchronous (i.e., we went into the else block with the storage call)
@@ -1197,13 +1306,163 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             status: "success",
             message: "Wallet logged out in background."
           });
-          break;        case "getSessionInfo":
+          break;
+          
+        case "getSessionInfo":
           console.log("Processing getSessionInfo message...");
           // Return current state - crucial for popup initialization
           sendResponse({
-            isLoggedIn: walletSessionActive, // Reflects if background *thinks* it's logged in
+            isLoggedIn: globalWalletUnlocked, // Reflects if background *thinks* it's logged in
             walletData: walletData // Contains address etc. if available
           });
+          break;
+          
+        case "getOriginSessions":
+          console.log("Processing getOriginSessions message...");
+          // Return all active per-origin sessions
+          const activeSessions = sessionManager.getActiveSessions();
+          sendResponse({
+            status: "success",
+            sessions: activeSessions,
+            globalUnlocked: globalWalletUnlocked
+          });
+          break;
+          
+        case "revokeOriginPermission":
+          console.log("Processing revokeOriginPermission message...");
+          if (message.origin && message.permission) {
+            sessionManager.revokePermission(message.origin, message.permission);
+            sendResponse({
+              status: "success",
+              message: `Permission ${message.permission} revoked for ${message.origin}`
+            });
+          } else {
+            sendResponse({
+              status: "error",
+              message: "Origin and permission required"
+            });
+          }
+          break;
+          
+        case "endOriginSession":
+          console.log("Processing endOriginSession message...");
+          if (message.origin) {
+            sessionManager.endSession(message.origin);
+            // Also remove from connected sites
+            await removeConnectedSite(message.origin);
+            sendResponse({
+              status: "success",
+              message: `Session ended for ${message.origin}`
+            });
+          } else {
+            sendResponse({
+              status: "error",
+              message: "Origin required"
+            });
+          }
+          break;
+          
+        case "vaultStore":
+          console.log("Processing vaultStore message...");
+          if (!vaultStorage || !vaultStorage.isUnlocked) {
+            sendResponse({
+              status: "error",
+              message: "Vault is locked"
+            });
+            break;
+          }
+          
+          try {
+            const success = await vaultStorage.store(
+              message.category,
+              message.key,
+              message.data
+            );
+            sendResponse({
+              status: success ? "success" : "error",
+              message: success ? "Data stored in vault" : "Failed to store data"
+            });
+          } catch (error) {
+            sendResponse({
+              status: "error",
+              message: error.message
+            });
+          }
+          break;
+          
+        case "vaultRetrieve":
+          console.log("Processing vaultRetrieve message...");
+          if (!vaultStorage || !vaultStorage.isUnlocked) {
+            sendResponse({
+              status: "error",
+              message: "Vault is locked"
+            });
+            break;
+          }
+          
+          try {
+            const data = await vaultStorage.retrieve(
+              message.category,
+              message.key
+            );
+            sendResponse({
+              status: "success",
+              data: data
+            });
+          } catch (error) {
+            sendResponse({
+              status: "error",
+              message: error.message
+            });
+          }
+          break;
+          
+        case "vaultList":
+          console.log("Processing vaultList message...");
+          if (!vaultStorage || !vaultStorage.isUnlocked) {
+            sendResponse({
+              status: "error",
+              message: "Vault is locked"
+            });
+            break;
+          }
+          
+          try {
+            const keys = await vaultStorage.listKeys(message.category);
+            sendResponse({
+              status: "success",
+              keys: keys
+            });
+          } catch (error) {
+            sendResponse({
+              status: "error",
+              message: error.message
+            });
+          }
+          break;
+          
+        case "vaultExport":
+          console.log("Processing vaultExport message...");
+          if (!vaultStorage || !vaultStorage.isUnlocked) {
+            sendResponse({
+              status: "error",
+              message: "Vault is locked"
+            });
+            break;
+          }
+          
+          try {
+            const exportData = await vaultStorage.export();
+            sendResponse({
+              status: "success",
+              export: exportData
+            });
+          } catch (error) {
+            sendResponse({
+              status: "error",
+              message: error.message
+            });
+          }
           break;        case "unlockWallet":
           console.log("Processing unlockWallet message...");
           try {
@@ -1242,7 +1501,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const wallet = await ethers.Wallet.fromEncryptedJson(encryptedWallet, message.password);
             
             // Set up session
-            walletSessionActive = true;
+            globalWalletUnlocked = true;
             walletData = {
               address: wallet.address,
               lastLogin: new Date().toISOString()
@@ -1252,6 +1511,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 keyringService = new KeyringService();
             }
             await keyringService.initialize(message.password);
+            
+            // Add the wallet to keyring
+            await keyringService.addEncryptedWallet(encryptedWallet, message.password);
+            
+            // Initialize vault storage
+            if (!vaultStorage) {
+                vaultStorage = new VaultStorage();
+            }
+            const vaultUnlocked = await vaultStorage.initialize(message.password);
+            if (!vaultUnlocked) {
+                console.warn('Failed to unlock vault storage');
+            }
             
             // Clear the wallet object immediately
             if (wallet._signingKey) {
@@ -1287,7 +1558,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log("Processing checkSession message...");
           // Handle async balance fetch
           (async () => {
-            if (walletSessionActive && walletData && walletData.address) {
+            if (globalWalletUnlocked && walletData && walletData.address) {
               // Removed log that exposed wallet address
               // Get current balance if possible
               let balance = '0';
@@ -1321,7 +1592,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "getDecryptedKey":
           console.log("Processing getDecryptedKey message...");
           // Session must be active but we don't return keys anymore
-          if (walletSessionActive) {
+          if (globalWalletUnlocked) {
               // Return success without exposing any keys
               sendResponse({ success: true, message: "Session active" });
           } else {
@@ -1336,7 +1607,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sessionTimeoutDuration = message.sessionTimeout;
                 console.log(`Session timeout duration updated to ${sessionTimeoutDuration / 60000} minutes.`);
                 // If a session is currently active, reset the timer with the new duration
-                if (walletSessionActive) {
+                if (globalWalletUnlocked) {
                     console.log("Active session found, resetting timer with new duration.");
                     startSessionTimeout();
                 }
@@ -1420,7 +1691,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               }
               
               // For reconnections, auto-approve if wallet is unlocked
-              const shouldApprove = approved || (request.isReconnection && walletSessionActive && walletData && walletData.address);
+              const shouldApprove = approved || (request.isReconnection && globalWalletUnlocked && walletData && walletData.address);
               
               if (shouldApprove && walletData && walletData.address) {
                 // Approved or auto-approved reconnection - store/update the connected site and return the address
@@ -1516,12 +1787,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Send the transaction
             (async () => {
               try {
-                if (!walletSessionActive || !ephemeralDecryptedKey) {
+                if (!globalWalletUnlocked) {
                   throw new Error('Wallet not unlocked');
                 }
                 
-                const wallet = new ethers.Wallet(ephemeralDecryptedKey, provider);
-                const tx = await wallet.sendTransaction(message.transaction);
+                // Grant permission for this origin if first time
+                if (!sessionManager.hasPermission(confirmTxRequest.origin, PERMISSIONS.SEND_TRANSACTION)) {
+                  sessionManager.addPermission(confirmTxRequest.origin, PERMISSIONS.SEND_TRANSACTION);
+                }
+                
+                // Use keyring service to sign and send
+                if (!keyringService) {
+                  throw new Error('Keyring service not initialized');
+                }
+                
+                // First sign the transaction
+                const signedTx = await keyringService.signTransaction(
+                  message.transaction.from,
+                  message.transaction
+                );
+                
+                // Then send it via provider
+                const tx = await provider.sendTransaction(signedTx);
                 
                 // Send success response to dApp
                 confirmTxRequest.sendResponse({
@@ -1577,12 +1864,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (confirmSignRequest && confirmSignRequest.sendResponse) {
             (async () => {
               try {
-                if (!walletSessionActive || !ephemeralDecryptedKey) {
+                if (!globalWalletUnlocked) {
                   throw new Error('Wallet not unlocked');
                 }
                 
-                const wallet = new ethers.Wallet(ephemeralDecryptedKey);
-                const signature = await wallet.signMessage(confirmSignRequest.message);
+                // Grant permission for this origin if needed
+                if (confirmSignRequest.needsPermission) {
+                  sessionManager.addPermission(confirmSignRequest.origin, PERMISSIONS.SIGN_MESSAGE);
+                }
+                
+                // Use keyring service to sign
+                if (!keyringService) {
+                  throw new Error('Keyring service not initialized');
+                }
+                
+                const signature = await keyringService.signMessage(
+                  confirmSignRequest.address,
+                  confirmSignRequest.message
+                );
                 
                 confirmSignRequest.sendResponse({
                   id: confirmSignRequest.id,
@@ -1635,19 +1934,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (confirmTypedRequest && confirmTypedRequest.sendResponse) {
             (async () => {
               try {
-                if (!walletSessionActive || !ephemeralDecryptedKey) {
+                if (!globalWalletUnlocked) {
                   throw new Error('Wallet not unlocked');
                 }
                 
-                const wallet = new ethers.Wallet(ephemeralDecryptedKey);
+                // Use keyring service to sign typed data
+                if (!keyringService) {
+                  throw new Error('Keyring service not initialized');
+                }
+                
                 const typedData = typeof confirmTypedRequest.typedData === 'string' ?
                   JSON.parse(confirmTypedRequest.typedData) : confirmTypedRequest.typedData;
                 
+                // For now, we need to get the wallet from keyring to sign typed data
+                // This is a temporary solution until keyring service supports typed data signing
+                const wallet = await keyringService.getWalletForSigning(confirmTypedRequest.address);
                 const signature = await wallet.signTypedData(
                   typedData.domain,
                   typedData.types,
                   typedData.message
                 );
+                // Clear wallet after use
+                if (wallet._signingKey) {
+                  wallet._signingKey = null;
+                }
                 
                 confirmTypedRequest.sendResponse({
                   id: confirmTypedRequest.id,
@@ -1839,13 +2149,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "CONTRACT_WRITE":
           console.log("Executing write function:", message.functionName);
           try {
-            if (!walletSessionActive || !ephemeralDecryptedKey) {
+            if (!globalWalletUnlocked) {
               throw new Error('Wallet not unlocked');
             }
             
             const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
-            const wallet = new ethers.Wallet(ephemeralDecryptedKey, provider);
-            const contract = new ethers.Contract(message.contractAddress, message.abi || [], wallet);
+            
+            // Use keyring service for contract interactions
+            if (!keyringService) {
+              throw new Error('Keyring service not initialized');
+            }
+            
+            // Get the wallet temporarily for contract interaction
+            const wallet = await keyringService.getWalletForSigning(walletData.address);
+            const connectedWallet = wallet.connect(provider);
+            const contract = new ethers.Contract(message.contractAddress, message.abi || [], connectedWallet);
+            
+            // Note: wallet will be cleared after the transaction
             
             const txOptions = {};
             if (message.value && message.value !== '0') {
@@ -2285,7 +2605,7 @@ setTimeout(() => {
 function startSessionTimeout() {
     clearTimeout(sessionTimeoutId);
     
-    if (walletSessionActive && sessionTimeoutDuration > 0) {
+    if (globalWalletUnlocked && sessionTimeoutDuration > 0) {
         console.log(`Starting session timeout for ${sessionTimeoutDuration / 60000} minutes.`);
         sessionTimeoutId = setTimeout(() => {
             console.log("Session timeout reached - logging out wallet internally.");
@@ -2316,7 +2636,7 @@ function notifyAllTabsNetworkChanged(newChainId) {
 
 // Reset the timer on any wallet activity
 function resetSessionTimeout() {
-    if (walletSessionActive && sessionTimeoutDuration > 0) {
+    if (globalWalletUnlocked && sessionTimeoutDuration > 0) {
         console.log("Resetting session timeout");
         startSessionTimeout();
     }
