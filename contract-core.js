@@ -84,23 +84,30 @@ class ContractManager {
                 throw new Error('Contract not found');
             }
 
-            const provider = this.networkCore.getProvider();
-            const connectedWallet = wallet.connect(provider);
-            const contract = new ethers.Contract(contractAddress, contractInfo.abi, connectedWallet);
-
-            // Prepare transaction options
-            const txOptions = {};
-            if (value !== '0') {
-                txOptions.value = ethers.parseEther(value);
-            }
-
-            // Call the function
-            const tx = await contract[functionName](...params, txOptions);
-            
-            return {
-                hash: tx.hash,
-                transaction: tx
-            };
+            // Send write function call through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'CONTRACT_WRITE',
+                    contractAddress: contractAddress,
+                    abi: contractInfo.abi,
+                    functionName: functionName,
+                    params: params,
+                    value: value
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve({
+                            hash: response.hash,
+                            transaction: { hash: response.hash }
+                        });
+                    } else {
+                        reject(new Error(response?.error || 'Failed to call contract function'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error calling write function:', error);
             throw error;
@@ -120,17 +127,21 @@ class ContractManager {
             }
 
             const provider = this.networkCore.getProvider();
-            const connectedWallet = wallet.connect(provider);
-            const contract = new ethers.Contract(contractAddress, contractInfo.abi, connectedWallet);
+            
+            // Create contract interface for encoding
+            const contractInterface = new ethers.Interface(contractInfo.abi);
+            const data = contractInterface.encodeFunctionData(functionName, params);
+            
+            // Prepare transaction for gas estimation
+            const transaction = {
+                to: contractAddress,
+                from: wallet.address,
+                data: data,
+                value: value !== '0' ? ethers.parseEther(value) : '0x0'
+            };
 
-            // Prepare transaction options
-            const txOptions = {};
-            if (value !== '0') {
-                txOptions.value = ethers.parseEther(value);
-            }
-
-            // Estimate gas
-            const gasEstimate = await contract[functionName].estimateGas(...params, txOptions);
+            // Estimate gas using provider directly (no private key needed)
+            const gasEstimate = await provider.estimateGas(transaction);
             
             return gasEstimate.toString();
         } catch (error) {

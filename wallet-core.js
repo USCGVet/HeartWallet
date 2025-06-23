@@ -83,8 +83,13 @@ class WalletCore {
             await this._setActiveWalletId(walletId);
             console.log("addWallet: Set new wallet as active:", walletId); // Added log
             
-            this.secureMemory.set('currentWallet', newWallet);
-            console.log("addWallet: New wallet object set to secureMemory ('currentWallet')."); // Added log
+            // Create a session wallet without private key
+            const sessionWallet = {
+                address: newWallet.address,
+                getAddress: () => newWallet.address
+            };
+            this.secureMemory.set('currentWallet', sessionWallet);
+            console.log("addWallet: Session wallet object set to secureMemory ('currentWallet')."); // Added log
             
             // Store additional metadata in vault if available
             if (typeof VaultUtils !== 'undefined') {
@@ -97,7 +102,13 @@ class WalletCore {
                 });
             }
 
-            return { wallet: newWallet, walletEntry, seedPhrase: type === 'seed' ? data : newWallet.mnemonic?.phrase };
+            // Clear private key from newWallet before returning
+            const seedPhrase = type === 'seed' ? data : newWallet.mnemonic?.phrase;
+            if (newWallet._signingKey) {
+                newWallet._signingKey = null;
+            }
+
+            return { wallet: sessionWallet, walletEntry, seedPhrase: seedPhrase };
 
         } catch (error) {
             console.error(`addWallet: Error adding wallet from ${type}:`, error); // Modified log
@@ -157,10 +168,21 @@ class WalletCore {
                     if (!encryptedWallet) throw new Error('Encrypted data for the first wallet not found.');
                     
                     const wallet = await ethers.Wallet.fromEncryptedJson(encryptedWallet, password);
-                    this.secureMemory.set('currentWallet', wallet);
+                    // Create a session wallet without private key
+                    const sessionWallet = {
+                        address: wallet.address,
+                        getAddress: () => wallet.address
+                    };
+                    this.secureMemory.set('currentWallet', sessionWallet);
                     await this._setActiveWalletId(firstWalletId); // Set it as active
                     this.secureMemory.set('activeWalletAddress', wallet.address);
-                    return wallet;
+                    
+                    // Clear the original wallet with private key
+                    if (wallet._signingKey) {
+                        wallet._signingKey = null;
+                    }
+                    
+                    return sessionWallet;
                 }
                 throw new Error('No active wallet set and no wallets found to unlock.');
             }
@@ -175,10 +197,21 @@ class WalletCore {
             }
             
             const wallet = await ethers.Wallet.fromEncryptedJson(encryptedWallet, password);
-            this.secureMemory.set('currentWallet', wallet);
+            // Create a session wallet without private key
+            const sessionWallet = {
+                address: wallet.address,
+                getAddress: () => wallet.address
+            };
+            this.secureMemory.set('currentWallet', sessionWallet);
             // Ensure activeWalletAddress is also set in secureMemory
             this.secureMemory.set('activeWalletAddress', wallet.address);
-            return wallet;
+            
+            // Clear the original wallet with private key
+            if (wallet._signingKey) {
+                wallet._signingKey = null;
+            }
+            
+            return sessionWallet;
         } catch (error) {
             console.error('Error unlocking wallet:', error);
             this.secureMemory.delete('currentWallet'); // Clear any partially set wallet
@@ -262,16 +295,24 @@ class WalletCore {
     // Export private key for a specific wallet
     async exportPrivateKey(walletId, password) {
         try {
-            const result = await this.storage.get([walletId]);
-            const encryptedWallet = result[walletId];
-            
-            if (!encryptedWallet) {
-                throw new Error('Wallet data not found');
-            }
-            
-            const wallet = await ethers.Wallet.fromEncryptedJson(encryptedWallet, password);
-            return wallet.privateKey;
-            
+            // Export private key through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'exportPrivateKey',
+                    walletId: walletId,
+                    password: password
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve(response.privateKey);
+                    } else {
+                        reject(new Error(response?.error || 'Failed to export private key'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error exporting private key:', error);
             throw error;

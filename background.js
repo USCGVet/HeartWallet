@@ -533,6 +533,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sessionManager.extendSession(sender.origin, 60000); // Extend by 1 minute
         }
     }
+    
+    // For popup messages, reset the global wallet session timeout
+    if (isFromPopup && globalWalletUnlocked) {
+        resetSessionTimeout();
+    }
 
     // --- Handle Messages from Content Script (dApp requests) ---
     if (isFromContentScript) {
@@ -2232,6 +2237,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             } catch (error) {
               console.error('Error calling write function:', error);
               sendResponse({ success: false, error: error.message });
+            }
+          })();
+          return true; // Async response
+          
+        case "exportPrivateKey":
+          console.log("Processing exportPrivateKey request...");
+          (async () => {
+            try {
+              if (!globalWalletUnlocked) {
+                throw new Error('Wallet not unlocked');
+              }
+              
+              // Verify password
+              if (!message.password) {
+                throw new Error('Password required for private key export');
+              }
+              
+              // Get the active wallet ID
+              const activeWalletId = await new Promise(resolve => {
+                chrome.storage.local.get(['activeWalletId'], result => {
+                  resolve(result.activeWalletId);
+                });
+              });
+              
+              if (!activeWalletId) {
+                throw new Error('No active wallet found');
+              }
+              
+              // Get encrypted wallet data
+              const walletData = await new Promise(resolve => {
+                chrome.storage.local.get([activeWalletId], result => {
+                  resolve(result[activeWalletId]);
+                });
+              });
+              
+              if (!walletData) {
+                throw new Error('Wallet data not found');
+              }
+              
+              // Try to decrypt with provided password
+              const wallet = await ethers.Wallet.fromEncryptedJson(walletData, message.password);
+              const privateKey = wallet.privateKey;
+              
+              // Clear wallet immediately
+              if (wallet._signingKey) {
+                wallet._signingKey = null;
+              }
+              
+              sendResponse({ success: true, privateKey: privateKey });
+            } catch (error) {
+              console.error('Error exporting private key:', error);
+              if (error.message.includes('invalid password')) {
+                sendResponse({ success: false, error: 'Invalid password' });
+              } else {
+                sendResponse({ success: false, error: error.message });
+              }
             }
           })();
           return true; // Async response

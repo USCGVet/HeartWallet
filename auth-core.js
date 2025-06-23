@@ -202,8 +202,23 @@ class AuthManager {
         }
     }    async exportPrivateKey(password) {
         try {
-            const wallet = await this.walletCore.unlockWallet(password);
-            return wallet.privateKey;
+            // Export private key through background script
+            return new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({
+                    action: 'exportPrivateKey',
+                    password: password
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve(response.privateKey);
+                    } else {
+                        reject(new Error(response?.error || 'Failed to export private key'));
+                    }
+                });
+            });
         } catch (error) {
             console.error('Error exporting private key:', error);
             throw error;
