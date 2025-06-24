@@ -651,6 +651,8 @@ class HeartWalletApp {
         const currentWallet = this.walletCore.getCurrentWallet();
         
         if (currentWallet) {
+            // Ensure wallet address is properly set for token operations
+            this.walletCore.setCurrentAddress(currentWallet.address);
             // Make sure the session timeout is properly set
             const securitySettings = await this.storage.get(['securitySettings']);
             const autoLogoutMinutes = securitySettings?.securitySettings?.autoLogoutMinutes || 5;

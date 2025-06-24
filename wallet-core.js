@@ -221,7 +221,24 @@ class WalletCore {
     }
 
     getCurrentWallet() {
-        return this.secureMemory.get('currentWallet');
+        // First try to get from secure memory
+        let wallet = this.secureMemory.get('currentWallet');
+        
+        // If not found, try to get the active wallet address
+        if (!wallet) {
+            const activeAddress = this.secureMemory.get('activeWalletAddress');
+            if (activeAddress) {
+                // Create a minimal wallet object
+                wallet = {
+                    address: activeAddress,
+                    getAddress: () => activeAddress
+                };
+                // Cache it for next time
+                this.secureMemory.set('currentWallet', wallet);
+            }
+        }
+        
+        return wallet;
     }    
     
     async hasWallets() { // Renamed from hasWallet
