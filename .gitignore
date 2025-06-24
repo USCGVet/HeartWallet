@@ -35,6 +35,8 @@ Thumbs.db
 dist/
 build/
 Rabby-develop/
+contracts/
+dapp/
 
 # Chrome extension files (optional - uncomment if you want to exclude)
 # *.pem

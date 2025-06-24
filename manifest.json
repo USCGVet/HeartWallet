@@ -16,7 +16,8 @@
       "128": "images/icon128.png"
     }
   },  "permissions": [
-    "storage"
+    "storage",
+    "notifications"
   ],  "content_security_policy": {
     "extension_pages": "script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src https:; object-src 'self'; font-src 'self';"
   },
@@ -51,7 +52,8 @@
         "typed-data-signing.js",
         "token-confirmation.html", 
         "token-confirmation.js",
-        "token-confirmation-styles.css", 
+        "token-confirmation-styles.css",
+        "transaction-confirmation-styles.css",
         "send-token-modal.html",
         "security-utils.js",
         "fontawesome-extension.css",

@@ -26,7 +26,26 @@ class SecureMessageValidator {
             'eth_estimateGas',
             'eth_gasPrice',
             'eth_getBlockByNumber',
-            'eth_call'
+            'eth_getBlockByHash',
+            'eth_getTransactionByHash',
+            'eth_getTransactionReceipt',
+            'eth_call',
+            'eth_blockNumber',
+            'eth_getCode',
+            'eth_getStorageAt',
+            'eth_getLogs',
+            'net_version',
+            'eth_sendRawTransaction',
+            'eth_subscribe',
+            'eth_unsubscribe',
+            'eth_newFilter',
+            'eth_newBlockFilter',
+            'eth_newPendingTransactionFilter',
+            'eth_getFilterChanges',
+            'eth_getFilterLogs',
+            'eth_uninstallFilter',
+            '_heartWallet_listeningAccountsChanged',
+            '_heartWallet_listeningChainChanged'
         ]);
         
         // Rate limiting map

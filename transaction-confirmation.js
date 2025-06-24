@@ -51,12 +51,16 @@ class TransactionConfirmation {
     async loadTransactionDetails() {
         try {
             // Request transaction details from background
+            console.log('Requesting transaction details for requestId:', this.requestId);
             const response = await chrome.runtime.sendMessage({
                 action: 'getTransactionRequest',
                 requestId: this.requestId
             });
 
+            console.log('Received response:', response);
+            
             if (!response || !response.success) {
+                console.error('Failed response:', response);
                 throw new Error('Failed to load transaction details');
             }
 
@@ -85,8 +89,9 @@ class TransactionConfirmation {
             await this.loadGasPrices();
             
             // Hide loading, show content
-            document.getElementById('loading-section').style.display = 'none';
-            document.getElementById('transaction-content').style.display = 'block';
+            document.getElementById('loading-section').classList.add('hidden');
+            document.getElementById('transaction-content').classList.remove('hidden');
+            document.getElementById('transaction-content').classList.add('show');
             
             // Enable confirm button only if validation passed or user overrides
             const shouldEnableConfirm = !this.validation || this.validation.valid || this.validation.riskScore < 80;
@@ -100,6 +105,7 @@ class TransactionConfirmation {
 
     async displayTransactionDetails() {
         // From address
+        console.log('Transaction params:', this.txParams);
         const fromAddress = this.txParams.from || await this.getWalletAddress();
         document.getElementById('from-address').textContent = this.formatAddress(fromAddress);
         
@@ -120,8 +126,10 @@ class TransactionConfirmation {
         
         // Check if it's a contract interaction
         if (this.txParams.data && this.txParams.data !== '0x') {
-            document.getElementById('contract-interaction').style.display = 'flex';
-            document.getElementById('data-row').style.display = 'flex';
+            document.getElementById('contract-interaction').classList.remove('hidden');
+            document.getElementById('contract-interaction').classList.add('flex');
+            document.getElementById('data-row').classList.remove('hidden');
+            document.getElementById('data-row').classList.add('flex');
             
             // Try to decode the transaction
             await this.decodeTransaction();
@@ -232,7 +240,8 @@ class TransactionConfirmation {
                 '0x38ed1739': 'swapExactTokensForTokens',
                 '0xfb3bdb41': 'swapETHForExactTokens',
                 '0x4a25d94a': 'swapTokensForExactETH',
-                '0x8803dbee': 'swapTokensForExactTokens'
+                '0x8803dbee': 'swapTokensForExactTokens',
+                '0x40c10f19': 'mint'  // mint(address,uint256)
             };
             
             const selector = data.substring(0, 10);
@@ -241,16 +250,10 @@ class TransactionConfirmation {
             if (functionName) {
                 // Create decoded info section
                 const decodedSection = document.createElement('div');
-                decodedSection.style.cssText = `
-                    background: #e8f5e9;
-                    border: 1px solid #4caf50;
-                    padding: 15px;
-                    border-radius: 8px;
-                    margin-bottom: 20px;
-                `;
+                decodedSection.className = 'decoded-section';
                 
                 const title = document.createElement('div');
-                title.style.cssText = 'font-weight: bold; margin-bottom: 10px; color: #2e7d32;';
+                title.className = 'decoded-title';
                 title.textContent = '✓ Decoded Transaction';
                 decodedSection.appendChild(title);
                 
@@ -268,25 +271,19 @@ class TransactionConfirmation {
                     const tokenInfo = await this.getTokenInfo(to);
                     
                     const details = document.createElement('div');
+                    details.className = 'decoded-details';
                     details.innerHTML = `
-                        <div style="margin-bottom: 8px;"><strong>Action:</strong> Token Approval</div>
-                        <div style="margin-bottom: 8px;"><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
-                        <div style="margin-bottom: 8px;"><strong>Spender:</strong> ${this.formatAddress(spender)}</div>
-                        <div style="margin-bottom: 8px;"><strong>Amount:</strong> ${isInfinite ? '🚨 UNLIMITED' : ethers.formatUnits(amountBN, tokenInfo?.decimals || 18) + ' ' + (tokenInfo?.symbol || 'tokens')}</div>
+                        <div><strong>Action:</strong> Token Approval</div>
+                        <div><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
+                        <div><strong>Spender:</strong> ${this.formatAddress(spender)}</div>
+                        <div><strong>Amount:</strong> ${isInfinite ? '🚨 UNLIMITED' : ethers.formatUnits(amountBN, tokenInfo?.decimals || 18) + ' ' + (tokenInfo?.symbol || 'tokens')}</div>
                     `;
                     decodedSection.appendChild(details);
                     
                     // Add warning for infinite approval
                     if (isInfinite) {
                         const warning = document.createElement('div');
-                        warning.style.cssText = `
-                            background: #ffebee;
-                            border: 1px solid #f44336;
-                            padding: 10px;
-                            border-radius: 6px;
-                            margin-top: 10px;
-                            color: #c62828;
-                        `;
+                        warning.className = 'decoded-warning';
                         warning.innerHTML = '<strong>⚠️ Warning:</strong> This grants UNLIMITED access to your tokens. The spender can take ALL your tokens at any time.';
                         decodedSection.appendChild(warning);
                     }
@@ -300,27 +297,54 @@ class TransactionConfirmation {
                     const tokenInfo = await this.getTokenInfo(to);
                     
                     const details = document.createElement('div');
+                    details.className = 'decoded-details';
                     details.innerHTML = `
-                        <div style="margin-bottom: 8px;"><strong>Action:</strong> Token Transfer</div>
-                        <div style="margin-bottom: 8px;"><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
-                        <div style="margin-bottom: 8px;"><strong>To:</strong> ${this.formatAddress(recipient)}</div>
-                        <div style="margin-bottom: 8px;"><strong>Amount:</strong> ${ethers.formatUnits(amountBN, tokenInfo?.decimals || 18)} ${tokenInfo?.symbol || 'tokens'}</div>
+                        <div><strong>Action:</strong> Token Transfer</div>
+                        <div><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
+                        <div><strong>To:</strong> ${this.formatAddress(recipient)}</div>
+                        <div><strong>Amount:</strong> ${ethers.formatUnits(amountBN, tokenInfo?.decimals || 18)} ${tokenInfo?.symbol || 'tokens'}</div>
                     `;
                     decodedSection.appendChild(details);
                     
+                } else if (functionName === 'mint') {
+                    // Decode mint(address to, uint256 amount)
+                    const recipient = '0x' + data.substring(34, 74);
+                    const amount = '0x' + data.substring(74, 138);
+                    const amountBN = BigInt(amount);
+                    
+                    const tokenInfo = await this.getTokenInfo(to);
+                    
+                    const details = document.createElement('div');
+                    details.className = 'decoded-details';
+                    details.innerHTML = `
+                        <div><strong>Action:</strong> Mint New Tokens</div>
+                        <div><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
+                        <div><strong>Recipient:</strong> ${this.formatAddress(recipient)}</div>
+                        <div><strong>Amount:</strong> ${ethers.formatUnits(amountBN, tokenInfo?.decimals || 18)} ${tokenInfo?.symbol || 'tokens'}</div>
+                    `;
+                    decodedSection.appendChild(details);
+                    
+                    // Add warning for minting
+                    const warning = document.createElement('div');
+                    warning.className = 'decoded-note';
+                    warning.innerHTML = '<strong>⚠️ Note:</strong> This will create new tokens and increase the total supply.';
+                    decodedSection.appendChild(warning);
+                    
                 } else if (functionName.includes('swap')) {
                     const details = document.createElement('div');
+                    details.className = 'decoded-details';
                     details.innerHTML = `
-                        <div style="margin-bottom: 8px;"><strong>Action:</strong> Token Swap</div>
-                        <div style="margin-bottom: 8px;"><strong>Router:</strong> ${this.formatAddress(to)}</div>
-                        <div style="margin-bottom: 8px;"><strong>Type:</strong> ${functionName}</div>
-                        <div style="color: #666; font-size: 0.9rem;">Complex swap parameters - verify amounts carefully</div>
+                        <div><strong>Action:</strong> Token Swap</div>
+                        <div><strong>Router:</strong> ${this.formatAddress(to)}</div>
+                        <div><strong>Type:</strong> ${functionName}</div>
+                        <div class="swap-details">Complex swap parameters - verify amounts carefully</div>
                     `;
                     decodedSection.appendChild(details);
                 } else {
                     const details = document.createElement('div');
+                    details.className = 'decoded-details';
                     details.innerHTML = `
-                        <div style="margin-bottom: 8px;"><strong>Function:</strong> ${functionName}</div>
+                        <div><strong>Function:</strong> ${functionName}</div>
                     `;
                     decodedSection.appendChild(details);
                 }
@@ -384,7 +408,8 @@ class TransactionConfirmation {
         
         // Display warnings
         if (warnings.length > 0) {
-            document.getElementById('warning-section').style.display = 'block';
+            document.getElementById('warning-section').classList.remove('hidden');
+            document.getElementById('warning-section').classList.add('show');
             document.getElementById('warning-message').textContent = warnings.join('. ');
         }
     }
@@ -396,7 +421,8 @@ class TransactionConfirmation {
         const indicator = document.getElementById('risk-indicator');
         const issues = document.getElementById('validation-issues');
         
-        section.style.display = 'block';
+        section.classList.remove('hidden');
+        section.classList.add('show');
         
         // Set header based on validation status
         if (!this.validation.valid) {
@@ -425,7 +451,7 @@ class TransactionConfirmation {
             const issue = document.createElement('div');
             issue.className = 'validation-issue';
             issue.innerHTML = `
-                <span class="issue-icon" style="color: #f44336;">
+                <span class="issue-icon issue-icon-error">
                     <i class="fas fa-times-circle"></i>
                 </span>
                 <span>${SecurityUtils.escapeHtml(error)}</span>
@@ -439,7 +465,7 @@ class TransactionConfirmation {
                 const issue = document.createElement('div');
                 issue.className = 'validation-issue';
                 issue.innerHTML = `
-                    <span class="issue-icon" style="color: ${risk.severity === 'CRITICAL' ? '#f44336' : '#ff9800'};">
+                    <span class="issue-icon ${risk.severity === 'CRITICAL' ? 'issue-icon-critical' : 'issue-icon-warning'}">
                         <i class="fas fa-exclamation-triangle"></i>
                     </span>
                     <span>${SecurityUtils.escapeHtml(risk.message)}</span>
@@ -453,7 +479,7 @@ class TransactionConfirmation {
             const issue = document.createElement('div');
             issue.className = 'validation-issue';
             issue.innerHTML = `
-                <span class="issue-icon" style="color: #ff9800;">
+                <span class="issue-icon issue-icon-warning">
                     <i class="fas fa-info-circle"></i>
                 </span>
                 <span>${SecurityUtils.escapeHtml(warning)}</span>
@@ -464,14 +490,7 @@ class TransactionConfirmation {
         // Special handling for token approvals
         if (this.validation.summary?.type === 'Token Approval') {
             const approvalWarning = document.createElement('div');
-            approvalWarning.style.cssText = `
-                background: #fff3e0;
-                border: 1px solid #ff9800;
-                padding: 12px;
-                border-radius: 6px;
-                margin-top: 10px;
-                font-size: 0.9rem;
-            `;
+            approvalWarning.className = 'approval-warning';
             approvalWarning.innerHTML = `
                 <strong>Token Approval Request:</strong><br>
                 This transaction will allow another address to spend your tokens. 
@@ -487,21 +506,22 @@ class TransactionConfirmation {
         
         if (!this.simulation) return;
         
-        section.style.display = 'block';
+        section.classList.remove('hidden');
+        section.classList.add('show');
         
         if (this.simulation.success) {
             result.innerHTML = `
-                <div style="color: #2e7d32;">
+                <div class="simulation-success">
                     <i class="fas fa-check-circle"></i>
                     Transaction simulation successful
                 </div>
-                <div style="margin-top: 8px; font-size: 0.85rem; color: #666;">
+                <div class="simulation-gas-estimate">
                     Estimated gas: ${this.simulation.gasEstimate ? parseInt(this.simulation.gasEstimate).toLocaleString() : 'Unknown'}
                 </div>
             `;
         } else {
             result.innerHTML = `
-                <div style="color: #d32f2f;">
+                <div class="simulation-error">
                     <i class="fas fa-times-circle"></i>
                     Transaction would fail: ${SecurityUtils.escapeHtml(this.simulation.error || 'Unknown error')}
                 </div>
@@ -533,10 +553,30 @@ class TransactionConfirmation {
             });
             
             if (response && response.success) {
-                // Close window after short delay
+                // Show success message
+                document.getElementById('loading-section').classList.remove('hidden');
+                document.getElementById('loading-section').classList.add('show');
+                document.getElementById('transaction-content').classList.add('hidden');
+                document.getElementById('loading-section').innerHTML = `
+                    <div class="transaction-success">
+                        <div class="success-icon">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <h3 class="success-title">Transaction Sent!</h3>
+                        <p class="success-label">Transaction hash:</p>
+                        <p class="success-hash">
+                            ${response.txHash}
+                        </p>
+                        <p class="success-note">
+                            You'll receive a notification when the transaction is confirmed.
+                        </p>
+                    </div>
+                `;
+                
+                // Close window after showing success
                 setTimeout(() => {
                     window.close();
-                }, 1000);
+                }, 3000);
             } else {
                 throw new Error(response?.error || 'Transaction failed');
             }
@@ -563,7 +603,7 @@ class TransactionConfirmation {
 
     showError(message) {
         document.getElementById('loading-section').innerHTML = `
-            <div style="color: #f44336; padding: 20px;">
+            <div class="error-message">
                 <h3>Error</h3>
                 <p>${SecurityUtils.escapeHtml(message)}</p>
             </div>

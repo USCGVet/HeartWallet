@@ -377,6 +377,16 @@ class HeartWalletApp {
                 setTimeout(() => this.handleSettingsOpen(), 100);
             });
         }
+        
+        // Listen for transaction status updates from background
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === 'transaction_update') {
+                this.handleTransactionUpdate(message);
+            }
+        });
+        
+        // Check for pending transactions on load
+        this.checkPendingTransactions();
     }
 
     handleEnterKey(fieldId) {
@@ -2577,7 +2587,104 @@ class HeartWalletApp {
         this.resetTokenSendForm();
     }
 
-    // ...existing code...
+    // Transaction monitoring methods
+    async checkPendingTransactions() {
+        try {
+            // Get transaction history from storage
+            const { transactionHistory } = await chrome.storage.local.get(['transactionHistory']);
+            if (!transactionHistory || !Array.isArray(transactionHistory)) return;
+            
+            // Check for any pending transactions
+            const pendingTxs = transactionHistory.filter(tx => tx.status === 'pending');
+            
+            if (pendingTxs.length > 0) {
+                // Show notification for pending transactions
+                pendingTxs.forEach(tx => {
+                    this.showTransactionStatus(tx);
+                });
+            }
+        } catch (error) {
+            console.error('Error checking pending transactions:', error);
+        }
+    }
+    
+    handleTransactionUpdate(message) {
+        const { txHash, status, from, origin } = message;
+        
+        // Update UI based on transaction status
+        if (status === 'sent') {
+            this.notificationManager.show(
+                `Transaction sent: ${txHash.substring(0, 10)}...`,
+                'info',
+                0, // Persistent
+                [{
+                    label: 'View',
+                    action: () => {
+                        this.openBlockExplorer(txHash);
+                    }
+                }]
+            );
+        } else if (status === 'confirmed') {
+            this.notificationManager.show(
+                `Transaction confirmed: ${txHash.substring(0, 10)}...`,
+                'success',
+                10000,
+                [{
+                    label: 'View',
+                    action: () => {
+                        this.openBlockExplorer(txHash);
+                    }
+                }]
+            );
+            // Refresh balances after confirmation
+            this.updateWalletBalance();
+            this.updateTokenBalances();
+        } else if (status === 'failed') {
+            this.notificationManager.show(
+                `Transaction failed: ${txHash.substring(0, 10)}...`,
+                'error',
+                10000
+            );
+        }
+    }
+    
+    showTransactionStatus(tx) {
+        const { hash, status, timestamp } = tx;
+        const age = Date.now() - timestamp;
+        
+        // Only show notification for recent transactions (last 10 minutes)
+        if (age < 10 * 60 * 1000) {
+            const message = status === 'pending' 
+                ? `Transaction pending: ${hash.substring(0, 10)}...`
+                : `Transaction ${status}: ${hash.substring(0, 10)}...`;
+                
+            const type = status === 'confirmed' ? 'success' : 
+                        status === 'failed' ? 'error' : 'info';
+                        
+            this.notificationManager.show(
+                message,
+                type,
+                status === 'pending' ? 0 : 10000, // Persistent for pending
+                [{
+                    label: 'View',
+                    action: () => {
+                        this.openBlockExplorer(hash);
+                    }
+                }]
+            );
+        }
+    }
+    
+    async openBlockExplorer(txHash) {
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'GET_EXPLORER_URL' });
+            if (response && response.url) {
+                window.open(`${response.url}/tx/${txHash}`, '_blank');
+            }
+        } catch (error) {
+            console.error('Error opening block explorer:', error);
+        }
+    }
 }
 
 // Initialize the application when DOM is loaded

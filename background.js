@@ -543,13 +543,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (isFromContentScript) {
       const { id, method, params } = message.payload;
     console.log(`Background: Received dApp request - Method: ${method}, ID: ${id}, Params:`, params);
+    console.log(`Background: Sender info:`, { 
+      origin: sender.origin, 
+      url: sender.url, 
+      tab: sender.tab,
+      frameId: sender.frameId 
+    });
     const currentNetwork = networkConfigs[currentChainId]; // Get current network config
 
     // Ensure we have a provider before handling RPC methods
     ensureProvider();
     
     // Declare origin once for the entire switch statement
-    const origin = sender.origin || sender.url;
+    // For content scripts, sender.origin contains the origin, sender.tab contains tab info
+    const origin = sender.origin || (sender.tab && new URL(sender.tab.url).origin) || sender.url;
+    console.log(`Background: Extracted origin: ${origin}`);
     
     switch (method) {
         case 'eth_requestAccounts':
@@ -563,22 +571,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 
                 if (method === 'eth_requestAccounts') {
                     if (!hasOriginSession) {
-                        // Need to create session and get permission for this origin
-                        const connectionApproved = await requestConnectionApproval(origin);
-                        if (!connectionApproved) {
-                            sendResponse({ id, error: { code: 4001, message: 'User rejected the request' } });
-                            return;
+                        // Check if site was previously connected
+                        const connectedSites = await new Promise(resolve => {
+                            chrome.storage.local.get('connectedSites', (data) => {
+                                resolve(data.connectedSites || {});
+                            });
+                        });
+                        
+                        const siteData = connectedSites[origin];
+                        
+                        if (siteData) {
+                            // Site was previously connected, just create session
+                            console.log(`Background: Site ${origin} was previously connected, auto-approving...`);
+                            sessionManager.createSession(origin, { duration: 30 * 60 * 1000 }); // 30 min session
+                            sessionManager.addPermission(origin, PERMISSIONS.ACCOUNTS);
+                            sendResponse({ id, result: [walletData.address] });
+                        } else {
+                            // New site connection - need approval
+                            console.log(`Background: New site ${origin} requesting connection, showing approval popup...`);
+                            
+                            // If we don't have tab info, we need to query for the active tab
+                            if (!sender.tab || !sender.tab.id) {
+                                console.log('Background: No tab info from sender, querying active tab...');
+                                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                                    if (tabs && tabs.length > 0) {
+                                        const activeTab = tabs[0];
+                                        console.log('Background: Found active tab:', activeTab);
+                                        try {
+                                            createConnectionRequest(id, activeTab, sendResponse);
+                                        } catch (error) {
+                                            console.error('Error creating connection request:', error);
+                                            sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                                        }
+                                    } else {
+                                        console.error('Background: No active tab found');
+                                        sendResponse({ id, error: { code: -32603, message: 'Could not determine requesting tab' } });
+                                    }
+                                });
+                                return true; // Keep the connection open for async response
+                            } else {
+                                try {
+                                    createConnectionRequest(id, sender.tab, sendResponse);
+                                    return true; // Keep the connection open for async response
+                                } catch (error) {
+                                    console.error('Error creating connection request:', error);
+                                    sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                                    return;
+                                }
+                            }
                         }
-                        
-                        // Create session for this origin
-                        sessionManager.createSession(origin, { duration: 30 * 60 * 1000 }); // 30 min session
-                        sessionManager.addPermission(origin, PERMISSIONS.ACCOUNTS);
-                        
-                        // Store connection
-                        await storeConnectedSite(origin, walletData.address);
+                    } else {
+                        // Session already exists, just return address
+                        sendResponse({ id, result: [walletData.address] });
                     }
-                    
-                    sendResponse({ id, result: [walletData.address] });
                 } else {
                     // For eth_accounts, check if origin has permission
                     if (hasOriginSession && sessionManager.hasPermission(origin, PERMISSIONS.ACCOUNTS)) {
@@ -607,8 +652,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   if (siteData && method === 'eth_requestAccounts') {
                     // Site was previously connected, just need to unlock wallet
                     console.log(`Background: Site ${origin} was previously connected, creating reconnection request...`);
-                    createReconnectionRequest(id, sender.tab, sendResponse, siteData);
-                    return true; // Keep the connection open for async response
+                    console.log(`Background: Tab info:`, sender.tab);
+                    
+                    // If we don't have tab info, we need to query for the active tab
+                    if (!sender.tab || !sender.tab.id) {
+                        console.log('Background: No tab info from sender, querying active tab...');
+                        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                            if (tabs && tabs.length > 0) {
+                                const activeTab = tabs[0];
+                                console.log('Background: Found active tab:', activeTab);
+                                try {
+                                    createReconnectionRequest(id, activeTab, sendResponse, siteData);
+                                } catch (error) {
+                                    console.error('Error creating reconnection request:', error);
+                                    sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                                }
+                            } else {
+                                console.error('Background: No active tab found');
+                                sendResponse({ id, error: { code: -32603, message: 'Could not determine requesting tab' } });
+                            }
+                        });
+                        return true; // Keep the connection open for async response
+                    } else {
+                        try {
+                            createReconnectionRequest(id, sender.tab, sendResponse, siteData);
+                            return true; // Keep the connection open for async response
+                        } catch (error) {
+                            console.error('Error creating reconnection request:', error);
+                            sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                            return;
+                        }
+                    }
                 } else if (siteData && method === 'eth_accounts') {
                     // For eth_accounts, return empty array when session is inactive even for connected sites
                     console.log(`Background: Site ${origin} is connected but session inactive, returning empty array`);
@@ -616,15 +690,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 } else if (!siteData && method === 'eth_requestAccounts') {
                     // Site not previously connected, create new connection request
                     console.log(`Background: Site ${origin} not previously connected, creating connection request...`);
-                    createConnectionRequest(id, sender.tab, sendResponse);
-                    return true; // Keep the connection open for async response
+                    console.log(`Background: Tab info:`, sender.tab);
+                    
+                    // If we don't have tab info, we need to query for the active tab
+                    if (!sender.tab || !sender.tab.id) {
+                        console.log('Background: No tab info from sender, querying active tab...');
+                        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                            if (tabs && tabs.length > 0) {
+                                const activeTab = tabs[0];
+                                console.log('Background: Found active tab:', activeTab);
+                                try {
+                                    createConnectionRequest(id, activeTab, sendResponse);
+                                } catch (error) {
+                                    console.error('Error creating connection request:', error);
+                                    sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                                }
+                            } else {
+                                console.error('Background: No active tab found');
+                                sendResponse({ id, error: { code: -32603, message: 'Could not determine requesting tab' } });
+                            }
+                        });
+                        return true; // Keep the connection open for async response
+                    } else {
+                        try {
+                            createConnectionRequest(id, sender.tab, sendResponse);
+                            return true; // Keep the connection open for async response
+                        } catch (error) {
+                            console.error('Error creating connection request:', error);
+                            sendResponse({ id, error: { code: -32603, message: 'Failed to create connection request: ' + error.message } });
+                            return;
+                        }
+                    }
                 } else {
                     // eth_accounts for unconnected site
                     console.log(`Background: Site ${origin} not connected and session inactive, returning empty array`);
                     sendResponse({ id, result: [] });
                 }
             }
-            return true; // Indicate async response
+            break;
 
         case 'eth_chainId':
              console.log(`Background: Processing ${method}...`);
@@ -1000,8 +1103,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             
             // Create transaction confirmation request with validation results
+            // Generate a unique request ID for internal tracking
+            const requestId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             const confirmationRequest = {
-                id: id,
+                requestId: requestId,  // Unique ID for tracking
+                id: id,                // Original JSON-RPC ID for response
                 method: method,
                 params: txParams,
                 origin: origin,
@@ -1077,6 +1183,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             showMessageSigningPopup(signingRequest, sendResponse);
             return true;
             
+        case 'eth_blockNumber':
+        case 'eth_getBlockByNumber':
+        case 'eth_getBlockByHash':
+        case 'eth_getTransactionByHash':
+        case 'eth_getTransactionReceipt':
+        case 'eth_gasPrice':
+        case 'eth_getStorageAt':
+        case 'eth_getTransactionCount':
+        case 'net_version':
+        case 'eth_getLogs':
+            // These are read-only methods that don't require wallet to be unlocked
+            console.log(`Background: Processing read-only method ${method}...`);
+            ensureProvider();
+            
+            if (!provider) {
+                sendResponse({ 
+                    id, 
+                    error: { code: -32603, message: 'Provider not available' }
+                });
+                return true;
+            }
+            
+            (async () => {
+                try {
+                    const result = await provider.send(method, params || []);
+                    sendResponse({ id, result });
+                } catch (error) {
+                    console.error(`Error calling ${method}:`, error);
+                    sendResponse({ 
+                        id, 
+                        error: { 
+                            code: error.code || -32603, 
+                            message: error.message || `Failed to execute ${method}` 
+                        }
+                    });
+                }
+            })();
+            return true;
+
         case 'eth_signTypedData':
         case 'eth_signTypedData_v3':
         case 'eth_signTypedData_v4':
@@ -1147,8 +1292,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // For unhandled methods, log the method name but return a proper response
             console.warn(`Background: Unhandled RPC method received from dApp: ${method}`);
             
-            // If provider exists, try to forward the request to the provider
-            if (provider && globalWalletUnlocked) {
+            // List of methods that require wallet to be unlocked
+            const methodsRequiringWallet = [
+                'eth_sendTransaction',
+                'eth_sendRawTransaction',
+                'eth_sign',
+                'personal_sign',
+                'eth_signTypedData',
+                'eth_signTypedData_v3',
+                'eth_signTypedData_v4',
+                'eth_accounts',
+                'eth_requestAccounts'
+            ];
+            
+            // Check if this method requires wallet to be unlocked
+            const requiresWallet = methodsRequiringWallet.some(m => method.startsWith(m));
+            
+            // Ensure provider is available
+            ensureProvider();
+            
+            // If provider exists and either wallet is unlocked or method doesn't require wallet
+            if (provider && (!requiresWallet || globalWalletUnlocked)) {
                 (async () => {
                     try {
                         // Use the provider's send method to forward the request
@@ -1160,8 +1324,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         sendResponse({ 
                             id, 
                             error: { 
-                                code: -32601, 
-                                message: `Method not supported: ${method}` 
+                                code: error.code || -32601, 
+                                message: error.message || `Method not supported: ${method}` 
                             }
                         });
                     }
@@ -1169,7 +1333,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 return true;
             }
             
-            sendResponse({ id, error: { code: -32601, message: `Method not found or not supported: ${method}` }});
+            if (requiresWallet && !globalWalletUnlocked) {
+                sendResponse({ 
+                    id, 
+                    error: { 
+                        code: 4100, 
+                        message: 'Wallet is locked. Please unlock your wallet first.' 
+                    }
+                });
+            } else {
+                sendResponse({ 
+                    id, 
+                    error: { 
+                        code: -32601, 
+                        message: `Method not found or not supported: ${method}` 
+                    }
+                });
+            }
             return true; // Indicate async response
     }
   }
@@ -1708,9 +1888,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Removed log that exposed wallet address and origin
                 storeConnectedSite(request.origin, walletData.address);
                 
-                // Create a unique response channel
+                // Get the stored callback and send approval
+                const callback = pendingConnectionCallbacks.get(requestId);
+                if (callback) {
+                  try {
+                    callback({
+                      id: requestId,
+                      result: [walletData.address]
+                    });
+                  } catch (e) {
+                    console.error('Error sending approval response:', e);
+                  }
+                  pendingConnectionCallbacks.delete(requestId);
+                }
+                
+                // Also send message to tabs for compatibility
                 const responseChannel = `response_${requestId}_${Date.now()}`;
-                // Send message to all tabs to check if they're waiting for this response
                 chrome.tabs.query({}, (tabs) => {
                   tabs.forEach(tab => {
                     chrome.tabs.sendMessage(tab.id, {
@@ -1730,7 +1923,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({ success: true });
               } else {
                 // Rejected or no wallet address
-                // Similar to the approval flow, send rejection to all tabs
+                // Get the stored callback and send rejection
+                const callback = pendingConnectionCallbacks.get(requestId);
+                if (callback) {
+                  try {
+                    callback({
+                      id: requestId,
+                      error: { code: 4001, message: 'User rejected the request.' }
+                    });
+                  } catch (e) {
+                    console.error('Error sending rejection response:', e);
+                  }
+                  pendingConnectionCallbacks.delete(requestId);
+                }
+                
+                // Also send rejection to all tabs for compatibility
                 chrome.tabs.query({}, (tabs) => {
                   tabs.forEach(tab => {
                     chrome.tabs.sendMessage(tab.id, {
@@ -1854,9 +2061,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Clean up
                 activeTransactionRequests.delete(message.requestId);
                 
+                // Show notification for transaction sent
+                chrome.notifications.create(`tx_sent_${txResponse.hash}`, {
+                  type: 'basic',
+                  iconUrl: chrome.runtime.getURL('images/icon128.png'),
+                  title: 'Transaction Sent',
+                  message: `Transaction ${txResponse.hash.substring(0, 10)}... has been sent to the network`,
+                  priority: 2
+                });
+                
+                // Send message to popup for UI update
+                chrome.runtime.sendMessage({
+                  type: 'transaction_update',
+                  txHash: txResponse.hash,
+                  status: 'sent',
+                  from: txToSign.from,
+                  origin: confirmTxRequest.origin
+                }).catch(() => {
+                  // Popup might be closed, ignore error
+                });
+                
+                // Monitor transaction for completion
+                monitorTransaction(txResponse.hash, txToSign.from, confirmTxRequest.origin);
+                
                 sendResponse({ success: true, txHash: txResponse.hash });
               } catch (error) {
                 console.error('Error sending transaction:', error);
+                
+                // Send error response to dApp
+                if (confirmTxRequest && confirmTxRequest.sendResponse) {
+                  confirmTxRequest.sendResponse({
+                    id: confirmTxRequest.id,
+                    error: { code: -32603, message: error.message }
+                  });
+                }
+                
+                // Show error notification
+                chrome.notifications.create('tx_error', {
+                  type: 'basic',
+                  iconUrl: chrome.runtime.getURL('images/icon128.png'),
+                  title: 'Transaction Failed',
+                  message: `Failed to send transaction: ${error.message}`,
+                  priority: 2
+                });
+                
                 sendResponse({ success: false, error: error.message });
               }
             })();
@@ -2029,7 +2277,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log('Processing getGasPrice');
           (async () => {
             try {
-              const feeData = await provider.getFeeData();
+              const currentProvider = ensureProvider();
+              if (!currentProvider) {
+                throw new Error('Provider not available');
+              }
+              const feeData = await currentProvider.getFeeData();
               sendResponse({ gasPrice: feeData.gasPrice.toString() });
             } catch (error) {
               console.error('Error getting gas price:', error);
@@ -2069,13 +2321,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log('Processing fetchTokenInfo:', message.address);
           (async () => {
             try {
+              // Ensure provider is initialized
+              const currentProvider = ensureProvider();
+              if (!currentProvider) {
+                throw new Error('Provider not available');
+              }
+              
               // Create a contract instance to fetch token info
               const tokenContract = new ethers.Contract(
                 message.address,
                 ['function name() view returns (string)',
                  'function symbol() view returns (string)', 
                  'function decimals() view returns (uint8)'],
-                provider
+                currentProvider
               );
               
               const [name, symbol, decimals] = await Promise.all([
@@ -2086,11 +2344,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               
               sendResponse({
                 success: true,
-                tokenInfo: { name, symbol, decimals }
+                tokenInfo: { 
+                  name: name.toString(), 
+                  symbol: symbol.toString(), 
+                  decimals: Number(decimals)
+                }
               });
             } catch (error) {
               console.error('Error fetching token info:', error);
-              sendResponse({ success: false });
+              sendResponse({ 
+                success: false, 
+                error: error.message || 'Failed to fetch token info' 
+              });
             }
           })();
           return true; // Async response
@@ -2371,17 +2636,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Track active connection popups to prevent duplicates
 const activeConnectionRequests = new Map();
 
+// Track response callbacks for pending connection requests
+const pendingConnectionCallbacks = new Map();
+
 // Function to create a reconnection request (for previously connected sites)
 function createReconnectionRequest(requestId, tab, sendResponseCallback, siteData) {
-  const origin = new URL(tab?.url || "").origin;
-  console.log(`Background: Creating reconnection request for origin: ${origin}, requestId: ${requestId}`);
+  if (!tab || !tab.url) {
+    console.error('Background: Cannot create reconnection request - no tab information');
+    sendResponseCallback({
+      id: requestId,
+      error: { code: -32603, message: 'Invalid request context - no tab information' }
+    });
+    return;
+  }
+  
+  const origin = new URL(tab.url).origin;
+  console.log(`Background: Creating reconnection request for origin: ${origin}, requestId: ${requestId}, tab:`, tab);
   
   // Check if there's already an active connection request for this origin
   const existingRequest = activeConnectionRequests.get(origin);
   if (existingRequest) {
-    // If the request is less than 30 seconds old, don't open a new popup
+    // If the request is less than 2 seconds old, don't open a new popup
     const now = Date.now();
-    if (now - existingRequest.timestamp < 30000) {
+    if (now - existingRequest.timestamp < 2000) {
       console.log(`Background: Reconnection request from ${origin} ignored - already processing request ${existingRequest.id}`);
       
       sendResponseCallback({
@@ -2416,6 +2693,9 @@ function createReconnectionRequest(requestId, tab, sendResponseCallback, siteDat
     isReconnection: true,
     siteData: siteData
   };
+  
+  // Store the callback in memory (can't be serialized to storage)
+  pendingConnectionCallbacks.set(requestId, sendResponseCallback);
   
   // Save request to temporary storage
   chrome.storage.local.get('pendingRequests', (data) => {
@@ -2494,15 +2774,24 @@ function openReconnectionPopup(request) {
 
 // Function to create a connection request and show popup
 function createConnectionRequest(requestId, tab, sendResponseCallback) {
-  const origin = new URL(tab?.url || "").origin;
-  console.log(`Background: Creating connection request for origin: ${origin}, requestId: ${requestId}`);
+  if (!tab || !tab.url) {
+    console.error('Background: Cannot create connection request - no tab information');
+    sendResponseCallback({
+      id: requestId,
+      error: { code: -32603, message: 'Invalid request context - no tab information' }
+    });
+    return;
+  }
+  
+  const origin = new URL(tab.url).origin;
+  console.log(`Background: Creating connection request for origin: ${origin}, requestId: ${requestId}, tab:`, tab);
   
   // Check if there's already an active connection request for this origin
   const existingRequest = activeConnectionRequests.get(origin);
   if (existingRequest) {
-    // If the request is less than 30 seconds old, don't open a new popup
+    // If the request is less than 2 seconds old, don't open a new popup
     const now = Date.now();
-    if (now - existingRequest.timestamp < 30000) {
+    if (now - existingRequest.timestamp < 2000) {
       console.log(`Background: Connection request from ${origin} ignored - already processing request ${existingRequest.id}`);
       
       // Let the dApp know we're already handling a connection request
@@ -2538,6 +2827,9 @@ function createConnectionRequest(requestId, tab, sendResponseCallback) {
     timestamp: Date.now(),
     responseCallback: sendResponseCallback
   };
+  
+  // Store the callback in memory (can't be serialized to storage)
+  pendingConnectionCallbacks.set(requestId, sendResponseCallback);
   
   // Save request to temporary storage
   chrome.storage.local.get('pendingRequests', (data) => {
@@ -2578,14 +2870,18 @@ function createConnectionRequest(requestId, tab, sendResponseCallback) {
           }
         }
         
-        try {
-          // If callback is still valid, send rejection
-          sendResponseCallback({
-            id: requestId,
-            error: { code: 4001, message: 'Request timeout. User failed to approve.' }
-          });
-        } catch (e) {
-          console.log('Unable to respond to timed-out request:', e);
+        // Get the stored callback and send rejection
+        const callback = pendingConnectionCallbacks.get(requestId);
+        if (callback) {
+          try {
+            callback({
+              id: requestId,
+              error: { code: 4001, message: 'Request timeout. User failed to approve.' }
+            });
+          } catch (e) {
+            console.log('Unable to respond to timed-out request:', e);
+          }
+          pendingConnectionCallbacks.delete(requestId);
         }
       }
     });
@@ -2622,6 +2918,37 @@ function openConnectionPopup(request) {
         for (const [origin, activeRequest] of activeConnectionRequests.entries()) {
           if (activeRequest.windowId === windowId) {
             console.log(`Connection window ${windowId} closed for origin ${origin}`);
+            
+            // Send rejection response to the dApp since window was closed without approval
+            chrome.storage.local.get('pendingRequests', (data) => {
+              const pendingRequests = data.pendingRequests || {};
+              const requestId = activeRequest.id;
+              
+              // Check if this request is still pending (not already responded to)
+              if (pendingRequests[requestId]) {
+                console.log(`Sending rejection for closed window request ${requestId}`);
+                
+                // Clean up the pending request
+                delete pendingRequests[requestId];
+                chrome.storage.local.set({ pendingRequests });
+                
+                // Get the stored callback and send rejection
+                const callback = pendingConnectionCallbacks.get(requestId);
+                if (callback) {
+                  try {
+                    callback({
+                      id: requestId,
+                      error: { code: 4001, message: 'User rejected the request' }
+                    });
+                  } catch (e) {
+                    console.error('Error sending rejection response:', e);
+                  }
+                  pendingConnectionCallbacks.delete(requestId);
+                }
+              }
+            });
+            
+            // Clean up active request tracking
             activeConnectionRequests.delete(origin);
           }
         }
@@ -2803,34 +3130,34 @@ function resetSessionTimeout() {
 
 // Show transaction confirmation popup
 function showTransactionConfirmationPopup(request, sendResponseCallback) {
-  console.log('Background: Opening transaction confirmation popup for request:', request.id);
+  console.log('Background: Opening transaction confirmation popup for request:', request.requestId);
   
   // Store the request for the popup to access
-  activeTransactionRequests.set(request.id, {
+  activeTransactionRequests.set(request.requestId, {
     ...request,
     sendResponse: sendResponseCallback
   });
   
   // Create popup URL with transaction data
   const popupURL = chrome.runtime.getURL('transaction-confirmation.html') + 
-    `?requestId=${request.id}&origin=${encodeURIComponent(request.origin)}`;
+    `?requestId=${request.requestId}&origin=${encodeURIComponent(request.origin)}`;
   
   chrome.windows.create({
     url: popupURL,
     type: 'popup',
-    width: 400,
-    height: 600,
+    width: 450,
+    height: 650,
     focused: true
   }, (window) => {
     console.log('Transaction confirmation popup opened:', window.id);
     
     // Set timeout for auto-rejection
     setTimeout(() => {
-      if (activeTransactionRequests.has(request.id)) {
-        activeTransactionRequests.delete(request.id);
+      if (activeTransactionRequests.has(request.requestId)) {
+        activeTransactionRequests.delete(request.requestId);
         try {
           sendResponseCallback({
-            id: request.id,
+            id: request.id,  // Use original JSON-RPC ID for response
             error: { code: 4001, message: 'User rejected the transaction' }
           });
         } catch (e) {
@@ -2924,3 +3251,156 @@ function showTypedDataSigningPopup(request, sendResponseCallback) {
 // Storage for active requests
 const activeTransactionRequests = new Map();
 const activeSigningRequests = new Map();
+
+// Map to track pending transactions for status monitoring
+const pendingTransactions = new Map();
+
+// Monitor transaction status
+async function monitorTransaction(txHash, from, origin) {
+  console.log('Monitoring transaction:', txHash);
+  
+  // Store transaction details
+  pendingTransactions.set(txHash, {
+    hash: txHash,
+    from: from,
+    origin: origin,
+    timestamp: Date.now(),
+    status: 'pending'
+  });
+  
+  // Also store in chrome storage for persistence
+  chrome.storage.local.get(['transactionHistory'], (result) => {
+    const history = result.transactionHistory || [];
+    history.unshift({
+      hash: txHash,
+      from: from,
+      origin: origin,
+      timestamp: Date.now(),
+      status: 'pending',
+      chainId: currentChainId
+    });
+    // Keep only last 50 transactions
+    if (history.length > 50) {
+      history.length = 50;
+    }
+    chrome.storage.local.set({ transactionHistory: history });
+  });
+  
+  try {
+    const currentProvider = ensureProvider();
+    if (!currentProvider) {
+      throw new Error('Provider not available');
+    }
+    
+    // Poll for transaction receipt
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes with 5 second intervals
+    
+    const checkTransaction = async () => {
+      attempts++;
+      
+      try {
+        const receipt = await currentProvider.getTransactionReceipt(txHash);
+        
+        if (receipt) {
+          // Transaction confirmed
+          const success = receipt.status === 1;
+          
+          // Update pending transaction
+          const txData = pendingTransactions.get(txHash);
+          if (txData) {
+            txData.status = success ? 'confirmed' : 'failed';
+            txData.receipt = receipt;
+          }
+          
+          // Show notification
+          chrome.notifications.create(`tx_confirmed_${txHash}`, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('images/icon128.png'),
+            title: success ? 'Transaction Confirmed' : 'Transaction Failed',
+            message: success 
+              ? `Transaction ${txHash.substring(0, 10)}... has been confirmed!`
+              : `Transaction ${txHash.substring(0, 10)}... has failed.`,
+            priority: 2
+          });
+          
+          // Send message to popup for UI update
+          chrome.runtime.sendMessage({
+            type: 'transaction_update',
+            txHash: txHash,
+            status: success ? 'confirmed' : 'failed',
+            from: from,
+            origin: origin
+          }).catch(() => {
+            // Popup might be closed, ignore error
+          });
+          
+          // Update storage
+          chrome.storage.local.get(['transactionHistory'], (result) => {
+            const history = result.transactionHistory || [];
+            const txIndex = history.findIndex(tx => tx.hash === txHash);
+            if (txIndex !== -1) {
+              history[txIndex].status = success ? 'confirmed' : 'failed';
+              history[txIndex].blockNumber = receipt.blockNumber;
+              chrome.storage.local.set({ transactionHistory: history });
+            }
+          });
+          
+          // Remove from pending after a delay
+          setTimeout(() => {
+            pendingTransactions.delete(txHash);
+          }, 30000); // Keep for 30 seconds after confirmation
+          
+        } else if (attempts < maxAttempts) {
+          // Continue polling
+          setTimeout(checkTransaction, 5000); // Check every 5 seconds
+        } else {
+          // Timeout - transaction took too long
+          console.warn('Transaction monitoring timeout for:', txHash);
+          
+          // Show timeout notification
+          chrome.notifications.create(`tx_timeout_${txHash}`, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('images/icon128.png'),
+            title: 'Transaction Timeout',
+            message: `Transaction ${txHash.substring(0, 10)}... is taking longer than expected. Check a block explorer for status.`,
+            priority: 1
+          });
+          
+          // Update status
+          const txData = pendingTransactions.get(txHash);
+          if (txData) {
+            txData.status = 'timeout';
+          }
+          
+          // Clean up
+          setTimeout(() => {
+            pendingTransactions.delete(txHash);
+          }, 60000); // Remove after 1 minute
+        }
+      } catch (error) {
+        console.error('Error checking transaction status:', error);
+        
+        // Retry if we haven't hit max attempts
+        if (attempts < maxAttempts) {
+          setTimeout(checkTransaction, 5000);
+        }
+      }
+    };
+    
+    // Start checking after a short delay
+    setTimeout(checkTransaction, 3000);
+    
+  } catch (error) {
+    console.error('Error monitoring transaction:', error);
+    
+    // Show error notification
+    chrome.notifications.create(`tx_error_${txHash}`, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('images/icon128.png'),
+      title: 'Transaction Monitoring Error',
+      message: `Unable to monitor transaction ${txHash.substring(0, 10)}...`,
+      priority: 1
+    });
+  }
+}
