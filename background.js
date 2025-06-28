@@ -2091,16 +2091,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'confirmTransaction':
           console.log('Processing confirmTransaction:', message.requestId);
           const confirmTxRequest = activeTransactionRequests.get(message.requestId);
-          if (confirmTxRequest && confirmTxRequest.sendResponse) {
-            // Send the transaction
-            (async () => {
+          
+          if (!confirmTxRequest) {
+            sendResponse({ success: false, error: 'Request not found' });
+            break;
+          }
+          
+          // Handle transaction confirmation
+          (async () => {
               try {
                 if (!globalWalletUnlocked) {
                   throw new Error('Wallet not unlocked');
                 }
                 
-                // Grant permission for this origin if first time
-                if (!sessionManager.hasPermission(confirmTxRequest.origin, PERMISSIONS.SEND_TRANSACTION)) {
+                // Grant permission for this origin if first time (skip for wallet-initiated)
+                if (confirmTxRequest.origin !== 'Heart Wallet' && 
+                    !sessionManager.hasPermission(confirmTxRequest.origin, PERMISSIONS.SEND_TRANSACTION)) {
                   sessionManager.addPermission(confirmTxRequest.origin, PERMISSIONS.SEND_TRANSACTION);
                 }
                 
@@ -2143,11 +2149,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Then send it via provider
                 const txResponse = await provider.broadcastTransaction(signedTx);
                 
-                // Send success response to dApp
-                confirmTxRequest.sendResponse({
-                  id: confirmTxRequest.id,
-                  result: txResponse.hash
-                });
+                // Send success response to dApp if it has a callback
+                if (confirmTxRequest.sendResponse) {
+                  confirmTxRequest.sendResponse({
+                    id: confirmTxRequest.id,
+                    result: txResponse.hash
+                  });
+                }
                 
                 // Clean up
                 activeTransactionRequests.delete(message.requestId);
@@ -2172,6 +2180,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   // Popup might be closed, ignore error
                 });
                 
+                // For wallet-initiated transactions, send confirmation result
+                if (confirmTxRequest.origin === 'Heart Wallet') {
+                  chrome.runtime.sendMessage({
+                    action: 'transactionConfirmationResult',
+                    requestId: message.requestId,
+                    confirmed: true,
+                    txParams: message.transaction,
+                    txHash: txResponse.hash
+                  }).catch(() => {
+                    // App might be closed, ignore error
+                  });
+                }
+                
                 // Monitor transaction for completion
                 monitorTransaction(txResponse.hash, txToSign.from, confirmTxRequest.origin);
                 
@@ -2179,7 +2200,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               } catch (error) {
                 console.error('Error sending transaction:', error);
                 
-                // Send error response to dApp
+                // Send error response to dApp if it has a callback
                 if (confirmTxRequest && confirmTxRequest.sendResponse) {
                   confirmTxRequest.sendResponse({
                     id: confirmTxRequest.id,
@@ -2199,11 +2220,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({ success: false, error: error.message });
               }
             })();
-            return true; // Async response
-          } else {
-            sendResponse({ success: false, error: 'Request not found' });
-          }
-          break;
+          return true; // Async response
           
         case 'rejectTransaction':
           console.log('Processing rejectTransaction:', message.requestId);
@@ -2212,6 +2229,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             rejectTxRequest.sendResponse({
               id: rejectTxRequest.id,
               error: { code: 4001, message: 'User rejected the transaction' }
+            });
+            activeTransactionRequests.delete(message.requestId);
+          } else if (rejectTxRequest && rejectTxRequest.origin === 'Heart Wallet') {
+            // For wallet-initiated transactions, send rejection result
+            chrome.runtime.sendMessage({
+              action: 'transactionConfirmationResult',
+              requestId: message.requestId,
+              confirmed: false,
+              error: 'User rejected the transaction'
+            }).catch(() => {
+              // App might be closed, ignore error
             });
             activeTransactionRequests.delete(message.requestId);
           }
@@ -2643,6 +2671,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           })();
           return true; // Async response
           
+        case 'prepareTransactionConfirmation':
+          console.log('Processing prepareTransactionConfirmation:', message);
+          // Store transaction request for confirmation popup
+          const walletTxRequest = {
+            requestId: message.requestId,
+            id: message.requestId,
+            params: message.txParams,
+            type: message.type,
+            origin: message.origin,
+            timestamp: Date.now(),
+            validation: { valid: true, riskScore: 0 }, // No special validation for wallet-initiated transfers
+            simulation: null
+          };
+          
+          activeTransactionRequests.set(message.requestId, walletTxRequest);
+          
+          sendResponse({ success: true });
+          break;
+          
         case "sendTransaction":
           console.log("Processing sendTransaction from popup...");
           (async () => {
@@ -2672,11 +2719,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               
               // Estimate gas
               const gasEstimate = await provider.estimateGas(transaction);
-              transaction.gasLimit = gasEstimate;
+              transaction.gasLimit = message.transaction.gasLimit || gasEstimate;
               
-              // Get current gas price
-              const feeData = await provider.getFeeData();
-              transaction.gasPrice = feeData.gasPrice;
+              // Use provided gas price or get current gas price
+              if (message.transaction.gasPrice) {
+                transaction.gasPrice = message.transaction.gasPrice;
+              } else {
+                const feeData = await provider.getFeeData();
+                transaction.gasPrice = feeData.gasPrice;
+              }
               
               // Sign transaction using keyring service
               const signedTx = await keyringService.signTransaction(

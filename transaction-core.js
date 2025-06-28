@@ -5,7 +5,7 @@ class TransactionManager {
         this.walletCore = walletCore;
     }
 
-    async sendTransaction(recipientAddress, amount, gasLimit = 21000) {
+    async sendTransaction(recipientAddress, amount, gasPrice = null, gasLimit = 21000) {
         try {
             const wallet = this.walletCore.getCurrentWallet();
             if (!wallet) {
@@ -14,14 +14,26 @@ class TransactionManager {
 
             // Send transaction through background script
             return new Promise((resolve, reject) => {
+                const transaction = {
+                    to: recipientAddress,
+                    from: wallet.address,
+                    value: ethers.parseEther(amount.toString()).toString(),
+                    data: '0x'
+                };
+                
+                // Add gas price if provided
+                if (gasPrice) {
+                    transaction.gasPrice = gasPrice;
+                }
+                
+                // Add gas limit if different from default
+                if (gasLimit !== 21000) {
+                    transaction.gasLimit = gasLimit.toString();
+                }
+                
                 chrome.runtime.sendMessage({
                     action: 'sendTransaction',
-                    transaction: {
-                        to: recipientAddress,
-                        from: wallet.address,
-                        value: ethers.parseEther(amount.toString()).toString(),
-                        data: '0x'
-                    }
+                    transaction: transaction
                 }, response => {
                     if (chrome.runtime.lastError) {
                         reject(new Error(chrome.runtime.lastError.message));

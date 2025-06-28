@@ -88,6 +88,12 @@ class TokenManager {
         }
     }
 
+    encodeTransferData(recipientAddress, amount, decimals) {
+        const contractInterface = new ethers.Interface(this.getTokenABI());
+        const amountBN = ethers.parseUnits(amount.toString(), decimals);
+        return contractInterface.encodeFunctionData('transfer', [recipientAddress, amountBN]);
+    }
+    
     async sendToken(tokenAddress, recipientAddress, amount) {
         try {
             const wallet = this.walletCore.getCurrentWallet();
@@ -132,6 +138,59 @@ class TokenManager {
             });
         } catch (error) {
             console.error('Error sending token:', error);
+            throw error;
+        }
+    }
+    
+    async sendTokenWithGasPrice(tokenAddress, recipientAddress, amount, gasPrice) {
+        try {
+            const wallet = this.walletCore.getCurrentWallet();
+            if (!wallet) {
+                throw new Error('No wallet available');
+            }
+
+            const tokenInfo = this.tokenList.get(tokenAddress.toLowerCase());
+            if (!tokenInfo) {
+                throw new Error('Token not found in list');
+            }
+            
+            // Encode the transfer function call
+            const data = this.encodeTransferData(recipientAddress, amount, tokenInfo.decimals);
+            
+            // Send transaction through background script
+            return new Promise((resolve, reject) => {
+                const transaction = {
+                    to: tokenAddress,
+                    from: wallet.address,
+                    data: data,
+                    value: '0x0'
+                };
+                
+                // Add gas price if provided
+                if (gasPrice) {
+                    transaction.gasPrice = gasPrice;
+                }
+                
+                chrome.runtime.sendMessage({
+                    action: 'sendTransaction',
+                    transaction: transaction
+                }, response => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                        return;
+                    }
+                    if (response && response.success) {
+                        resolve({
+                            hash: response.txHash,
+                            transaction: { hash: response.txHash }
+                        });
+                    } else {
+                        reject(new Error(response?.error || 'Failed to send token'));
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error sending token with gas price:', error);
             throw error;
         }
     }

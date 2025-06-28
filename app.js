@@ -767,32 +767,20 @@ class HeartWalletApp {
             if (!validation.valid) {
                 this.notificationManager.show(validation.error, 'error');
                 return;
-            }            console.log('Starting transaction...'); // Debug log
-            this.uiManager.disableButton('send-transaction');
+            }
             
-            // Show progress notification for blockchain operation
-            progressNotification = this.notificationManager.blockchainOperation('send');
-
-            progressNotification.updateProgress(25, 'Creating transaction...');
-
-            const result = await this.transactionManager.sendTransaction(recipient, amount);
-            console.log('Transaction result:', result); // Debug log
-
-            progressNotification.updateProgress(75, 'Transaction submitted to PulseChain...');
-
-            // Show transaction submitted notification
-            this.notificationManager.transactionSubmitted(result.hash, 'PulseChain');
+            console.log('Preparing transaction confirmation...'); // Debug log
             
-            // Complete the progress notification
-            progressNotification.complete('Transaction sent successfully!', true);
+            // Prepare transaction for confirmation
+            const txParams = {
+                to: recipient,
+                value: ethers.parseEther(amount).toString(),
+                from: currentWallet.address,
+                data: '0x' // Native PLS transfer has no data
+            };
             
-            this.uiManager.clearInputs();
-            
-            // Wait for confirmation in background
-            this.waitForTransactionConfirmation(result.hash);
-            
-            // Update balance after a delay
-            setTimeout(() => this.updateBalance(), 5000);        } catch (error) {
+            // Open transaction confirmation modal
+            await this.showTransactionConfirmation(txParams, 'PLS Transfer');        } catch (error) {
             console.error('Error sending transaction:', error);
             
             if (progressNotification) {
@@ -806,6 +794,135 @@ class HeartWalletApp {
         }
     }
 
+    /**
+     * Show transaction confirmation modal
+     * @param {Object} txParams - Transaction parameters
+     * @param {string} type - Type of transaction (PLS Transfer, Token Transfer, etc.)
+     * @param {Object} metadata - Additional metadata for the transaction
+     */
+    async showTransactionConfirmation(txParams, type, metadata = {}) {
+        return new Promise((resolve, reject) => {
+            // Generate unique request ID
+            const requestId = 'wallet-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            
+            // Store transaction data for background script
+            chrome.runtime.sendMessage({
+                action: 'prepareTransactionConfirmation',
+                requestId: requestId,
+                txParams: txParams,
+                type: type,
+                metadata: metadata,
+                origin: 'Heart Wallet'
+            }, response => {
+                if (response && response.success) {
+                    // Open confirmation window
+                    const popupURL = chrome.runtime.getURL('transaction-confirmation.html') + 
+                        `?requestId=${requestId}&origin=${encodeURIComponent('Heart Wallet')}`;
+                    
+                    chrome.windows.create({
+                        url: popupURL,
+                        type: 'popup',
+                        width: 450,
+                        height: 650,
+                        focused: true
+                    });
+                    
+                    // Listen for confirmation result
+                    const listener = (message) => {
+                        if (message.action === 'transactionConfirmationResult' && message.requestId === requestId) {
+                            chrome.runtime.onMessage.removeListener(listener);
+                            
+                            if (message.confirmed) {
+                                // Process the confirmed transaction
+                                this.processConfirmedTransaction(message.txParams, type, metadata)
+                                    .then(resolve)
+                                    .catch(reject);
+                            } else {
+                                reject(new Error('Transaction rejected by user'));
+                            }
+                        }
+                    };
+                    
+                    chrome.runtime.onMessage.addListener(listener);
+                } else {
+                    reject(new Error('Failed to prepare transaction confirmation'));
+                }
+            });
+        });
+    }
+    
+    /**
+     * Process a confirmed transaction
+     * @param {Object} txParams - Confirmed transaction parameters
+     * @param {string} type - Type of transaction
+     * @param {Object} metadata - Additional metadata for the transaction
+     */
+    async processConfirmedTransaction(txParams, type, metadata = {}) {
+        let progressNotification = null;
+        
+        try {
+            this.uiManager.disableButton('send-transaction');
+            
+            // Show progress notification for blockchain operation
+            progressNotification = this.notificationManager.blockchainOperation('send');
+            progressNotification.updateProgress(25, 'Creating transaction...');
+            
+            let result;
+            if (type === 'PLS Transfer') {
+                // Send native PLS
+                const amount = ethers.formatEther(txParams.value);
+                result = await this.transactionManager.sendTransaction(txParams.to, amount, txParams.gasPrice);
+            } else if (type.includes('Transfer') && metadata.tokenAddress) {
+                // Send ERC-20 token
+                progressNotification.updateProgress(50, `Sending ${metadata.tokenInfo.symbol} transaction...`);
+                result = await this.tokenManager.sendTokenWithGasPrice(
+                    metadata.tokenAddress, 
+                    metadata.recipient, 
+                    metadata.amount,
+                    txParams.gasPrice
+                );
+            }
+            
+            progressNotification.updateProgress(75, 'Transaction submitted to PulseChain...');
+            
+            // Show transaction submitted notification
+            if (type.includes('Transfer') && metadata.tokenInfo) {
+                this.notificationManager.transactionSubmitted(result.hash, 'PulseChain', {
+                    type: 'token',
+                    symbol: metadata.tokenInfo.symbol,
+                    amount: metadata.amount,
+                    recipient: metadata.recipient
+                });
+                progressNotification.complete(`${metadata.tokenInfo.symbol} sent successfully!`, true);
+            } else {
+                this.notificationManager.transactionSubmitted(result.hash, 'PulseChain');
+                progressNotification.complete('Transaction sent successfully!', true);
+            }
+            
+            this.uiManager.clearInputs();
+            
+            // Wait for confirmation in background
+            this.waitForTransactionConfirmation(result.hash);
+            
+            // Update balance after a delay
+            setTimeout(() => this.updateBalance(), 5000);
+            
+            return result;
+        } catch (error) {
+            console.error('Error processing confirmed transaction:', error);
+            
+            if (progressNotification) {
+                progressNotification.complete('Transaction failed: ' + error.message, false);
+            } else {
+                this.notificationManager.transactionFailed(error);
+            }
+            
+            throw error;
+        } finally {
+            this.uiManager.enableButton('send-transaction');
+        }
+    }
+    
     /**
      * Wait for transaction confirmation and show notification
      * @param {string} txHash - Transaction hash to monitor
@@ -875,35 +992,29 @@ class HeartWalletApp {
             if (!tokenInfo) {
                 this.notificationManager.show('Token not found in your token list', 'error', 5000);
                 return;
-            }            // Show progress notification for token transaction
-            progressNotification = this.notificationManager.blockchainOperation('token-transfer');
-
-            progressNotification.updateProgress(25, `Preparing ${tokenInfo.symbol} transfer...`);// Check token balance
+            }            // Check token balance
             const tokenBalance = await this.tokenManager.getTokenBalance(tokenAddress, wallet.address);
             if (parseFloat(tokenBalance) < numericAmount) {
-                progressNotification.complete(`Insufficient ${tokenInfo.symbol} balance`, false);
+                this.notificationManager.show(`Insufficient ${tokenInfo.symbol} balance`, 'error', 5000);
                 return;
             }
-
-            progressNotification.updateProgress(75, `Sending ${tokenInfo.symbol} transaction...`);
-
-            // Send token
-            const result = await this.tokenManager.sendToken(tokenAddress, recipientAddress, amount);
             
-            // Show transaction submitted notification
-            this.notificationManager.transactionSubmitted(result.hash, 'PulseChain', {
-                type: 'token',
-                symbol: tokenInfo.symbol,
+            // Prepare token transfer transaction parameters
+            const transferData = this.tokenManager.encodeTransferData(recipientAddress, amount, tokenInfo.decimals);
+            const txParams = {
+                to: tokenAddress,
+                value: '0x0',
+                from: wallet.address,
+                data: transferData
+            };
+            
+            // Open transaction confirmation modal
+            await this.showTransactionConfirmation(txParams, `${tokenInfo.symbol} Transfer`, {
+                tokenAddress: tokenAddress,
+                tokenInfo: tokenInfo,
                 amount: amount,
                 recipient: recipientAddress
-            });              // Complete the progress notification
-            progressNotification.complete(`${tokenInfo.symbol} sent successfully!`, true);
-            
-            // Wait for confirmation in background
-            this.waitForTransactionConfirmation(result.hash);
-            
-            // Update token balances after delay
-            setTimeout(() => this.updateTokenBalances(), 5000);
+            });
             
         } catch (error) {
             console.error('Error sending token:', error);
