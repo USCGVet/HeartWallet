@@ -27,6 +27,17 @@ class AuthManager {
         
         // Clear any sensitive UI data
         this.clearSensitiveData();
+        
+        // Notify background script to clear session
+        chrome.runtime.sendMessage({
+            action: 'logoutWallet'
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error('Failed to notify background of logout:', chrome.runtime.lastError);
+            } else {
+                console.log('Background notified of logout:', response);
+            }
+        });
     }
 
     isLoggedIn() {
@@ -266,6 +277,15 @@ class AuthManager {
     // Activity tracking for session management
     trackActivity() {
         this.extendSession();
+        
+        // Also report activity to background script
+        chrome.runtime.sendMessage({
+            action: 'reportActivity'
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error('Failed to report activity:', chrome.runtime.lastError);
+            }
+        });
     }
 
     setupActivityTracking() {

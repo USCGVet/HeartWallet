@@ -12,7 +12,7 @@ class SessionManager {
         this.permissions = new Map();
         
         // Default session configuration
-        this.DEFAULT_SESSION_DURATION = 5 * 60 * 1000; // 5 minutes
+        this.DEFAULT_SESSION_DURATION = 30 * 60 * 1000; // 30 minutes
         this.MAX_SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
         
         // Session cleanup interval

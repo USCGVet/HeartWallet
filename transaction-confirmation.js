@@ -187,8 +187,13 @@ class TransactionConfirmation {
         const gasCost = (BigInt(price) * BigInt(gasLimit)) / BigInt(10**18);
         const gasCostFormatted = ethers.formatEther(BigInt(price) * BigInt(gasLimit));
         
+        // Format to 6 decimal places and round up
+        const gasCostNumber = parseFloat(gasCostFormatted);
+        const roundedGasCost = Math.ceil(gasCostNumber * 1000000) / 1000000;
+        const formattedGasCost = roundedGasCost.toFixed(6);
+        
         const symbol = this.networkConfig?.symbol || 'PLS';
-        document.getElementById(`gas-${speed}`).textContent = `${gasCostFormatted} ${symbol}`;
+        document.getElementById(`gas-${speed}`).textContent = `${formattedGasCost} ${symbol}`;
     }
 
     selectGasOption(speed) {
@@ -219,8 +224,14 @@ class TransactionConfirmation {
         const gasCost = gasLimit * gasPrice;
         const total = value + gasCost;
         
+        const totalFormatted = ethers.formatEther(total);
+        // Format to 6 decimal places and round up
+        const totalNumber = parseFloat(totalFormatted);
+        const roundedTotal = Math.ceil(totalNumber * 1000000) / 1000000;
+        const formattedTotal = roundedTotal.toFixed(6);
+        
         const symbol = this.networkConfig?.symbol || 'PLS';
-        document.getElementById('total-amount').textContent = `${ethers.formatEther(total)} ${symbol}`;
+        document.getElementById('total-amount').textContent = `${formattedTotal} ${symbol}`;
     }
 
     async decodeTransaction() {
@@ -312,7 +323,35 @@ class TransactionConfirmation {
                     const amount = '0x' + data.substring(74, 138);
                     const amountBN = BigInt(amount);
                     
+                    // Debug logging
+                    console.log('Mint transaction debug:', {
+                        rawHex: amount,
+                        amountBN: amountBN.toString(),
+                        dataLength: data.length,
+                        fullData: data
+                    });
+                    
                     const tokenInfo = await this.getTokenInfo(to);
+                    
+                    // Check if amount looks like a raw token count (no decimals applied)
+                    // If the amount is less than 10^6 and the token has decimals, it might be a raw count
+                    let displayAmount;
+                    const decimals = tokenInfo?.decimals || 18;
+                    
+                    if (amountBN < BigInt(10**6) && decimals > 0) {
+                        // This might be a raw token count, show both interpretations
+                        const rawCount = amountBN.toString();
+                        const withDecimals = ethers.formatUnits(amountBN, decimals);
+                        
+                        // If the formatted amount is extremely small, likely the DApp meant raw tokens
+                        if (parseFloat(withDecimals) < 0.000001) {
+                            displayAmount = `${rawCount} ${tokenInfo?.symbol || 'tokens'} (raw amount)`;
+                        } else {
+                            displayAmount = `${withDecimals} ${tokenInfo?.symbol || 'tokens'}`;
+                        }
+                    } else {
+                        displayAmount = `${ethers.formatUnits(amountBN, decimals)} ${tokenInfo?.symbol || 'tokens'}`;
+                    }
                     
                     const details = document.createElement('div');
                     details.className = 'decoded-details';
@@ -320,7 +359,7 @@ class TransactionConfirmation {
                         <div><strong>Action:</strong> Mint New Tokens</div>
                         <div><strong>Token:</strong> ${tokenInfo ? `${tokenInfo.symbol} (${tokenInfo.name})` : this.formatAddress(to)}</div>
                         <div><strong>Recipient:</strong> ${this.formatAddress(recipient)}</div>
-                        <div><strong>Amount:</strong> ${ethers.formatUnits(amountBN, tokenInfo?.decimals || 18)} ${tokenInfo?.symbol || 'tokens'}</div>
+                        <div><strong>Amount:</strong> ${displayAmount}</div>
                     `;
                     decodedSection.appendChild(details);
                     

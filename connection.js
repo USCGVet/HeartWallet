@@ -125,6 +125,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     // Disable approve button
                     approveBtn.disabled = true;
+                    
+                    // Focus on password field for better UX
+                    walletPassword.focus();
                 }
             }
         } catch (error) {
@@ -171,11 +174,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const address = response.walletData.address;
                 const shortAddress = `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
                 
-                activeWallet.textContent = shortAddress;                approveBtn.disabled = false;
+                activeWallet.textContent = shortAddress;
+                activeWallet.classList.remove('wallet-locked');
+                approveBtn.disabled = false;
                 unlockSection.className = unlockSection.className + ' element-hidden';
                 alternativeUnlock.className = alternativeUnlock.className + ' element-hidden';
                 
                 walletPassword.value = '';
+                
+                // Show success message
+                unlockBtn.textContent = 'Unlocked!';
+                unlockBtn.style.backgroundColor = '#28a745';
+                
+                // Focus on approve button for better UX
+                if (!isReconnection) {
+                    approveBtn.focus();
+                }
                   // For reconnections, automatically approve the connection after unlocking
                 if (isReconnection) {
                     console.log('Wallet unlocked for reconnection, auto-approving...');

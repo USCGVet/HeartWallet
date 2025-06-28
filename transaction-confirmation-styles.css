@@ -1,7 +1,7 @@
 /* Transaction Confirmation Specific Styles */
 
 body {
-    min-width: 400px;
+    min-width: 360px;
     min-height: 600px;
     margin: 0;
     padding: 0;
@@ -34,7 +34,8 @@ body {
 .site-origin {
     font-weight: bold;
     color: #333;
-    word-break: break-all;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .transaction-details {
@@ -50,23 +51,26 @@ body {
 
 .detail-row {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
     margin-bottom: 15px;
-    align-items: start;
+    gap: 5px;
 }
 
 .detail-label {
     font-weight: bold;
     color: #666;
-    min-width: 80px;
+    font-size: 0.9rem;
 }
 
 .detail-value {
-    text-align: right;
-    word-break: break-all;
     font-family: monospace;
-    max-width: 60%;
-    flex: 1 1 auto;
+    font-size: 0.85rem;
+    color: #333;
+    background: #f5f5f5;
+    padding: 8px 10px;
+    border-radius: 4px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .amount-section {
@@ -104,18 +108,19 @@ body {
 
 .gas-options {
     display: flex;
-    gap: 10px;
+    gap: 5px;
     margin-bottom: 10px;
 }
 
 .gas-option {
     flex: 1;
-    padding: 10px;
+    padding: 8px 5px;
     border: 1px solid #ddd;
     border-radius: 6px;
     cursor: pointer;
     text-align: center;
     transition: all 0.3s;
+    font-size: 0.9rem;
 }
 
 .gas-option.selected {
@@ -125,7 +130,7 @@ body {
 }
 
 .gas-price {
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     margin-top: 5px;
 }
 
@@ -137,9 +142,10 @@ body {
 
 .total-row {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 5px;
     font-weight: bold;
-    font-size: 1.1rem;
+    font-size: 1rem;
 }
 
 .warning-section {
@@ -301,7 +307,8 @@ body {
     border-radius: 6px;
     font-family: monospace;
     font-size: 0.85rem;
-    word-break: break-all;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
     max-height: 100px;
     overflow-y: auto;
 }
@@ -388,7 +395,8 @@ body {
 .success-hash {
     font-family: monospace;
     font-size: 12px;
-    word-break: break-all;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
     padding: 0 20px;
     color: #333;
     margin-bottom: 20px;
@@ -475,4 +483,37 @@ body {
 
 .error-message h3 {
     margin-bottom: 10px;
+}
+
+/* Address formatting for better display */
+.detail-value.address {
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+
+/* Contract interaction specific styles */
+#contract-interaction .detail-value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Improved responsive layout for narrow screens */
+@media (max-width: 400px) {
+    .confirmation-container {
+        padding: 15px;
+    }
+    
+    .amount-value {
+        font-size: 1.5rem;
+    }
+    
+    .gas-option {
+        padding: 6px 3px;
+        font-size: 0.85rem;
+    }
+    
+    .gas-price {
+        font-size: 0.75rem;
+    }
 }

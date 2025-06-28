@@ -69,6 +69,9 @@ setTimeout(() => {
     vaultStorage = new VaultStorage();
     console.log('Services initialized: session manager, transaction validator, vault storage');
     console.log('PERMISSIONS available:', typeof PERMISSIONS !== 'undefined');
+    
+    // Try to restore session from session storage
+    tryRestoreSession();
   } catch (error) {
     console.error('Failed to initialize services:', error);
   }
@@ -187,8 +190,8 @@ function ensureProvider() {
 
 let sessionTimeoutId = null;
 // Use a default timeout, can be updated via message
-let sessionTimeoutDuration = 5 * 60 * 1000; // Default 5 minutes
-const DEFAULT_SESSION_TIMEOUT = 5 * 60 * 1000; // Keep default reference
+let sessionTimeoutDuration = 30 * 60 * 1000; // Default 30 minutes
+const DEFAULT_SESSION_TIMEOUT = 30 * 60 * 1000; // Keep default reference
 
 // Listen for extension installation or startup
 chrome.runtime.onInstalled.addListener(() => {
@@ -244,6 +247,13 @@ function clearSessionState() {
             console.log("Persisted session metadata removed from storage.");
         }
     });
+    
+    // Clear session storage completely
+    if (chrome.storage.session) {
+      chrome.storage.session.clear()
+        .then(() => console.log("Session storage cleared completely"))
+        .catch(err => console.error("Error clearing session storage:", err));
+    }
 }
 
 // Helper to clear session after timeout
@@ -276,9 +286,24 @@ function saveState() {
       active: true,
       data: walletData,
     };
+    
+    // Also save to session storage for better persistence
+    if (chrome.storage.session) {
+      chrome.storage.session.set({
+        walletUnlocked: true,
+        walletAddress: walletData.address,
+        lastActivity: Date.now()
+      }).catch(err => console.error("Error saving to session storage:", err));
+    }
   } else {
     // Ensure sessionData is removed if not active
     chrome.storage.local.remove('sessionData');
+    
+    // Clear session storage
+    if (chrome.storage.session) {
+      chrome.storage.session.remove(['walletUnlocked', 'walletAddress', 'lastActivity'])
+        .catch(err => console.error("Error clearing session storage:", err));
+    }
   }
   // Always save the current chain ID
   stateToSave.currentChainId = currentChainId;
@@ -288,6 +313,46 @@ function saveState() {
       console.error("Error saving state:", chrome.runtime.lastError.message);
     }
   });
+}
+
+// Try to restore session from session storage (for Manifest V3 service worker restarts)
+async function tryRestoreSession() {
+  if (!chrome.storage.session) {
+    console.log("Session storage not available");
+    return;
+  }
+  
+  try {
+    const sessionData = await chrome.storage.session.get(['walletUnlocked', 'walletAddress', 'lastActivity']);
+    
+    if (sessionData.walletUnlocked && sessionData.walletAddress && sessionData.lastActivity) {
+      const timeSinceLastActivity = Date.now() - sessionData.lastActivity;
+      
+      // Check if session is still valid (within timeout period)
+      if (timeSinceLastActivity < sessionTimeoutDuration) {
+        console.log("Restoring active session from session storage");
+        
+        // Restore wallet data
+        walletData = { address: sessionData.walletAddress };
+        globalWalletUnlocked = true;
+        
+        // Restart timeout with remaining time
+        const remainingTime = sessionTimeoutDuration - timeSinceLastActivity;
+        sessionTimeoutId = setTimeout(() => {
+          console.log("Session timeout reached after restore - logging out wallet internally.");
+          logoutWalletInternal();
+        }, remainingTime);
+        
+        console.log(`Session restored, timeout in ${remainingTime / 60000} minutes`);
+      } else {
+        console.log("Session expired, not restoring");
+        // Clear expired session data
+        await chrome.storage.session.remove(['walletUnlocked', 'walletAddress', 'lastActivity']);
+      }
+    }
+  } catch (error) {
+    console.error("Error restoring session:", error);
+  }
 }
 
 // Restore state (session metadata and current chainId)
@@ -342,8 +407,9 @@ function logoutWalletInternal() {
   if (sessionManager) {
     sessionManager.clearAll();
   }
-  // Keep walletData (like address) or clear it? Let's keep it for now.
-  // walletData = null;
+  // Clear wallet data to ensure clean logout
+  walletData = null;
+  
   // Clear keyring service memory
   if (keyringService) {
       keyringService.clearMemory();
@@ -360,6 +426,14 @@ function logoutWalletInternal() {
   }
   clearTimeout(sessionTimeoutId);
   sessionTimeoutId = null;
+  
+  // Clear session storage explicitly before saving state
+  if (chrome.storage.session) {
+    chrome.storage.session.clear()
+      .then(() => console.log("Session storage cleared on logout"))
+      .catch(err => console.error("Error clearing session storage on logout:", err));
+  }
+  
   saveState(); // Update storage to reflect logged-out state
 }
 
@@ -1367,6 +1441,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 currentChainId: currentChainId
             });
             break;
+        case "reportActivity":
+            // Update activity timestamp to prevent auto-lock
+            console.log("Activity reported from UI");
+            resetSessionTimeout();
+            
+            // Update session storage with new activity time
+            if (chrome.storage.session && globalWalletUnlocked) {
+              chrome.storage.session.set({
+                walletUnlocked: true,
+                walletAddress: walletData?.address,
+                lastActivity: Date.now()
+              }).catch(err => console.error("Error updating activity in session storage:", err));
+            }
+            
+            sendResponse({ status: "success" });
+            break;
+            
         case "switchNetwork":
             console.log("Processing switchNetwork message...", message.chainId);
             const requestedPopupChainId = message.chainId;

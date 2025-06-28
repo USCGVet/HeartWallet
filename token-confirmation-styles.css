@@ -76,8 +76,8 @@ body {
 
 .detail-row {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: 4px;
     margin-bottom: 12px;
     padding: 8px 0;
     border-bottom: 1px solid #eee;
@@ -91,15 +91,17 @@ body {
 .detail-label {
     font-weight: 600;
     color: #555;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .detail-value {
     color: #333;
-    font-size: 14px;
-    word-break: break-all;
-    text-align: right;
-    max-width: 60%;
+    font-size: 13px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    background: #f5f5f5;
+    padding: 6px 10px;
+    border-radius: 4px;
 }
 
 .detail-value.address {
@@ -129,6 +131,8 @@ body {
     margin-bottom: 20px;
     font-size: 13px;
     color: #1565c0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .buttons {
