@@ -7,7 +7,7 @@ const DEFAULT_NETWORKS = [
         rpcUrl: 'https://rpc.pulsechain.com',
         chainId: 369,
         symbol: 'PLS',
-        explorer: 'https://otter.pulsechain.com'
+        explorer: 'https://scan.mypinata.cloud/ipfs/bafybeidn64pd2u525lmoipjl4nh3ooa2imd7huionjsdepdsphl5slfowy'
     },
     {
         name: 'PulseChain Testnet v4',

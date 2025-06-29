@@ -16,7 +16,14 @@ class WalletCore {
         await this.storage.set({ [this.walletListName]: walletList });
     }
 
-    async _setActiveWalletId(walletId) {        await this.storage.set({ [this.activeWalletIdName]: walletId });
+    async _setActiveWalletId(walletId) {
+        if (walletId === null) {
+            // Properly remove the activeWalletId from storage when no wallets remain
+            await this.storage.remove([this.activeWalletIdName]);
+            this.secureMemory.delete('activeWalletAddress');
+        } else {
+            await this.storage.set({ [this.activeWalletIdName]: walletId });
+        }
         if (walletId) {
             const walletData = await this.storage.get([walletId]);
             if (walletData && walletData[walletId]) {
@@ -270,6 +277,31 @@ class WalletCore {
         }
         console.log(`Wallet ${walletIdToRemove} removed.`);
         return true;
+    }
+
+    // Clear all wallet data - useful for troubleshooting
+    async clearAllWalletData() {
+        console.log('Clearing all wallet data...');
+        
+        // Get all wallets
+        const walletList = await this._getWalletList();
+        
+        // Remove each wallet's data
+        for (const wallet of walletList) {
+            await this.storage.remove([wallet.id]);
+        }
+        
+        // Clear wallet list
+        await this.storage.remove([this.walletListName]);
+        
+        // Clear active wallet ID
+        await this.storage.remove([this.activeWalletIdName]);
+        
+        // Clear secure memory
+        this.secureMemory.delete('currentWallet');
+        this.secureMemory.delete('activeWalletAddress');
+        
+        console.log('All wallet data cleared');
     }
 
     async getStoredAddress() { // This should now return the active wallet's address

@@ -154,7 +154,9 @@ class UIManager {
             this.makeAddressClickable(this.elements.walletAddress, address);
         }
         if (this.elements.walletBalance) {
-            this.elements.walletBalance.textContent = `${parseFloat(balance).toFixed(4)} PLS`;
+            // Add PLS icon before balance
+            const plsIcon = `<img src="images/PLSfavicon128.png?v=2" alt="PLS" class="pls-icon">`;
+            this.elements.walletBalance.innerHTML = `${plsIcon}${parseFloat(balance).toFixed(4)} PLS`;
         }
     }
 

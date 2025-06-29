@@ -69,6 +69,18 @@ class TransactionConfirmation {
             this.validation = response.request.validation;
             this.simulation = response.request.simulation;
             
+            // Validate network consistency
+            if (this.txParams.chainId && this.networkConfig.chainId) {
+                const txChainId = parseInt(this.txParams.chainId);
+                const currentChainId = parseInt(this.networkConfig.chainId);
+                
+                if (txChainId !== currentChainId) {
+                    // Network mismatch detected
+                    this.showNetworkMismatchError(txChainId, currentChainId);
+                    return;
+                }
+            }
+            
             // Display origin
             document.getElementById('site-origin').textContent = this.origin;
             
@@ -578,11 +590,16 @@ class TransactionConfirmation {
             document.getElementById('reject-btn').disabled = true;
             document.getElementById('confirm-btn').textContent = 'Processing...';
             
-            // Update transaction with gas price
+            // Update transaction with gas price and ensure chainId is included
             const updatedTx = {
                 ...this.txParams,
                 gasPrice: '0x' + BigInt(this.gasPrice).toString(16)
             };
+            
+            // Ensure chainId is included in the transaction
+            if (!updatedTx.chainId && this.networkConfig?.chainId) {
+                updatedTx.chainId = parseInt(this.networkConfig.chainId);
+            }
             
             // Send confirmation to background
             const response = await chrome.runtime.sendMessage({
@@ -647,6 +664,42 @@ class TransactionConfirmation {
                 <p>${SecurityUtils.escapeHtml(message)}</p>
             </div>
         `;
+    }
+    
+    showNetworkMismatchError(txChainId, currentChainId) {
+        // Map chainIds to network names
+        const networkNames = {
+            369: 'PulseChain Mainnet',
+            943: 'PulseChain Testnet V4',
+            1: 'Ethereum Mainnet',
+            5: 'Goerli Testnet'
+        };
+        
+        const txNetwork = networkNames[txChainId] || `Network ${txChainId}`;
+        const currentNetwork = networkNames[currentChainId] || `Network ${currentChainId}`;
+        
+        document.getElementById('loading-section').classList.add('hidden');
+        document.getElementById('transaction-content').innerHTML = `
+            <div class="network-mismatch-error">
+                <div class="error-icon">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <h3 class="error-title">Network Mismatch Detected</h3>
+                <div class="error-details">
+                    <p><strong>Transaction Network:</strong> ${SecurityUtils.escapeHtml(txNetwork)}</p>
+                    <p><strong>Current Network:</strong> ${SecurityUtils.escapeHtml(currentNetwork)}</p>
+                </div>
+                <p class="error-message">
+                    This transaction was created for a different network than the one currently selected. 
+                    Please switch to ${SecurityUtils.escapeHtml(txNetwork)} in your wallet settings before confirming this transaction.
+                </p>
+                <div class="error-actions">
+                    <button class="btn-primary" onclick="window.close()">Close</button>
+                </div>
+            </div>
+        `;
+        document.getElementById('transaction-content').classList.remove('hidden');
+        document.getElementById('transaction-content').classList.add('show');
     }
 }
 

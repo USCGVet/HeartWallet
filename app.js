@@ -390,6 +390,28 @@ class HeartWalletApp {
         
         // Check for pending transactions on load
         this.checkPendingTransactions();
+        
+        // Import form tab switching
+        const importSeedTab = document.getElementById('import-seed-tab');
+        const importKeyTab = document.getElementById('import-key-tab');
+        const importSeedContent = document.getElementById('import-seed-content');
+        const importKeyContent = document.getElementById('import-key-content');
+        
+        if (importSeedTab && importKeyTab) {
+            importSeedTab.addEventListener('click', () => {
+                importSeedTab.classList.add('active');
+                importKeyTab.classList.remove('active');
+                if (importSeedContent) importSeedContent.classList.remove('hidden');
+                if (importKeyContent) importKeyContent.classList.add('hidden');
+            });
+            
+            importKeyTab.addEventListener('click', () => {
+                importKeyTab.classList.add('active');
+                importSeedTab.classList.remove('active');
+                if (importKeyContent) importKeyContent.classList.remove('hidden');
+                if (importSeedContent) importSeedContent.classList.add('hidden');
+            });
+        }
     }
 
     handleEnterKey(fieldId) {
@@ -529,7 +551,7 @@ class HeartWalletApp {
     }    async handleImportKey() {
         try {
             const privateKey = document.getElementById('private-key')?.value?.trim();
-            const password = document.getElementById('import-password')?.value;
+            const password = document.getElementById('import-key-password')?.value;
 
             if (!privateKey || !password) {
                 this.notificationManager.show('Please enter both private key and password', 'error');
@@ -774,12 +796,22 @@ class HeartWalletApp {
             
             console.log('Preparing transaction confirmation...'); // Debug log
             
+            // Get current network chainId to ensure transaction goes to correct network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? parseInt(currentNetwork.chainId) : null;
+            
+            if (!chainId) {
+                this.notificationManager.show('Network not properly initialized', 'error');
+                return;
+            }
+            
             // Prepare transaction for confirmation
             const txParams = {
                 to: recipient,
                 value: ethers.parseEther(amount).toString(),
                 from: currentWallet.address,
-                data: '0x' // Native PLS transfer has no data
+                data: '0x', // Native PLS transfer has no data
+                chainId: chainId // Explicitly set chainId to prevent network mismatch
             };
             
             // Open transaction confirmation modal
@@ -1009,10 +1041,21 @@ class HeartWalletApp {
             const currentWallet = this.walletCore.getCurrentWallet();
             if (!currentWallet) return;
             
+            // Get current network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? currentNetwork.chainId : null;
+            if (!chainId) {
+                console.error('No network selected, cannot store transaction');
+                return;
+            }
+            
             // Get existing history
             const result = await chrome.storage.local.get(['transactionHistory']);
             const history = result.transactionHistory || {};
-            const walletHistory = history[currentWallet.address] || [];
+            
+            // Create network-specific key for this wallet
+            const historyKey = `${currentWallet.address}_${chainId}`;
+            const walletHistory = history[historyKey] || [];
             
             // Add new transaction
             const transaction = {
@@ -1022,7 +1065,8 @@ class HeartWalletApp {
                 value: txData.value || '0',
                 timestamp: Date.now(),
                 type: txData.from === currentWallet.address ? 'sent' : 'received',
-                status: 'pending'
+                status: 'pending',
+                chainId: chainId // Store network info with transaction
             };
             
             // Add to beginning of array (most recent first)
@@ -1034,7 +1078,7 @@ class HeartWalletApp {
             }
             
             // Save back to storage
-            history[currentWallet.address] = walletHistory;
+            history[historyKey] = walletHistory;
             await chrome.storage.local.set({ transactionHistory: history });
             
             // Update UI
@@ -1065,6 +1109,14 @@ class HeartWalletApp {
                 return;
             }
             
+            // Get current network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? currentNetwork.chainId : null;
+            if (!chainId) {
+                console.log('loadTransactionHistory: No network selected, exiting');
+                return;
+            }
+            
             const result = await chrome.storage.local.get(['transactionHistory']);
             console.log('loadTransactionHistory: Storage result:', result);
             
@@ -1084,8 +1136,35 @@ class HeartWalletApp {
                 await chrome.storage.local.set({ transactionHistory: history });
             }
             
+            // Also handle legacy format where transactions are stored under wallet address only
+            // Migrate them to network-specific keys
+            let needsMigration = false;
+            const migratedHistory = {};
+            
+            for (const key in history) {
+                if (!key.includes('_')) {
+                    // This is a legacy key (just wallet address)
+                    console.log(`Migrating legacy transactions for wallet ${key}`);
+                    // Assume legacy transactions are from mainnet (369)
+                    const newKey = `${key}_369`;
+                    migratedHistory[newKey] = history[key];
+                    needsMigration = true;
+                } else {
+                    migratedHistory[key] = history[key];
+                }
+            }
+            
+            if (needsMigration) {
+                history = migratedHistory;
+                await chrome.storage.local.set({ transactionHistory: history });
+                console.log('loadTransactionHistory: Migrated legacy transaction history to network-specific format');
+            }
+            
             console.log('loadTransactionHistory: Transaction history object:', history);
-            const walletHistory = history[currentWallet.address] || [];
+            
+            // Use network-specific key to get wallet history
+            const historyKey = `${currentWallet.address}_${chainId}`;
+            const walletHistory = history[historyKey] || [];
             console.log('loadTransactionHistory: Wallet history for', currentWallet.address, ':', walletHistory);
             
             // Limit to most recent 10 transactions
@@ -1161,8 +1240,30 @@ class HeartWalletApp {
             if (transactionsList) {
                 transactionsList.innerHTML = '';
                 
+                // Add Clear All button if there are transactions
+                if (walletHistory.length > 0) {
+                    const clearAllContainer = document.createElement('div');
+                    clearAllContainer.className = 'clear-all-container';
+                    
+                    const clearAllBtn = document.createElement('button');
+                    clearAllBtn.className = 'clear-all-btn';
+                    clearAllBtn.innerHTML = '<i class="fas fa-trash"></i> Clear All History <i class="fas fa-trash"></i>';
+                    clearAllBtn.title = `Clear all ${walletHistory.length} transactions for ${currentNetwork.name}`;
+                    clearAllBtn.addEventListener('click', async () => {
+                        if (confirm(`Are you sure you want to clear all ${walletHistory.length} transactions for ${currentNetwork.name}? This cannot be undone.`)) {
+                            await this.clearTransactionHistory();
+                        }
+                    });
+                    
+                    clearAllContainer.appendChild(clearAllBtn);
+                    transactionsList.appendChild(clearAllContainer);
+                }
+                
                 if (formattedTransactions.length === 0) {
-                    transactionsList.innerHTML = '<p class="no-transactions">No transactions yet</p>';
+                    const noTxMessage = document.createElement('p');
+                    noTxMessage.className = 'no-transactions';
+                    noTxMessage.textContent = 'No transactions yet';
+                    transactionsList.appendChild(noTxMessage);
                 } else {
                     formattedTransactions.forEach(tx => {
                         const txItem = document.createElement('div');
@@ -1171,8 +1272,13 @@ class HeartWalletApp {
                         // Format the address for display
                         const displayAddress = this.formatAddress(tx.type === 'sent' ? tx.to : tx.from);
                         
+                        // Transaction info container
+                        const txContent = document.createElement('div');
+                        txContent.className = 'transaction-content';
+                        
                         // Transaction info
                         const txInfo = document.createElement('div');
+                        txInfo.className = 'transaction-info';
                         txInfo.innerHTML = `
                             <div class="transaction-hash">
                                 <strong>${tx.type === 'sent' ? 'Sent' : 'Received'}</strong> 
@@ -1184,9 +1290,24 @@ class HeartWalletApp {
                             </div>
                         `;
                         
-                        txItem.appendChild(txInfo);
-                        txItem.classList.add('clickable');
-                        txItem.addEventListener('click', () => {
+                        // Delete button
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.className = 'transaction-delete-btn';
+                        deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                        deleteBtn.title = 'Delete transaction';
+                        deleteBtn.addEventListener('click', async (e) => {
+                            e.stopPropagation(); // Prevent triggering the transaction click
+                            if (confirm('Are you sure you want to delete this transaction from history?')) {
+                                await this.deleteTransaction(tx.hash);
+                            }
+                        });
+                        
+                        txContent.appendChild(txInfo);
+                        txContent.appendChild(deleteBtn);
+                        txItem.appendChild(txContent);
+                        
+                        txInfo.classList.add('clickable');
+                        txInfo.addEventListener('click', () => {
                             this.openBlockExplorer(tx.hash);
                         });
                         
@@ -1227,9 +1348,17 @@ class HeartWalletApp {
             const currentWallet = this.walletCore.getCurrentWallet();
             if (!currentWallet) return;
             
+            // Get current network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? currentNetwork.chainId : null;
+            if (!chainId) return;
+            
             const result = await chrome.storage.local.get(['transactionHistory']);
             const history = result.transactionHistory || {};
-            const walletHistory = history[currentWallet.address] || [];
+            
+            // Use network-specific key
+            const historyKey = `${currentWallet.address}_${chainId}`;
+            const walletHistory = history[historyKey] || [];
             
             // Find and update the transaction
             const txIndex = walletHistory.findIndex(tx => tx.hash === txHash);
@@ -1237,7 +1366,7 @@ class HeartWalletApp {
                 walletHistory[txIndex].status = newStatus;
                 
                 // Save back to storage
-                history[currentWallet.address] = walletHistory;
+                history[historyKey] = walletHistory;
                 await chrome.storage.local.set({ transactionHistory: history });
                 
                 // Reload the display
@@ -1245,6 +1374,78 @@ class HeartWalletApp {
             }
         } catch (error) {
             console.error('Error updating transaction status:', error);
+        }
+    }
+    
+    /**
+     * Delete a single transaction from history
+     */
+    async deleteTransaction(txHash) {
+        try {
+            const currentWallet = this.walletCore.getCurrentWallet();
+            if (!currentWallet) return;
+            
+            // Get current network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? currentNetwork.chainId : null;
+            if (!chainId) return;
+            
+            const result = await chrome.storage.local.get(['transactionHistory']);
+            const history = result.transactionHistory || {};
+            
+            // Use network-specific key
+            const historyKey = `${currentWallet.address}_${chainId}`;
+            const walletHistory = history[historyKey] || [];
+            
+            // Filter out the transaction
+            const updatedHistory = walletHistory.filter(tx => tx.hash !== txHash);
+            
+            // Save back to storage
+            history[historyKey] = updatedHistory;
+            await chrome.storage.local.set({ transactionHistory: history });
+            
+            // Show notification
+            this.notificationManager.show('Transaction deleted from history', 'success');
+            
+            // Reload the display
+            await this.loadTransactionHistory();
+        } catch (error) {
+            console.error('Error deleting transaction:', error);
+            this.notificationManager.show('Failed to delete transaction', 'error');
+        }
+    }
+    
+    /**
+     * Clear all transaction history for current network
+     */
+    async clearTransactionHistory() {
+        try {
+            const currentWallet = this.walletCore.getCurrentWallet();
+            if (!currentWallet) return;
+            
+            // Get current network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? currentNetwork.chainId : null;
+            if (!chainId) return;
+            
+            const result = await chrome.storage.local.get(['transactionHistory']);
+            const history = result.transactionHistory || {};
+            
+            // Use network-specific key
+            const historyKey = `${currentWallet.address}_${chainId}`;
+            
+            // Clear history for this wallet and network
+            history[historyKey] = [];
+            await chrome.storage.local.set({ transactionHistory: history });
+            
+            // Show notification
+            this.notificationManager.show(`Transaction history cleared for ${currentNetwork.name}`, 'success');
+            
+            // Reload the display
+            await this.loadTransactionHistory();
+        } catch (error) {
+            console.error('Error clearing transaction history:', error);
+            this.notificationManager.show('Failed to clear transaction history', 'error');
         }
     }
     
@@ -1570,6 +1771,10 @@ class HeartWalletApp {
             // Update token balances for new network
             await this.updateTokenBalances();
             
+            networkProgress.updateProgress(90, 'Loading transaction history...');
+            // Reload transaction history for the new network
+            await this.loadTransactionHistory();
+            
             const currentNetwork = await this.networkCore.getCurrentNetwork();
             networkProgress.complete(`Connected to ${currentNetwork?.name || 'network'}`, true);
             
@@ -1781,46 +1986,105 @@ class HeartWalletApp {
         const tokenItem = document.createElement('div');
         tokenItem.className = 'token-item';
         
+        // Create a container for icon and name on the same line
+        const topRow = document.createElement('div');
+        topRow.className = 'token-top-row';
+        
         // Create token icon
         const tokenIcon = document.createElement('div');
         tokenIcon.className = 'token-icon';
-        tokenIcon.textContent = tokenInfo.symbol ? tokenInfo.symbol.substring(0, 3).toUpperCase() : '?';
         
-        // Create token details container
-        const tokenDetails = document.createElement('div');
-        tokenDetails.className = 'token-details';
+        // Check if token has an image
+        if (tokenInfo.image) {
+            // Create an img element for tokens with images
+            const img = document.createElement('img');
+            img.src = tokenInfo.image;
+            img.alt = tokenInfo.symbol || 'Token';
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'contain';
+            tokenIcon.appendChild(img);
+        } else {
+            // Fallback to text display
+            tokenIcon.textContent = tokenInfo.symbol ? tokenInfo.symbol.substring(0, 3).toUpperCase() : '?';
+        }
         
-        // Create token name/symbol
+        // Create token name
         const tokenName = document.createElement('span');
         tokenName.className = 'token-name';
         tokenName.textContent = `${tokenInfo.name || tokenInfo.symbol || 'Unknown'}`;
         
-        // Create token balance
-        const tokenBalance = document.createElement('span');
-        tokenBalance.className = 'token-balance';
-          // Format balance nicely
-        const balance = parseFloat(tokenInfo.balance);
-        if (balance > 0) {
-            if (balance >= 1000000) {
-                tokenBalance.textContent = `${(balance / 1000000).toFixed(2)}M ${tokenInfo.symbol}`;
-            } else if (balance >= 1000) {
-                tokenBalance.textContent = `${(balance / 1000).toFixed(2)}K ${tokenInfo.symbol}`;
-            } else if (balance >= 1) {
-                tokenBalance.textContent = `${balance.toFixed(2)} ${tokenInfo.symbol}`;
+        // Create contract address link
+        const addressLink = document.createElement('a');
+        addressLink.className = 'token-address-link';
+        addressLink.href = '#';
+        addressLink.title = tokenInfo.address; // Show full address on hover
+        
+        // Format address as 0x1234...5678
+        const shortAddress = tokenInfo.address 
+            ? `${tokenInfo.address.substring(0, 6)}...${tokenInfo.address.substring(tokenInfo.address.length - 4)}`
+            : '';
+        addressLink.textContent = shortAddress;
+        
+        // Add click handler to open block explorer
+        addressLink.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // Prevent token click handler
+            
+            // Get current network to determine correct explorer URL
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            if (!currentNetwork) return;
+            
+            let explorerUrl;
+            const chainId = parseInt(currentNetwork.chainId);
+            
+            if (chainId === 369) {
+                // PulseChain Mainnet
+                explorerUrl = `https://scan.mypinata.cloud/ipfs/bafybeidn64pd2u525lmoipjl4nh3ooa2imd7huionjsdepdsphl5slfowy/#/address/${tokenInfo.address}`;
+            } else if (chainId === 943) {
+                // PulseChain Testnet V4
+                explorerUrl = `https://scan.v4.testnet.pulsechain.com/#/token/${tokenInfo.address}`;
             } else {
-                tokenBalance.textContent = `${balance.toFixed(6)} ${tokenInfo.symbol}`;
+                // Fallback to generic address view
+                explorerUrl = `${currentNetwork.blockExplorer}#/address/${tokenInfo.address}`;
             }
-            tokenBalance.style.color = '#000'; // Normal color for balance
+            
+            window.open(explorerUrl, '_blank');
+        });
+        
+        // Add icon and name to top row
+        topRow.appendChild(tokenIcon);
+        topRow.appendChild(tokenName);
+        topRow.appendChild(addressLink);
+        
+        // Create bottom row with balance
+        const bottomRow = document.createElement('div');
+        bottomRow.className = 'token-bottom-row';
+        
+        // Format balance with 8 decimal places
+        const balance = parseFloat(tokenInfo.balance);
+        const formattedBalance = balance.toFixed(8);
+        
+        // Create separate spans for amount and symbol with padding
+        const amountSpan = document.createElement('span');
+        amountSpan.className = 'token-amount';
+        amountSpan.textContent = formattedBalance;
+        
+        const symbolSpan = document.createElement('span');
+        symbolSpan.className = 'token-symbol';
+        symbolSpan.textContent = tokenInfo.symbol || '';
+        
+        bottomRow.appendChild(amountSpan);
+        bottomRow.appendChild(symbolSpan);
+        
+        if (balance > 0) {
+            bottomRow.style.color = '#000'; // Normal color for balance
         } else {
-            tokenBalance.textContent = `0.00 ${tokenInfo.symbol}`;
-            tokenBalance.style.color = '#666'; // Muted color for zero balance
+            bottomRow.style.color = '#666'; // Muted color for zero balance
         }
         
-        tokenDetails.appendChild(tokenName);
-        tokenDetails.appendChild(tokenBalance);
-        
-        tokenItem.appendChild(tokenIcon);
-        tokenItem.appendChild(tokenDetails);
+        tokenItem.appendChild(topRow);
+        tokenItem.appendChild(bottomRow);
         
         // Add click handler for token send functionality
         tokenItem.addEventListener('click', async () => {
@@ -2052,7 +2316,20 @@ class HeartWalletApp {
         // Token icon
         const tokenIcon = document.createElement('div');
         tokenIcon.className = 'token-icon';
-        tokenIcon.textContent = tokenInfo.symbol ? tokenInfo.symbol.substring(0, 3).toUpperCase() : '?';
+        
+        // Check if token has an image
+        if (tokenInfo.image) {
+            const img = document.createElement('img');
+            img.src = tokenInfo.image;
+            img.alt = tokenInfo.symbol || 'Token';
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'contain';
+            tokenIcon.appendChild(img);
+        } else {
+            // Fallback to text display
+            tokenIcon.textContent = tokenInfo.symbol ? tokenInfo.symbol.substring(0, 3).toUpperCase() : '?';
+        }
         
         // Token details
         const tokenDetails = document.createElement('div');
@@ -2756,7 +3033,7 @@ class HeartWalletApp {
                 font-weight: bold;
                 color: #666;
             `;
-            placeholder.textContent = token.symbol.charAt(0);
+            placeholder.textContent = token.symbol.substring(0, 3).toUpperCase();
             tokenInfo.appendChild(placeholder);
         }
         
@@ -2772,8 +3049,48 @@ class HeartWalletApp {
         tokenSymbol.style.cssText = 'font-size: 0.85rem; color: #666;';
         tokenSymbol.textContent = `${token.symbol} • ${token.decimals} decimals`;
         
+        // Add contract address as clickable link
+        const tokenAddress = document.createElement('div');
+        tokenAddress.style.cssText = 'font-size: 0.8rem; margin-top: 2px;';
+        
+        const addressLink = document.createElement('a');
+        addressLink.href = '#';
+        addressLink.style.cssText = 'color: #6b413f; text-decoration: none; font-family: monospace;';
+        addressLink.textContent = `${token.address.substring(0, 6)}...${token.address.substring(token.address.length - 4)}`;
+        addressLink.title = token.address;
+        
+        addressLink.onclick = async (e) => {
+            e.preventDefault();
+            try {
+                // Get current network to determine explorer URL
+                const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+                
+                if (currentNetwork && currentNetwork.explorer) {
+                    const explorerUrl = `${currentNetwork.explorer}/#/address/${token.address}`;
+                    window.open(explorerUrl, '_blank');
+                } else {
+                    // Fallback to PulseChain mainnet explorer
+                    const explorerUrl = `https://scan.mypinata.cloud/ipfs/bafybeidn64pd2u525lmoipjl4nh3ooa2imd7huionjsdepdsphl5slfowy/#/address/${token.address}`;
+                    window.open(explorerUrl, '_blank');
+                }
+            } catch (error) {
+                console.error('Error opening explorer:', error);
+                this.notificationManager.show('Failed to open explorer', 'error');
+            }
+        };
+        
+        addressLink.onmouseover = () => {
+            addressLink.style.textDecoration = 'underline';
+        };
+        addressLink.onmouseout = () => {
+            addressLink.style.textDecoration = 'none';
+        };
+        
+        tokenAddress.appendChild(addressLink);
+        
         tokenDetails.appendChild(tokenName);
         tokenDetails.appendChild(tokenSymbol);
+        tokenDetails.appendChild(tokenAddress);
         tokenInfo.appendChild(tokenDetails);
         
         // Remove button
@@ -2841,7 +3158,23 @@ class HeartWalletApp {
         // Update modal with token info
         document.getElementById('modal-token-symbol').textContent = tokenInfo.symbol;
         document.getElementById('modal-token-symbol-amount').textContent = tokenInfo.symbol;
-        document.getElementById('modal-token-icon').textContent = tokenInfo.symbol.substring(0, 3).toUpperCase();
+        
+        // Update token icon
+        const modalTokenIcon = document.getElementById('modal-token-icon');
+        modalTokenIcon.innerHTML = ''; // Clear existing content
+        
+        if (tokenInfo.image) {
+            const img = document.createElement('img');
+            img.src = tokenInfo.image;
+            img.alt = tokenInfo.symbol || 'Token';
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'contain';
+            modalTokenIcon.appendChild(img);
+        } else {
+            modalTokenIcon.textContent = tokenInfo.symbol.substring(0, 3).toUpperCase();
+        }
+        
         document.getElementById('modal-token-balance').textContent = tokenInfo.balance || '0.00';
         
         // Store current token info for later use

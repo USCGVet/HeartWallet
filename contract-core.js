@@ -84,6 +84,14 @@ class ContractManager {
                 throw new Error('Contract not found');
             }
 
+            // Get current network chainId to ensure transaction goes to correct network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? parseInt(currentNetwork.chainId) : null;
+            
+            if (!chainId) {
+                throw new Error('Network not properly initialized');
+            }
+
             // Send write function call through background script
             return new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
@@ -92,7 +100,8 @@ class ContractManager {
                     abi: contractInfo.abi,
                     functionName: functionName,
                     params: params,
-                    value: value
+                    value: value,
+                    chainId: chainId // Explicitly set chainId to prevent network mismatch
                 }, response => {
                     if (chrome.runtime.lastError) {
                         reject(new Error(chrome.runtime.lastError.message));

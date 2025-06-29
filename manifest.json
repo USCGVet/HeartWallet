@@ -62,7 +62,9 @@
         "lib/fontawesome/webfonts/fa-regular-400.woff2",
         "lib/fontawesome/webfonts/fa-regular-400.ttf",
         "lib/fontawesome/webfonts/fa-brands-400.woff2",
-        "lib/fontawesome/webfonts/fa-brands-400.ttf"
+        "lib/fontawesome/webfonts/fa-brands-400.ttf",
+        "images/HexLogo.svg",
+        "images/PLSfavicon128.png"
       ],
       "matches": ["<all_urls>"]
     }

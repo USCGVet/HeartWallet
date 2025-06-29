@@ -63,11 +63,13 @@ class NetworkCore {
             }
             
             console.log('NetworkCore: Using networks:', networks.map(n => ({name: n.name, chainId: n.chainId})));
+            this.networks = networks; // Store for sync access
             return networks;
         } catch (error) {
             console.error('NetworkCore: Error getting saved networks:', error);
             const defaultNetworks = window.HeartWalletConstants?.DEFAULT_NETWORKS || [];
             console.log('NetworkCore: Falling back to default networks:', defaultNetworks);
+            this.networks = defaultNetworks; // Store for sync access
             return defaultNetworks;
         }
     }findNetworkByKey(networks, key) {
@@ -141,6 +143,14 @@ class NetworkCore {
 
     getCurrentNetworkKey() {
         return this.currentNetwork;
+    }
+    
+    // Synchronous version that returns the current network if already loaded
+    getCurrentNetworkSync() {
+        if (!this.networks || this.networks.length === 0) {
+            return null;
+        }
+        return this.findNetworkByKey(this.networks, this.currentNetwork);
     }
 
     getProvider() {

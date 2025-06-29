@@ -48,6 +48,22 @@ header {
     vertical-align: middle;
 }
 
+/* PLS token icon styling */
+.pls-icon {
+    width: 14px;
+    height: 14px;
+    vertical-align: middle;
+    margin-right: 4px;
+    display: inline-block;
+}
+
+.pls-icon-header {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
 header h1 {
     display: flex;
     align-items: center;
@@ -269,6 +285,33 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* Tab buttons styling */
+.tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.tab-button {
+    width: auto !important;
+    padding: 8px 16px;
+    background-color: #f0f0f0;
+    color: #666;
+    border: 1px solid #ddd;
+    font-size: 0.9rem;
+}
+
+.tab-button.active {
+    background-color: #b33a3a;
+    color: white;
+    border-color: #b33a3a;
+}
+
+.tab-button:hover:not(.active) {
+    background-color: #e0e0e0;
+    color: #333;
+}
+
 /* DASHBOARD */
 .dashboard-header {
     display: flex;
@@ -329,6 +372,43 @@ button:disabled {
     padding: 12px;
     margin-bottom: 8px;
     background-color: #f9f9f9;
+}
+
+.transaction-content {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 10px;
+}
+
+.transaction-info {
+    flex: 1;
+    cursor: pointer;
+}
+
+.transaction-delete-btn {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    flex-shrink: 0;
+}
+
+.transaction-delete-btn:hover {
+    background-color: #c82333;
+}
+
+.transaction-delete-btn i {
+    font-size: 0.9rem;
+    color: white !important;
 }
 
 .transaction-item:last-child {
@@ -413,6 +493,38 @@ button:disabled {
 
 .view-all-link:hover {
     text-decoration: underline;
+}
+
+/* Clear all transactions button */
+.clear-all-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 10px;
+    padding: 0 5px;
+}
+
+.clear-all-btn {
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background-color 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: auto;
+}
+
+.clear-all-btn:hover {
+    background-color: #5a6268;
+}
+
+.clear-all-btn i {
+    font-size: 0.9rem;
+    color: white !important;
 }
     color: #777;
 }
@@ -760,6 +872,7 @@ footer {
 
 .token-list {
     padding: 5px 0;
+    overflow: visible;
 }
 
 .no-tokens {
@@ -771,11 +884,24 @@ footer {
 
 .token-item {
     display: flex;
+    flex-direction: column;
     padding: 8px 0;
     border-bottom: 1px solid #f0f0f0;
-    align-items: center;
     cursor: pointer;
     transition: background-color 0.2s, padding 0.2s;
+}
+
+.token-top-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.token-bottom-row {
+    display: flex;
+    align-items: center;
+    font-size: 0.85rem;
+    padding-left: 42px; /* Align with text after icon (32px width + 10px margin) */
 }
 
 .token-item:hover {
@@ -791,6 +917,7 @@ footer {
 .token-icon {
     width: 32px;
     height: 32px;
+    min-width: 32px;
     border-radius: 50%;
     background-color: #f3ede7;
     color: #b33a3a;
@@ -803,21 +930,32 @@ footer {
     flex-shrink: 0;
 }
 
-.token-details {
-    flex: 1;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
 .token-name {
     font-weight: 500;
     font-size: 0.9rem;
+    margin-left: 10px;
 }
 
-.token-balance {
-    text-align: right;
-    font-size: 0.9rem;
+.token-address-link {
+    margin-left: 8px;
+    font-size: 0.8rem;
+    color: #6c757d;
+    text-decoration: none;
+    font-family: monospace;
+    transition: color 0.2s;
+}
+
+.token-address-link:hover {
+    color: #b33a3a;
+    text-decoration: underline;
+}
+
+.token-amount {
+    margin-right: 8px;
+}
+
+.token-symbol {
+    font-weight: 500;
 }
 
 /* PRC-20 Token Management Styles */
@@ -1368,8 +1506,6 @@ footer {
 }
 
 .token-list {
-    max-height: 300px;
-    overflow-y: auto;
     border: 1px solid #e0e0e0;
     border-radius: 8px;
     background: #f8f9fa;
@@ -1384,23 +1520,7 @@ footer {
     border-radius: 8px;
 }
 
-.token-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 15px;
-    border-bottom: 1px solid #e0e0e0;
-    background: white;
-    transition: all 0.2s ease;
-}
-
-.token-item:last-child {
-    border-bottom: none;
-}
-
-.token-item:hover {
-    background: #f8f9fa;
-}
+/* Duplicate token-item styles removed - see lines 842-859 for actual styles */
 
 .token-info {
     display: flex;

@@ -5,12 +5,27 @@ class TokenManager {
         this.walletCore = walletCore;
         this.tokenList = new Map();
         this.storageKey = 'heartWallet_tokens'; // Base key, will append network ID
+        
+        // Token image mappings
+        this.tokenImages = {
+            '0x2b591e99afe9f32eaa6214f7b7629768c40eeb39': 'images/HexLogo.svg', // HEX
+            '0x95b303987a60c71504d99aa1b13b4da07b0790ab': null, // PLSX - no image yet
+            '0x2fa878ab3f87cc1c9737fc071108f904c0b0c95d': null, // INC - no image yet
+            // PLS uses the native currency image
+            'native': 'images/PLSfavicon128.png' // PLS
+        };
     }
     
     // Get network-specific storage key
     getNetworkStorageKey() {
         const networkKey = this.networkCore.getCurrentNetworkKey();
         return `${this.storageKey}_${networkKey}`;
+    }
+    
+    // Get token image path
+    getTokenImage(tokenAddress) {
+        if (!tokenAddress) return null;
+        return this.tokenImages[tokenAddress.toLowerCase()] || null;
     }
 
     // Full ERC-20/PRC-20 Token ABI
@@ -33,13 +48,14 @@ class TokenManager {
             "event Transfer(address indexed from, address indexed to, uint256 value)",
             "event Approval(address indexed owner, address indexed spender, uint256 value)"
         ];
-    }    async addToken(tokenAddress, symbol, decimals) {
+    }    async addToken(tokenAddress, symbol, decimals, customName = null) {
         try {
             const provider = this.networkCore.getProvider();
             const contract = new ethers.Contract(tokenAddress, this.getTokenABI(), provider);
             
             // Verify it's a valid token contract
-            const name = await contract.name();
+            const contractName = await contract.name();
+            const name = customName || contractName; // Use custom name if provided
             const tokenSymbol = symbol || await contract.symbol();
             const tokenDecimals = decimals || await contract.decimals();
             
@@ -48,7 +64,8 @@ class TokenManager {
                 name: name,
                 symbol: tokenSymbol,
                 decimals: tokenDecimals,
-                contract: contract
+                contract: contract,
+                image: this.getTokenImage(tokenAddress)
             };
             
             this.tokenList.set(tokenAddress.toLowerCase(), tokenInfo);
@@ -111,6 +128,14 @@ class TokenManager {
             const amountBN = ethers.parseUnits(amount.toString(), tokenInfo.decimals);
             const data = contractInterface.encodeFunctionData('transfer', [recipientAddress, amountBN]);
             
+            // Get current network chainId to ensure transaction goes to correct network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? parseInt(currentNetwork.chainId) : null;
+            
+            if (!chainId) {
+                throw new Error('Network not properly initialized');
+            }
+            
             // Send transaction through background script
             return new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
@@ -119,7 +144,8 @@ class TokenManager {
                         to: tokenAddress,
                         from: wallet.address,
                         data: data,
-                        value: '0x0'
+                        value: '0x0',
+                        chainId: chainId // Explicitly set chainId to prevent network mismatch
                     }
                 }, response => {
                     if (chrome.runtime.lastError) {
@@ -157,13 +183,22 @@ class TokenManager {
             // Encode the transfer function call
             const data = this.encodeTransferData(recipientAddress, amount, tokenInfo.decimals);
             
+            // Get current network chainId to ensure transaction goes to correct network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? parseInt(currentNetwork.chainId) : null;
+            
+            if (!chainId) {
+                throw new Error('Network not properly initialized');
+            }
+            
             // Send transaction through background script
             return new Promise((resolve, reject) => {
                 const transaction = {
                     to: tokenAddress,
                     from: wallet.address,
                     data: data,
-                    value: '0x0'
+                    value: '0x0',
+                    chainId: chainId // Explicitly set chainId to prevent network mismatch
                 };
                 
                 // Add gas price if provided
@@ -214,6 +249,14 @@ class TokenManager {
                 ethers.parseUnits(amount.toString(), tokenInfo.decimals);
             const data = contractInterface.encodeFunctionData('approve', [spenderAddress, amountBN]);
             
+            // Get current network chainId to ensure transaction goes to correct network
+            const currentNetwork = this.networkCore.getCurrentNetworkSync() || await this.networkCore.getCurrentNetwork();
+            const chainId = currentNetwork ? parseInt(currentNetwork.chainId) : null;
+            
+            if (!chainId) {
+                throw new Error('Network not properly initialized');
+            }
+            
             // Send transaction through background script
             return new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
@@ -222,7 +265,8 @@ class TokenManager {
                         to: tokenAddress,
                         from: wallet.address,
                         data: data,
-                        value: '0x0'
+                        value: '0x0',
+                        chainId: chainId // Explicitly set chainId to prevent network mismatch
                     }
                 }, response => {
                     if (chrome.runtime.lastError) {
@@ -312,10 +356,9 @@ class TokenManager {
         
         if (networkKey === 369) { // PulseChain Mainnet
             defaultTokens = [
-                { address: '0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d', symbol: 'HEX', decimals: 8 },
-                { address: '0x95B303987A60C71504D99Aa1b13B4DA07b0790ab', symbol: 'PLSX', decimals: 18 },
-                { address: '0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39', symbol: 'HEX', decimals: 8 }, // HEX from Ethereum
-                { address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', symbol: 'PEPE', decimals: 18 }
+                { address: '0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d', symbol: 'INC', decimals: 8, name: 'Incentive' },
+                { address: '0x95B303987A60C71504D99Aa1b13B4DA07b0790ab', symbol: 'PLSX', decimals: 18, name: 'PulseX' },
+                { address: '0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39', symbol: 'HEX', decimals: 8, name: 'HEX' }
             ];
         } else if (networkKey === 943) { // PulseChain Testnet V4
             defaultTokens = [
@@ -327,7 +370,7 @@ class TokenManager {
             try {
                 // Only add if not already in the list
                 if (!this.tokenList.has(token.address.toLowerCase())) {
-                    await this.addToken(token.address, token.symbol, token.decimals);
+                    await this.addToken(token.address, token.symbol, token.decimals, token.name);
                 }
             } catch (error) {
                 console.error(`Failed to load default token ${token.symbol}:`, error);
@@ -438,7 +481,8 @@ class TokenManager {
                         name: tokenData.name,
                         symbol: tokenData.symbol,
                         decimals: tokenData.decimals,
-                        contract: contract
+                        contract: contract,
+                        image: this.getTokenImage(tokenData.address) // Add image path
                     };
                     
                     this.tokenList.set(tokenData.address.toLowerCase(), tokenInfo);

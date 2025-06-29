@@ -1150,6 +1150,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Add chainId if not specified
             if (!txParams.chainId) {
                 txParams.chainId = currentChainId;
+            } else {
+                // Validate that transaction chainId matches current network
+                const txChainId = parseInt(txParams.chainId);
+                if (txChainId !== currentChainId) {
+                    sendResponse({
+                        error: `Network mismatch: Transaction is for chain ${txChainId} but wallet is on chain ${currentChainId}. Please switch networks.`
+                    });
+                    return true;
+                }
             }
             
             // Validate transaction
@@ -2119,8 +2128,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const txToSign = {
                   ...confirmTxRequest.params,
                   from: message.transaction.from || confirmTxRequest.params.from,
-                  chainId: currentChainId
+                  chainId: message.transaction.chainId || confirmTxRequest.params.chainId || currentChainId
                 };
+                
+                // Validate chainId matches current network
+                const txChainId = parseInt(txToSign.chainId);
+                if (txChainId !== currentChainId) {
+                  sendResponse({
+                    success: false,
+                    error: `Network mismatch: Transaction is for chain ${txChainId} but wallet is on chain ${currentChainId}. Please switch networks.`
+                  });
+                  return true;
+                }
                 
                 // Get the current nonce if not provided
                 if (!txToSign.nonce && txToSign.nonce !== 0) {
@@ -2603,9 +2622,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 data: data,
                 value: message.value && message.value !== '0' ? 
                   ethers.parseEther(message.value).toString() : '0x0',
-                chainId: currentChainId,
+                chainId: message.chainId || currentChainId,
                 nonce: nonce
               };
+              
+              // Validate chainId matches current network
+              const txChainId = parseInt(transaction.chainId);
+              if (txChainId !== currentChainId) {
+                throw new Error(`Network mismatch: Transaction is for chain ${txChainId} but wallet is on chain ${currentChainId}. Please switch networks.`);
+              }
               
               // Estimate gas
               const gasEstimate = await provider.estimateGas(transaction);
