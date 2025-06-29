@@ -510,9 +510,14 @@ class UIManager {
             const statusSpan = document.createElement('span');
             statusSpan.className = `transaction-type ${tx.type || 'unknown'}`;
             statusSpan.textContent = tx.type || 'Unknown';
+            
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'transaction-time';
+            timeSpan.textContent = tx.timeStr || '';
 
             detailsDiv.appendChild(amountSpan);
             detailsDiv.appendChild(statusSpan);
+            detailsDiv.appendChild(timeSpan);
 
             // Add timestamp if available
             if (tx.timestamp) {

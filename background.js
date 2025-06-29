@@ -20,13 +20,13 @@ try {
 
 // Network Configurations
 const networkConfigs = {
-  // PulseChain Mainnet (Example - Verify details if needed)
+  // PulseChain Mainnet
   369: {
     networkName: "PulseChain",
     rpcUrl: "https://rpc.pulsechain.com",
     chainId: 369,
     currencySymbol: "PLS",
-    blockExplorer: "https://otter.PulseChain.com"
+    blockExplorer: "https://scan.mypinata.cloud/ipfs/bafybeidn64pd2u525lmoipjl4nh3ooa2imd7huionjsdepdsphl5slfowy/"
   },
   // PulseChain Testnet V4
   943: {
@@ -2125,6 +2125,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Get the current nonce if not provided
                 if (!txToSign.nonce && txToSign.nonce !== 0) {
                   const nonce = await provider.getTransactionCount(txToSign.from, 'latest');
+                  const pendingNonce = await provider.getTransactionCount(txToSign.from, 'pending');
+                  
+                  // Log if there might be stuck transactions
+                  if (pendingNonce > nonce) {
+                    console.warn(`Possible stuck transactions detected! Latest nonce: ${nonce}, Pending nonce: ${pendingNonce}`);
+                  }
+                  
                   txToSign.nonce = nonce;
                 }
                 
@@ -2691,60 +2698,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
           
         case "sendTransaction":
-          console.log("Processing sendTransaction from popup...");
-          (async () => {
-            try {
-              if (!globalWalletUnlocked) {
-                throw new Error('Wallet not unlocked');
-              }
-              
-              if (!keyringService) {
-                throw new Error('Keyring service not initialized');
-              }
-              
-              const provider = new ethers.JsonRpcProvider(networkConfigs[currentChainId].rpcUrl);
-              
-              // Get the current nonce
-              const nonce = await provider.getTransactionCount(message.transaction.from, 'latest');
-              
-              // Prepare transaction
-              const transaction = {
-                to: message.transaction.to,
-                from: message.transaction.from,
-                data: message.transaction.data,
-                value: message.transaction.value || '0x0',
-                chainId: currentChainId,
-                nonce: nonce
-              };
-              
-              // Estimate gas
-              const gasEstimate = await provider.estimateGas(transaction);
-              transaction.gasLimit = message.transaction.gasLimit || gasEstimate;
-              
-              // Use provided gas price or get current gas price
-              if (message.transaction.gasPrice) {
-                transaction.gasPrice = message.transaction.gasPrice;
-              } else {
-                const feeData = await provider.getFeeData();
-                transaction.gasPrice = feeData.gasPrice;
-              }
-              
-              // Sign transaction using keyring service
-              const signedTx = await keyringService.signTransaction(
-                message.transaction.from,
-                transaction
-              );
-              
-              // Send the signed transaction
-              const txResponse = await provider.broadcastTransaction(signedTx);
-              
-              sendResponse({ success: true, txHash: txResponse.hash });
-            } catch (error) {
-              console.error('Error sending transaction:', error);
-              sendResponse({ success: false, error: error.message });
-            }
-          })();
-          return true; // Async response
+          // This case is deprecated - transactions are sent via confirmTransaction
+          console.log("sendTransaction called but should use confirmTransaction instead");
+          sendResponse({ success: false, error: 'Please use transaction confirmation flow' });
+          break;
           
         case "GET_EXPLORER_URL":
           sendResponse({ url: networkConfigs[currentChainId].blockExplorer });
@@ -3412,19 +3369,40 @@ async function monitorTransaction(txHash, from, origin) {
   
   // Also store in chrome storage for persistence
   chrome.storage.local.get(['transactionHistory'], (result) => {
-    const history = result.transactionHistory || [];
-    history.unshift({
+    // Handle both old array format and new object format
+    let history = result.transactionHistory || {};
+    
+    // Convert old array format to new object format if needed
+    if (Array.isArray(history)) {
+      const newHistory = {};
+      if (history.length > 0 && from) {
+        newHistory[from] = history;
+      }
+      history = newHistory;
+    }
+    
+    // Get or create array for this address
+    const addressHistory = history[from] || [];
+    
+    // Add new transaction
+    addressHistory.unshift({
       hash: txHash,
       from: from,
+      to: '', // Will be filled in later
       origin: origin,
       timestamp: Date.now(),
       status: 'pending',
       chainId: currentChainId
     });
-    // Keep only last 50 transactions
-    if (history.length > 50) {
-      history.length = 50;
+    
+    // Keep only last 50 transactions for this address
+    if (addressHistory.length > 50) {
+      addressHistory.length = 50;
     }
+    
+    // Update history for this address
+    history[from] = addressHistory;
+    
     chrome.storage.local.set({ transactionHistory: history });
   });
   
@@ -3479,12 +3457,28 @@ async function monitorTransaction(txHash, from, origin) {
           
           // Update storage
           chrome.storage.local.get(['transactionHistory'], (result) => {
-            const history = result.transactionHistory || [];
-            const txIndex = history.findIndex(tx => tx.hash === txHash);
-            if (txIndex !== -1) {
-              history[txIndex].status = success ? 'confirmed' : 'failed';
-              history[txIndex].blockNumber = receipt.blockNumber;
-              chrome.storage.local.set({ transactionHistory: history });
+            // Handle both old array format and new object format
+            let history = result.transactionHistory || {};
+            
+            // Convert old array format to new object format if needed
+            if (Array.isArray(history)) {
+              const newHistory = {};
+              if (history.length > 0 && from) {
+                newHistory[from] = history;
+              }
+              history = newHistory;
+            }
+            
+            // Update transaction status for the correct address
+            if (history[from]) {
+              const addressHistory = history[from];
+              const txIndex = addressHistory.findIndex(tx => tx.hash === txHash);
+              if (txIndex !== -1) {
+                addressHistory[txIndex].status = success ? 'confirmed' : 'failed';
+                addressHistory[txIndex].blockNumber = receipt.blockNumber;
+                history[from] = addressHistory;
+                chrome.storage.local.set({ transactionHistory: history });
+              }
             }
           });
           

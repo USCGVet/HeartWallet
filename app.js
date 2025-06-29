@@ -115,6 +115,9 @@ class HeartWalletApp {
                 
                 // Load token balances
                 await this.updateTokenBalances();
+                
+                // Load transaction history
+                await this.loadTransactionHistory();
                 return;
             }
         } catch (error) {
@@ -832,8 +835,19 @@ class HeartWalletApp {
                         if (message.action === 'transactionConfirmationResult' && message.requestId === requestId) {
                             chrome.runtime.onMessage.removeListener(listener);
                             
-                            if (message.confirmed) {
-                                // Process the confirmed transaction
+                            if (message.confirmed && message.txHash) {
+                                // Transaction was already sent by background script
+                                const result = {
+                                    hash: message.txHash,
+                                    transaction: message.txParams
+                                };
+                                
+                                // Process the result (store in history, show notifications, etc.)
+                                this.handleTransactionSent(result, message.txParams, type, metadata)
+                                    .then(() => resolve(result))
+                                    .catch(reject);
+                            } else if (message.confirmed) {
+                                // For backwards compatibility, process normally
                                 this.processConfirmedTransaction(message.txParams, type, metadata)
                                     .then(resolve)
                                     .catch(reject);
@@ -865,23 +879,26 @@ class HeartWalletApp {
             
             // Show progress notification for blockchain operation
             progressNotification = this.notificationManager.blockchainOperation('send');
-            progressNotification.updateProgress(25, 'Creating transaction...');
+            progressNotification.updateProgress(25, 'Transaction confirmed...');
             
-            let result;
-            if (type === 'PLS Transfer') {
-                // Send native PLS
-                const amount = ethers.formatEther(txParams.value);
-                result = await this.transactionManager.sendTransaction(txParams.to, amount, txParams.gasPrice);
-            } else if (type.includes('Transfer') && metadata.tokenAddress) {
-                // Send ERC-20 token
-                progressNotification.updateProgress(50, `Sending ${metadata.tokenInfo.symbol} transaction...`);
-                result = await this.tokenManager.sendTokenWithGasPrice(
-                    metadata.tokenAddress, 
-                    metadata.recipient, 
-                    metadata.amount,
-                    txParams.gasPrice
-                );
-            }
+            // The transaction has already been sent by the background script
+            // We just need to wait for the result from the transactionConfirmationResult message
+            const result = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Transaction confirmation timeout'));
+                }, 30000); // 30 second timeout
+                
+                // Already set up in setupEventListeners to handle the response
+                this.pendingTransactionResolve = (txResult) => {
+                    clearTimeout(timeout);
+                    resolve(txResult);
+                };
+                
+                this.pendingTransactionReject = (error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                };
+            });
             
             progressNotification.updateProgress(75, 'Transaction submitted to PulseChain...');
             
@@ -901,11 +918,26 @@ class HeartWalletApp {
             
             this.uiManager.clearInputs();
             
+            // Store transaction in history
+            await this.storeTransaction({
+                hash: result.hash,
+                from: currentWallet.address,
+                to: result.transaction?.to || result.to || message.transaction.to,
+                value: result.transaction?.value || result.value || message.transaction.value,
+                status: 'pending'
+            });
+            
             // Wait for confirmation in background
             this.waitForTransactionConfirmation(result.hash);
             
             // Update balance after a delay
-            setTimeout(() => this.updateBalance(), 5000);
+            setTimeout(() => {
+                // Refresh the wallet display
+                if (this.walletCore && this.walletCore.getCurrentWallet()) {
+                    this.loadTransactionHistory().catch(console.error);
+                    this.updateTokenBalances().catch(console.error);
+                }
+            }, 5000);
             
             return result;
         } catch (error) {
@@ -920,6 +952,299 @@ class HeartWalletApp {
             throw error;
         } finally {
             this.uiManager.enableButton('send-transaction');
+        }
+    }
+    
+    /**
+     * Handle transaction that was already sent by background
+     */
+    async handleTransactionSent(result, txParams, type, metadata = {}) {
+        try {
+            // Show transaction submitted notification
+            if (type.includes('Transfer') && metadata.tokenInfo) {
+                this.notificationManager.transactionSubmitted(result.hash, 'PulseChain', {
+                    type: 'token',
+                    symbol: metadata.tokenInfo.symbol,
+                    amount: metadata.amount,
+                    recipient: metadata.recipient
+                });
+            } else {
+                this.notificationManager.transactionSubmitted(result.hash, 'PulseChain');
+            }
+            
+            this.uiManager.clearInputs();
+            
+            // Store transaction in history
+            const currentWallet = this.walletCore.getCurrentWallet();
+            await this.storeTransaction({
+                hash: result.hash,
+                from: currentWallet.address,
+                to: txParams.to,
+                value: txParams.value,
+                status: 'pending'
+            });
+            
+            // Wait for confirmation in background
+            this.waitForTransactionConfirmation(result.hash);
+            
+            // Update balance after a delay
+            setTimeout(() => {
+                if (this.walletCore && this.walletCore.getCurrentWallet()) {
+                    this.loadTransactionHistory().catch(console.error);
+                    this.updateTokenBalances().catch(console.error);
+                }
+            }, 5000);
+            
+            return result;
+        } finally {
+            this.uiManager.enableButton('send-transaction');
+        }
+    }
+    
+    /**
+     * Store transaction in history
+     */
+    async storeTransaction(txData) {
+        try {
+            const currentWallet = this.walletCore.getCurrentWallet();
+            if (!currentWallet) return;
+            
+            // Get existing history
+            const result = await chrome.storage.local.get(['transactionHistory']);
+            const history = result.transactionHistory || {};
+            const walletHistory = history[currentWallet.address] || [];
+            
+            // Add new transaction
+            const transaction = {
+                hash: txData.hash,
+                from: txData.from || currentWallet.address,
+                to: txData.to,
+                value: txData.value || '0',
+                timestamp: Date.now(),
+                type: txData.from === currentWallet.address ? 'sent' : 'received',
+                status: 'pending'
+            };
+            
+            // Add to beginning of array (most recent first)
+            walletHistory.unshift(transaction);
+            
+            // Keep only last 50 transactions
+            if (walletHistory.length > 50) {
+                walletHistory.length = 50;
+            }
+            
+            // Save back to storage
+            history[currentWallet.address] = walletHistory;
+            await chrome.storage.local.set({ transactionHistory: history });
+            
+            // Update UI
+            this.loadTransactionHistory();
+        } catch (error) {
+            console.error('Error storing transaction:', error);
+        }
+    }
+    
+    /**
+     * Format address for display (0x1234...5678)
+     */
+    formatAddress(address) {
+        if (!address) return 'Unknown';
+        return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+    }
+    
+    /**
+     * Load and display transaction history
+     */
+    async loadTransactionHistory() {
+        console.log('loadTransactionHistory: Starting...');
+        try {
+            const currentWallet = this.walletCore.getCurrentWallet();
+            console.log('loadTransactionHistory: Current wallet:', currentWallet);
+            if (!currentWallet) {
+                console.log('loadTransactionHistory: No current wallet, exiting');
+                return;
+            }
+            
+            const result = await chrome.storage.local.get(['transactionHistory']);
+            console.log('loadTransactionHistory: Storage result:', result);
+            
+            let history = result.transactionHistory || {};
+            
+            // Handle legacy format - if transactionHistory is an array, convert it
+            if (Array.isArray(history)) {
+                console.log('loadTransactionHistory: Converting legacy array format to object format');
+                // Convert array to object format
+                const newHistory = {};
+                // If we have transactions in the array, assign them to current wallet
+                if (history.length > 0) {
+                    newHistory[currentWallet.address] = history;
+                }
+                history = newHistory;
+                // Save the corrected format back to storage
+                await chrome.storage.local.set({ transactionHistory: history });
+            }
+            
+            console.log('loadTransactionHistory: Transaction history object:', history);
+            const walletHistory = history[currentWallet.address] || [];
+            console.log('loadTransactionHistory: Wallet history for', currentWallet.address, ':', walletHistory);
+            
+            // Limit to most recent 10 transactions
+            const recentTransactions = walletHistory.slice(0, 10);
+            console.log(`loadTransactionHistory: Showing ${recentTransactions.length} of ${walletHistory.length} total transactions`);
+            
+            // Format transactions for display
+            const formattedTransactions = recentTransactions.map(tx => {
+                // Format timestamp as relative time
+                const txDate = new Date(tx.timestamp);
+                const now = new Date();
+                const diffMs = now - txDate;
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+                
+                let timeStr;
+                if (diffMins < 1) {
+                    timeStr = 'Just now';
+                } else if (diffMins < 60) {
+                    timeStr = `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
+                } else if (diffHours < 24) {
+                    timeStr = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+                } else {
+                    timeStr = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+                }
+                
+                // Format value properly - handle hex strings
+                let formattedValue = '0 PLS';
+                if (tx.value) {
+                    try {
+                        // Convert hex string to BigInt if needed
+                        const valueBigInt = typeof tx.value === 'string' && tx.value.startsWith('0x') 
+                            ? BigInt(tx.value) 
+                            : BigInt(tx.value || 0);
+                        
+                        // Format to ether and truncate to reasonable precision
+                        const etherValue = ethers.formatEther(valueBigInt);
+                        const numValue = parseFloat(etherValue);
+                        
+                        // Format based on magnitude
+                        if (numValue === 0) {
+                            formattedValue = '0 PLS';
+                        } else if (numValue < 0.000001) {
+                            formattedValue = '< 0.000001 PLS';
+                        } else if (numValue < 0.01) {
+                            formattedValue = `${numValue.toFixed(6)} PLS`;
+                        } else if (numValue < 1000) {
+                            formattedValue = `${numValue.toFixed(4)} PLS`;
+                        } else {
+                            formattedValue = `${numValue.toLocaleString(undefined, { maximumFractionDigits: 2 })} PLS`;
+                        }
+                    } catch (error) {
+                        console.error('Error formatting transaction value:', error, tx.value);
+                        formattedValue = '? PLS';
+                    }
+                }
+                
+                return {
+                    hash: tx.hash,
+                    from: tx.from,
+                    to: tx.to,
+                    value: formattedValue,
+                    type: tx.type,
+                    status: tx.status,
+                    timestamp: tx.timestamp,
+                    timeStr: timeStr
+                };
+            });
+            
+            // Update UI - render transaction history directly
+            const transactionsList = document.getElementById('transactions-list');
+            if (transactionsList) {
+                transactionsList.innerHTML = '';
+                
+                if (formattedTransactions.length === 0) {
+                    transactionsList.innerHTML = '<p class="no-transactions">No transactions yet</p>';
+                } else {
+                    formattedTransactions.forEach(tx => {
+                        const txItem = document.createElement('div');
+                        txItem.className = 'transaction-item';
+                        
+                        // Format the address for display
+                        const displayAddress = this.formatAddress(tx.type === 'sent' ? tx.to : tx.from);
+                        
+                        // Transaction info
+                        const txInfo = document.createElement('div');
+                        txInfo.innerHTML = `
+                            <div class="transaction-hash">
+                                <strong>${tx.type === 'sent' ? 'Sent' : 'Received'}</strong> 
+                                <span class="transaction-amount">${tx.value}</span>
+                            </div>
+                            <div class="transaction-details">
+                                <span class="transaction-address">${tx.type === 'sent' ? 'To: ' : 'From: '}${displayAddress}</span>
+                                <span class="transaction-time">${tx.timeStr}</span>
+                            </div>
+                        `;
+                        
+                        txItem.appendChild(txInfo);
+                        txItem.classList.add('clickable');
+                        txItem.addEventListener('click', () => {
+                            this.openBlockExplorer(tx.hash);
+                        });
+                        
+                        transactionsList.appendChild(txItem);
+                    });
+                    
+                    // Add "View All" link if there are more transactions
+                    if (walletHistory.length > 10) {
+                        const viewAllDiv = document.createElement('div');
+                        viewAllDiv.className = 'view-all-transactions';
+                        
+                        const viewAllLink = document.createElement('a');
+                        viewAllLink.href = '#';
+                        viewAllLink.className = 'view-all-link';
+                        viewAllLink.textContent = `View all ${walletHistory.length} transactions`;
+                        viewAllLink.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            // For now, just log - you could expand to show all transactions
+                            console.log('View all transactions clicked');
+                            this.notificationManager.show('Full transaction history coming soon!', 'info');
+                        });
+                        
+                        viewAllDiv.appendChild(viewAllLink);
+                        transactionsList.appendChild(viewAllDiv);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading transaction history:', error);
+        }
+    }
+    
+    /**
+     * Update transaction status in history
+     */
+    async updateTransactionStatus(txHash, newStatus) {
+        try {
+            const currentWallet = this.walletCore.getCurrentWallet();
+            if (!currentWallet) return;
+            
+            const result = await chrome.storage.local.get(['transactionHistory']);
+            const history = result.transactionHistory || {};
+            const walletHistory = history[currentWallet.address] || [];
+            
+            // Find and update the transaction
+            const txIndex = walletHistory.findIndex(tx => tx.hash === txHash);
+            if (txIndex !== -1) {
+                walletHistory[txIndex].status = newStatus;
+                
+                // Save back to storage
+                history[currentWallet.address] = walletHistory;
+                await chrome.storage.local.set({ transactionHistory: history });
+                
+                // Reload the display
+                await this.loadTransactionHistory();
+            }
+        } catch (error) {
+            console.error('Error updating transaction status:', error);
         }
     }
     
@@ -1274,6 +1599,10 @@ class HeartWalletApp {
         // Ensure tokens are loaded and displayed
         await this.tokenManager.loadDefaultTokens();
         await this.updateTokenBalances();
+        
+        // Load transaction history
+        console.log('showDashboard: Loading transaction history...');
+        await this.loadTransactionHistory();
         
         // Pre-load token list in background for faster settings display
         setTimeout(() => {
@@ -2721,7 +3050,7 @@ class HeartWalletApp {
         }
     }
     
-    handleTransactionUpdate(message) {
+    async handleTransactionUpdate(message) {
         const { txHash, status, from, origin } = message;
         
         // Update UI based on transaction status
@@ -2749,9 +3078,18 @@ class HeartWalletApp {
                     }
                 }]
             );
+            
+            // Update transaction status in history
+            await this.updateTransactionStatus(txHash, 'confirmed');
+            
             // Refresh balances after confirmation
-            this.updateWalletBalance();
-            this.updateTokenBalances();
+            setTimeout(() => {
+                if (this.walletCore && this.walletCore.getCurrentWallet()) {
+                    // Reload transaction history and balances
+                    this.loadTransactionHistory().catch(console.error);
+                    this.updateTokenBalances().catch(console.error);
+                }
+            }, 2000);
         } else if (status === 'failed') {
             this.notificationManager.show(
                 `Transaction failed: ${txHash.substring(0, 10)}...`,
@@ -2792,7 +3130,8 @@ class HeartWalletApp {
         try {
             const response = await chrome.runtime.sendMessage({ action: 'GET_EXPLORER_URL' });
             if (response && response.url) {
-                window.open(`${response.url}/tx/${txHash}`, '_blank');
+                // PulseChain explorer uses #/tx/ format
+                window.open(`${response.url}#/tx/${txHash}`, '_blank');
             }
         } catch (error) {
             console.error('Error opening block explorer:', error);

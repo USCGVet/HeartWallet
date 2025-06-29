@@ -342,6 +342,78 @@ button:disabled {
 
 .transaction-date {
     font-size: 0.75rem;
+}
+
+.transaction-details {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 5px;
+}
+
+.transaction-amount {
+    font-weight: 600;
+    color: #333;
+}
+
+.transaction-type {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    text-transform: capitalize;
+}
+
+.transaction-type.sent {
+    background-color: #fee;
+    color: #c33;
+}
+
+.transaction-type.received {
+    background-color: #efe;
+    color: #3c3;
+}
+
+.transaction-type.pending {
+    background-color: #ffeaa7;
+    color: #fdcb6e;
+}
+
+.transaction-time {
+    font-size: 0.75rem;
+    color: #999;
+    margin-left: auto;
+}
+
+.transaction-hash {
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.no-transactions {
+    text-align: center;
+    color: #999;
+    padding: 20px;
+    font-style: italic;
+}
+
+.transaction-item.clickable {
+    cursor: pointer;
+}
+
+.view-all-transactions {
+    text-align: center;
+    margin-top: 10px;
+    font-size: 0.9rem;
+}
+
+.view-all-link {
+    color: #b33a3a;
+    text-decoration: none;
+}
+
+.view-all-link:hover {
+    text-decoration: underline;
+}
     color: #777;
 }
 

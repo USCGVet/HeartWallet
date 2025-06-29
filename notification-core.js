@@ -211,15 +211,21 @@ class NotificationManager {
     }
 
     // Transaction-specific notifications
-    transactionSubmitted(txHash, networkName = 'PulseChain') {
+    transactionSubmitted(txHash, networkName = 'PulseChain', options = {}) {
         const actions = [
             {
                 label: 'View on Explorer',
                 type: 'primary',
-                handler: () => {
-                    // Open block explorer - you can customize this URL
-                    const explorerUrl = `https://scan.pulsechain.com/tx/${txHash}`;
-                    window.open(explorerUrl, '_blank');
+                handler: async () => {
+                    // Get the correct explorer URL from background based on current network
+                    try {
+                        const response = await chrome.runtime.sendMessage({ action: 'GET_EXPLORER_URL' });
+                        if (response && response.url) {
+                            window.open(`${response.url}#/tx/${txHash}`, '_blank');
+                        }
+                    } catch (error) {
+                        console.error('Error opening block explorer:', error);
+                    }
                 },
                 dismiss: false
             }
@@ -238,9 +244,16 @@ class NotificationManager {
             {
                 label: 'View on Explorer',
                 type: 'primary',
-                handler: () => {
-                    const explorerUrl = `https://scan.pulsechain.com/tx/${txHash}`;
-                    window.open(explorerUrl, '_blank');
+                handler: async () => {
+                    // Get the correct explorer URL from background based on current network
+                    try {
+                        const response = await chrome.runtime.sendMessage({ action: 'GET_EXPLORER_URL' });
+                        if (response && response.url) {
+                            window.open(`${response.url}#/tx/${txHash}`, '_blank');
+                        }
+                    } catch (error) {
+                        console.error('Error opening block explorer:', error);
+                    }
                 },
                 dismiss: false
             }
@@ -332,9 +345,16 @@ class NotificationManager {
             {
                 label: 'View on Explorer',
                 type: 'primary',
-                handler: () => {
-                    const explorerUrl = `https://scan.pulsechain.com/tx/${txHash}`;
-                    window.open(explorerUrl, '_blank');
+                handler: async () => {
+                    // Get the correct explorer URL from background based on current network
+                    try {
+                        const response = await chrome.runtime.sendMessage({ action: 'GET_EXPLORER_URL' });
+                        if (response && response.url) {
+                            window.open(`${response.url}#/tx/${txHash}`, '_blank');
+                        }
+                    } catch (error) {
+                        console.error('Error opening block explorer:', error);
+                    }
                 },
                 dismiss: false
             }

@@ -31,23 +31,9 @@ class TransactionManager {
                     transaction.gasLimit = gasLimit.toString();
                 }
                 
-                chrome.runtime.sendMessage({
-                    action: 'sendTransaction',
-                    transaction: transaction
-                }, response => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                        return;
-                    }
-                    if (response && response.success) {
-                        resolve({
-                            hash: response.txHash,
-                            transaction: { hash: response.txHash }
-                        });
-                    } else {
-                        reject(new Error(response?.error || 'Failed to send transaction'));
-                    }
-                });
+                // Transactions are now sent via the confirmation flow
+                // This method should not be called directly anymore
+                reject(new Error('Direct transaction sending is deprecated. Please use the transaction confirmation flow.'));
             });
         } catch (error) {
             console.error('Error sending transaction:', error);
