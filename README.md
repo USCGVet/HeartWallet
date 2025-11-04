@@ -269,10 +269,15 @@ MIT License - See LICENSE file
 ## Support
 
 **GitHub**: https://github.com/USCGVet/HeartWallet
+
 **Issues**: Report bugs via GitHub Issues
+
 **Telegram**: https://t.me/USCG_Vet_Chat
+
 **X (Twitter)**: https://x.com/uscgvet5555
+
 **Email**: uscg_vet@protonmail.com
+
 
 ## Contributing
 
