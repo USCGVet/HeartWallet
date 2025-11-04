@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "HeartWallet",
+  "version": "2.0.0",
+  "description": "Independent cryptocurrency wallet for PulseChain & Ethereum. No gatekeepers.",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inpage.js",
+        "assets/logos/hex.png",
+        "assets/logos/plsx.png",
+        "assets/logos/inc.svg",
+        "assets/logos/savant-192.png",
+        "assets/logos/hexrewards-1000.png",
+        "assets/logos/tkr.svg",
+        "assets/logos/jdai.svg",
+        "assets/logos/ricky.jpg",
+        "assets/logos/pls.png",
+        "assets/logos/heart.png",
+        "assets/logos/eth.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "permissions": [
+    "storage",
+    "notifications"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

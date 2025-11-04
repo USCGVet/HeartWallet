@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HeartWallet</title>
+  <script type="module" crossorigin src="/popup.js"></script>
+  <link rel="modulepreload" crossorigin href="/rpc.js">
+  <link rel="stylesheet" crossorigin href="/popup.css">
+</head>
+<body>
+
+  <!-- Setup Screen (First time users) -->
+  <div id="screen-setup" class="hidden">
+    <div class="container">
+      <h1 class="text-center glow">♥ HEARTWALLET v2.0.0</h1>
+      <p class="text-center text-dim mb-3">Independent. Secure. Simple.</p>
+
+      <div class="button-group">
+        <button id="btn-create-wallet" class="btn-primary">CREATE NEW WALLET</button>
+      </div>
+      <div class="button-group">
+        <button id="btn-import-wallet">IMPORT EXISTING WALLET</button>
+      </div>
+
+      <!-- Network Selector -->
+      <div class="network-selector mt-3">
+        <span class="text-dim" style="font-size: 11px;">NETWORK:</span>
+        <select id="network-select-setup">
+          <option value="pulsechainTestnet">PulseChain Testnet V4</option>
+          <option value="pulsechain">PulseChain Mainnet</option>
+          <option value="ethereum">Ethereum Mainnet</option>
+          <option value="sepolia">Sepolia Testnet</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Wallet Screen -->
+  <div id="screen-create" class="hidden">
+    <div class="header">
+      <div class="header-title">CREATE NEW WALLET</div>
+      <button id="btn-back-from-create" class="header-btn">←</button>
+    </div>
+
+    <!-- Network Display -->
+    <div class="container" style="padding-bottom: 8px; padding-top: 8px; border-bottom: 1px solid var(--terminal-border-dim);">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="text-dim" style="font-size: 11px;">NETWORK:</span>
+        <span id="network-display-create" class="text-bright" style="font-size: 12px;">PulseChain Testnet V4</span>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="form-group">
+        <label class="form-label">Your Secret Recovery Phrase</label>
+        <div class="panel">
+          <div id="mnemonic-display" class="text-center" style="word-spacing: 8px; line-height: 1.8;">
+            <!-- Mnemonic will be displayed here -->
+          </div>
+        </div>
+        <p class="form-hint text-warning">⚠️ Write this down and store it safely. You'll need it to recover your wallet.</p>
+      </div>
+
+      <div class="form-group">
+        <div class="panel" style="border-color: var(--terminal-warning); background: var(--terminal-bg);">
+          <p class="text-warning" style="font-size: 11px; margin-bottom: 12px; line-height: 1.4;">
+            ⚠️ Write down your recovery phrase on paper and store it safely. This is the ONLY way to recover your wallet if you forget your password or lose access. Never share it with anyone!
+          </p>
+
+          <label class="form-label" style="color: var(--terminal-warning); font-weight: bold; margin-bottom: 8px;">Verify your backup:</label>
+          <p class="form-hint" style="margin-bottom: 8px;">To confirm you've written it down correctly, please enter these words from your recovery phrase:</p>
+
+          <div style="display: grid; gap: 8px;">
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-1-num">1</span>:</label>
+              <input type="text" id="verify-word-1" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-2-num">6</span>:</label>
+              <input type="text" id="verify-word-2" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-3-num">12</span>:</label>
+              <input type="text" id="verify-word-3" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+          </div>
+          <p id="verification-error" class="text-danger hidden" style="font-size: 11px; margin-top: 8px;"></p>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password-create">Password</label>
+        <input type="password" id="password-create" placeholder="Enter password" />
+        <p class="form-hint">Min 12 characters, 1 uppercase, 1 lowercase, 1 number, 1 special character</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password-confirm">Confirm Password</label>
+        <input type="password" id="password-confirm" placeholder="Confirm password" />
+      </div>
+
+      <div id="create-error" class="form-error hidden"></div>
+
+      <div class="button-group">
+        <button id="btn-create-submit" class="btn-primary" disabled>CREATE WALLET</button>
+        <button id="btn-cancel-create">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import Wallet Screen -->
+  <div id="screen-import" class="hidden">
+    <div class="header">
+      <div class="header-title">IMPORT WALLET</div>
+      <button id="btn-back-from-import" class="header-btn">←</button>
+    </div>
+
+    <!-- Network Display -->
+    <div class="container" style="padding-bottom: 8px; padding-top: 8px; border-bottom: 1px solid var(--terminal-border-dim);">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="text-dim" style="font-size: 11px;">NETWORK:</span>
+        <span id="network-display-import" class="text-bright" style="font-size: 12px;">PulseChain Testnet V4</span>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="form-group">
+        <label class="form-label" for="import-method">Import Method</label>
+        <select id="import-method">
+          <option value="mnemonic">12-word Recovery Phrase</option>
+          <option value="privatekey">Private Key</option>
+        </select>
+      </div>
+
+      <div id="import-mnemonic-group" class="form-group">
+        <label class="form-label" for="import-mnemonic">Recovery Phrase</label>
+        <textarea id="import-mnemonic" rows="3" placeholder="Enter your 12-word recovery phrase"></textarea>
+      </div>
+
+      <div id="import-privatekey-group" class="form-group hidden">
+        <label class="form-label" for="import-privatekey">Private Key</label>
+        <input type="password" id="import-privatekey" placeholder="Enter your private key (with or without 0x)" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password-import">Password</label>
+        <input type="password" id="password-import" placeholder="Enter password" />
+        <p class="form-hint">Create a password to encrypt your wallet</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password-import-confirm">Confirm Password</label>
+        <input type="password" id="password-import-confirm" placeholder="Confirm password" />
+      </div>
+
+      <div id="import-error" class="form-error hidden"></div>
+
+      <div class="button-group">
+        <button id="btn-import-submit" class="btn-primary">IMPORT WALLET</button>
+        <button id="btn-cancel-import">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unlock Screen -->
+  <div id="screen-unlock" class="hidden">
+    <div class="container">
+      <h1 class="text-center glow mb-3">♥ HEARTWALLET v2.0.0</h1>
+      <p class="text-center text-dim mb-3">Wallet Locked</p>
+
+      <div class="form-group">
+        <label class="form-label" for="password-unlock">Password</label>
+        <input type="password" id="password-unlock" placeholder="Enter password" autofocus />
+      </div>
+
+      <div id="unlock-error" class="form-error hidden"></div>
+
+      <div class="button-group">
+        <button id="btn-unlock" class="btn-primary">UNLOCK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Dashboard -->
+  <div id="screen-dashboard" class="hidden">
+    <div class="header">
+      <div class="header-title">♥ HEARTWALLET</div>
+      <div class="header-actions">
+        <button id="btn-refresh" class="header-btn" title="Refresh">↻</button>
+        <button id="btn-settings" class="header-btn" title="Settings">⚙</button>
+        <button id="btn-lock" class="header-btn" title="Lock">🔒</button>
+      </div>
+    </div>
+
+    <div class="container">
+      <!-- Network Selector -->
+      <div class="network-selector mb-2">
+        <span class="text-dim" style="font-size: 11px;">NETWORK:</span>
+        <div style="position: relative; flex: 1;">
+          <div id="network-select-custom" style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); cursor: pointer; position: relative;">
+            <img id="network-selector-logo" src="" alt="" style="width: 20px; height: 20px; display: none;" />
+            <span id="network-selected-text" style="flex: 1;">PulseChain Testnet V4</span>
+            <span style="font-size: 10px;">▼</span>
+          </div>
+          <div id="network-dropdown-menu" class="hidden" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--terminal-bg); border: 1px solid var(--terminal-border); border-top: none; z-index: 1000; max-height: 200px; overflow-y: auto;">
+            <div class="network-option" data-network="pulsechainTestnet" style="display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; border-bottom: 1px solid var(--terminal-border);">
+              <img src="" data-logo="pls.png" style="width: 20px; height: 20px;" />
+              <span>PulseChain Testnet V4</span>
+            </div>
+            <div class="network-option" data-network="pulsechain" style="display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; border-bottom: 1px solid var(--terminal-border);">
+              <img src="" data-logo="pls.png" style="width: 20px; height: 20px;" />
+              <span>PulseChain Mainnet</span>
+            </div>
+            <div class="network-option" data-network="ethereum" style="display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; border-bottom: 1px solid var(--terminal-border);">
+              <img src="" data-logo="eth.png" style="width: 20px; height: 20px;" />
+              <span>Ethereum Mainnet</span>
+            </div>
+            <div class="network-option" data-network="sepolia" style="display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer;">
+              <img src="" data-logo="eth.png" style="width: 20px; height: 20px;" />
+              <span>Sepolia Testnet</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wallet Selector -->
+      <div class="network-selector mb-2">
+        <span class="text-dim" style="font-size: 11px;">WALLET:</span>
+        <select id="wallet-select">
+          <option value="">Loading wallets...</option>
+        </select>
+      </div>
+
+      <!-- Balance Display -->
+      <div class="balance-box">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <img id="network-logo" src="" alt="Network" style="width: 48px; height: 48px; display: none;" />
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div class="balance-label">BALANCE</div>
+            <div class="balance-label" id="balance-symbol">PLS</div>
+          </div>
+        </div>
+        <div class="balance-amount" id="balance-amount" title="">0.00000000</div>
+        <div id="balance-usd" style="font-size: 16px; color: var(--terminal-fg-dim); margin-top: 4px; text-align: center;">—</div>
+        <div id="price-loading" class="hidden" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--terminal-fg-dim);">
+          <div class="loading-spinner"></div>
+          <span>Loading prices...</span>
+        </div>
+      </div>
+
+      <!-- Address Display -->
+      <div class="form-group">
+        <label class="form-label">Address</label>
+        <div class="address-display">
+          <div class="address-text" id="wallet-address">0x0000...0000</div>
+          <button class="copy-btn" id="btn-copy-address">COPY</button>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="button-group">
+        <button id="btn-send">SEND</button>
+        <button id="btn-receive">RECEIVE</button>
+        <button id="btn-tokens">TOKENS</button>
+      </div>
+
+      <!-- Transaction History Button -->
+      <div class="mt-2">
+        <button id="btn-tx-history" style="width: 100%; padding: 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); color: var(--terminal-fg); cursor: pointer; font-family: var(--font-mono);">
+          📜 TRANSACTION HISTORY
+        </button>
+      </div>
+
+      <!-- Pending Transactions Indicator -->
+      <div id="pending-tx-indicator" class="hidden mt-2" style="background: var(--terminal-warning); color: #000; padding: 8px; text-align: center; cursor: pointer; border-radius: 4px;">
+        <span id="pending-tx-text">⚠️ 0 Pending Transactions</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send Screen -->
+  <div id="screen-send" class="hidden">
+    <div class="header">
+      <div class="header-title">SEND</div>
+      <button id="btn-back-from-send" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px;">From</p>
+        <p style="font-family: var(--font-mono); font-size: 12px; word-break: break-all;" id="send-from-address">
+          0x0000...0000
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="form-group">
+          <label class="form-label">Asset</label>
+          <select id="send-asset-select" class="form-control">
+            <option value="native">Native (PLS)</option>
+          </select>
+        </div>
+
+        <p class="text-dim mt-2" style="font-size: 11px;">
+          Available: <span id="send-available-balance" style="cursor: help;" title="">0</span> <span id="send-balance-symbol">tPLS</span>
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="form-group">
+          <label class="form-label">Recipient Address</label>
+          <input type="text" id="send-to-address" class="form-control" placeholder="0x..." />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Amount</label>
+          <input type="text" id="send-amount" class="form-control" placeholder="0.0" />
+          <button id="btn-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="send-password" class="form-control" placeholder="Enter password" />
+        </div>
+      </div>
+
+      <p id="send-error" class="text-danger text-center hidden"></p>
+
+      <div class="button-group mt-3">
+        <button id="btn-confirm-send" class="btn-primary">SEND</button>
+        <button id="btn-cancel-send" class="btn-secondary">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Receive Screen -->
+  <div id="screen-receive" class="hidden">
+    <div class="header">
+      <div class="header-title">RECEIVE</div>
+      <button id="btn-back-from-receive" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <div class="panel text-center">
+        <p class="text-dim mb-2" style="font-size: 11px;">Your Wallet Address</p>
+        <p style="font-family: var(--font-mono); font-size: 12px; word-break: break-all; margin-bottom: 16px;" id="receive-address">
+          0x0000...0000
+        </p>
+        <button id="btn-copy-receive-address" class="btn-primary">COPY ADDRESS</button>
+      </div>
+
+      <div class="panel text-center">
+        <p class="text-dim mb-2" style="font-size: 11px;">QR Code</p>
+        <canvas id="receive-qr-canvas" style="margin: 0 auto; display: block;"></canvas>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim text-center" style="font-size: 10px;">
+          Share this address to receive <span id="receive-network-symbol">tPLS</span> on <span id="receive-network-name">PulseChain Testnet V4</span>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tokens Screen -->
+  <div id="screen-tokens" class="hidden">
+    <div class="header">
+      <div class="header-title">TOKENS</div>
+      <button id="btn-back-from-tokens" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <!-- Add Token Button -->
+      <div class="button-group mb-2">
+        <button id="btn-add-custom-token" class="btn-primary">+ ADD TOKEN</button>
+      </div>
+
+      <!-- Loading Indicator -->
+      <div id="tokens-loading" class="loading-overlay">
+        <div class="loading-spinner large"></div>
+        <span>Loading tokens...</span>
+      </div>
+
+      <!-- Default Tokens Section -->
+      <div class="panel" id="default-tokens-panel">
+        <div class="panel-header">Default Tokens</div>
+        <div id="default-tokens-list" style="padding: 8px;">
+          <!-- Default tokens will be populated here -->
+        </div>
+      </div>
+
+      <!-- Custom Tokens Section -->
+      <div class="panel" id="custom-tokens-panel">
+        <div class="panel-header">Custom Tokens</div>
+        <div id="custom-tokens-list" style="padding: 8px;">
+          <p class="text-center text-dim" style="font-size: 11px; padding: 16px;">No custom tokens added</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Token Details Screen -->
+  <div id="screen-token-details" class="hidden">
+    <div class="header">
+      <div class="header-title" id="token-details-title">TOKEN</div>
+      <button id="btn-back-from-token-details" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <!-- Token Info -->
+      <div class="panel">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <div id="token-details-logo-container"></div>
+          <div style="flex: 1;">
+            <h2 style="margin: 0; font-size: 18px;" id="token-details-name">Token Name</h2>
+            <p class="text-dim" style="margin: 4px 0 0 0; font-size: 13px;" id="token-details-symbol">SYMBOL</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Balance & Value -->
+      <div class="panel">
+        <div class="panel-header">Balance</div>
+        <div style="text-align: center; padding: 16px 0;">
+          <p style="font-size: 24px; font-weight: bold; margin: 0;" id="token-details-balance">0.00</p>
+          <p class="text-dim" style="font-size: 14px; margin: 8px 0 0 0;" id="token-details-balance-usd">$0.00</p>
+        </div>
+        <div style="border-top: 1px solid var(--terminal-border); padding-top: 12px; margin-top: 12px;">
+          <p class="text-dim" style="font-size: 11px; margin: 0;">Current Price</p>
+          <p style="font-size: 16px; font-weight: bold; margin: 4px 0 0 0;" id="token-details-price">$0.00</p>
+        </div>
+      </div>
+
+      <!-- Links -->
+      <div class="panel" id="token-details-links-panel">
+        <div class="panel-header">Links</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <a id="token-details-home-link" class="hidden" target="_blank" style="color: var(--terminal-accent); text-decoration: none; font-size: 12px; display: flex; align-items: center; gap: 8px;">
+            <span>🏠</span>
+            <span>Homepage</span>
+          </a>
+          <a id="token-details-dex-link" class="hidden" target="_blank" style="color: var(--terminal-accent); text-decoration: none; font-size: 12px; display: flex; align-items: center; gap: 8px;">
+            <span>📊</span>
+            <span>DexScreener</span>
+          </a>
+          <a id="token-details-sourcify-link" target="_blank" style="color: var(--terminal-accent); text-decoration: none; font-size: 12px; display: flex; align-items: center; gap: 8px;">
+            <span>📜</span>
+            <span>View Contract (Sourcify)</span>
+          </a>
+          <button id="token-details-copy-address" style="background: none; border: 1px solid var(--terminal-border); color: var(--terminal-fg); cursor: pointer; font-family: var(--font-mono); font-size: 11px; padding: 8px; text-align: left; display: flex; align-items: center; gap: 8px;">
+            <span>📋</span>
+            <span id="token-details-address-short">0x0000...0000</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Token Management (for default tokens) -->
+      <div class="panel" id="token-details-management-panel">
+        <div class="panel-header">Manage Token</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
+          <span style="font-size: 13px;">Show in token list</span>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="token-details-enable-toggle" />
+            <span id="token-details-enable-label" style="font-size: 12px;">Enabled</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Send Form -->
+      <div class="panel">
+        <div class="panel-header">Send Token</div>
+        <div class="form-group">
+          <label class="form-label">Recipient Address</label>
+          <input type="text" id="token-details-recipient" class="form-control" placeholder="0x..." />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Amount</label>
+          <input type="text" id="token-details-amount" class="form-control" placeholder="0.0" />
+          <button id="btn-token-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="token-details-password" class="form-control" placeholder="Enter password" />
+        </div>
+        <p id="token-details-send-error" class="text-danger text-center hidden"></p>
+        <div class="button-group mt-3">
+          <button id="btn-token-send" class="btn-primary">SEND</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Screen -->
+  <div id="screen-settings" class="hidden">
+    <div class="header">
+      <div class="header-title">SETTINGS</div>
+      <button id="btn-back-from-settings" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <div class="panel">
+        <div class="panel-header">Security</div>
+        <div class="form-group">
+          <label class="form-label" for="setting-autolock">Auto-lock</label>
+          <select id="setting-autolock">
+            <option value="5">5 minutes</option>
+            <option value="15" selected>15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">60 minutes</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="setting-max-gas-price">Max gas price (Gwei)</label>
+          <select id="setting-max-gas-price">
+            <option value="100">100 Gwei</option>
+            <option value="500">500 Gwei</option>
+            <option value="1000" selected>1000 Gwei</option>
+            <option value="2000">2000 Gwei</option>
+            <option value="5000">5000 Gwei</option>
+            <option value="10000">10000 Gwei (extreme)</option>
+          </select>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Protects against excessive gas fees</p>
+        </div>
+        <button id="btn-view-seed" class="btn btn-small">VIEW SEED PHRASE</button>
+        <button id="btn-export-key" class="btn btn-small">EXPORT PRIVATE KEY</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Wallets</div>
+        <p class="text-dim mb-2" style="font-size: 11px;">
+          Add, remove, or switch between wallets. All wallets use the same password.
+        </p>
+        <button id="btn-manage-wallets" class="btn btn-primary btn-small">MANAGE WALLETS</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Display</div>
+        <div class="form-group">
+          <label class="form-label" for="setting-decimals">Decimal places</label>
+          <select id="setting-decimals">
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="6">6</option>
+            <option value="8" selected>8</option>
+            <option value="18">18</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="setting-theme">Theme</label>
+          <select id="setting-theme">
+            <option value="high-contrast" selected>Hacker Vision</option>
+            <option value="professional">Bland Mode</option>
+            <option value="amber">Retro Toaster</option>
+            <option value="cga">80s Magenta</option>
+            <option value="classic">Nuclear Waste</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Network</div>
+        <div class="form-group">
+          <input type="checkbox" id="setting-show-testnets" checked />
+          <label for="setting-show-testnets">Show test networks</label>
+        </div>
+        <button id="btn-network-settings" class="btn btn-primary btn-small">NETWORK SETTINGS</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">About</div>
+        <p>HeartWallet v2.0.0</p>
+        <p class="text-dim mt-1" style="font-size: 11px;">
+          Independent cryptocurrency wallet for PulseChain & Ethereum
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network Settings Screen -->
+  <div id="screen-network-settings" class="hidden">
+    <div class="header">
+      <div class="header-title">NETWORK SETTINGS</div>
+      <button id="btn-back-from-network-settings" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <p class="text-dim mb-2" style="font-size: 11px;">
+        Configure RPC endpoints and block explorer URLs for each network.
+      </p>
+
+      <!-- PulseChain Testnet -->
+      <div class="panel">
+        <div class="panel-header">PulseChain Testnet V4</div>
+        <div class="form-group">
+          <label class="form-label">RPC Endpoint</label>
+          <input type="text" id="rpc-pulsechainTestnet" class="form-control" value="https://rpc.v4.testnet.pulsechain.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Block Explorer Base URL</label>
+          <input type="text" id="explorer-pulsechainTestnet" class="form-control" value="https://scan.v4.testnet.pulsechain.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Transaction Path Pattern</label>
+          <input type="text" id="explorer-tx-pulsechainTestnet" class="form-control" value="/tx/{hash}" placeholder="/tx/{hash}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {hash} as placeholder</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address Path Pattern</label>
+          <input type="text" id="explorer-addr-pulsechainTestnet" class="form-control" value="/address/{address}" placeholder="/address/{address}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {address} as placeholder</p>
+        </div>
+      </div>
+
+      <!-- PulseChain Mainnet -->
+      <div class="panel">
+        <div class="panel-header">PulseChain Mainnet</div>
+        <div class="form-group">
+          <label class="form-label">RPC Endpoint</label>
+          <input type="text" id="rpc-pulsechain" class="form-control" value="https://rpc.pulsechain.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Block Explorer Base URL</label>
+          <input type="text" id="explorer-pulsechain" class="form-control" value="https://scan.mypinata.cloud/ipfs/bafybeienxyoyrhn5tswclvd3gdjy5mtkkwmu37aqtml6onbf7xnb3o22pe/" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Transaction Path Pattern</label>
+          <input type="text" id="explorer-tx-pulsechain" class="form-control" value="#/tx/{hash}" placeholder="#/tx/{hash}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {hash} as placeholder</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address Path Pattern</label>
+          <input type="text" id="explorer-addr-pulsechain" class="form-control" value="#/address/{address}" placeholder="#/address/{address}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {address} as placeholder</p>
+        </div>
+      </div>
+
+      <!-- Ethereum -->
+      <div class="panel">
+        <div class="panel-header">Ethereum Mainnet</div>
+        <div class="form-group">
+          <label class="form-label">RPC Endpoint</label>
+          <input type="text" id="rpc-ethereum" class="form-control" value="https://eth.llamarpc.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Block Explorer Base URL</label>
+          <input type="text" id="explorer-ethereum" class="form-control" value="https://etherscan.io" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Transaction Path Pattern</label>
+          <input type="text" id="explorer-tx-ethereum" class="form-control" value="/tx/{hash}" placeholder="/tx/{hash}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {hash} as placeholder</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address Path Pattern</label>
+          <input type="text" id="explorer-addr-ethereum" class="form-control" value="/address/{address}" placeholder="/address/{address}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {address} as placeholder</p>
+        </div>
+      </div>
+
+      <!-- Sepolia -->
+      <div class="panel">
+        <div class="panel-header">Sepolia Testnet</div>
+        <div class="form-group">
+          <label class="form-label">RPC Endpoint</label>
+          <input type="text" id="rpc-sepolia" class="form-control" value="https://rpc.sepolia.org" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Block Explorer Base URL</label>
+          <input type="text" id="explorer-sepolia" class="form-control" value="https://sepolia.etherscan.io" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Transaction Path Pattern</label>
+          <input type="text" id="explorer-tx-sepolia" class="form-control" value="/tx/{hash}" placeholder="/tx/{hash}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {hash} as placeholder</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address Path Pattern</label>
+          <input type="text" id="explorer-addr-sepolia" class="form-control" value="/address/{address}" placeholder="/address/{address}" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Use {address} as placeholder</p>
+        </div>
+      </div>
+
+      <div class="button-group mt-2">
+        <button id="btn-save-network-settings" class="btn-primary">SAVE SETTINGS</button>
+        <button id="btn-reset-network-settings" class="btn">RESET TO DEFAULTS</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connection Approval Screen -->
+  <div id="screen-connection-approval" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Connection Request</h1>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning);">
+        <p class="text-center mb-2" style="font-size: 13px;">
+          <strong id="connection-site-origin">website.com</strong>
+        </p>
+        <p class="text-center text-dim" style="font-size: 11px;">
+          wants to connect to your wallet
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px;">
+          This site will be able to:
+        </p>
+        <ul style="list-style: none; padding-left: 0; font-size: 11px; line-height: 1.8;">
+          <li>✓ View your wallet address</li>
+          <li>✓ Request transaction approval</li>
+          <li>✓ Request message signatures</li>
+        </ul>
+        <p class="text-warning mt-2" style="font-size: 10px;">
+          ⚠️ Only connect to sites you trust
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">Active Wallet:</p>
+        <p style="font-family: var(--font-mono); font-size: 12px; word-break: break-all;" id="connection-wallet-address">
+          0x0000...0000
+        </p>
+      </div>
+
+      <div class="button-group mt-3">
+        <button id="btn-approve-connection" class="btn-primary">CONNECT</button>
+        <button id="btn-reject-connection" class="btn-danger">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transaction Approval Screen -->
+  <div id="screen-transaction-approval" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Transaction Request</h1>
+      </div>
+
+      <!-- Approval Form (hidden after approval) -->
+      <div id="tx-approval-form">
+        <div class="panel" style="border-color: var(--terminal-warning);">
+          <p class="text-center mb-2" style="font-size: 13px;">
+            <strong id="tx-site-origin">website.com</strong>
+          </p>
+          <p class="text-center text-dim" style="font-size: 11px;">
+            wants to send a transaction
+          </p>
+        </div>
+
+        <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">From:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-from-address">
+          0x0000...0000
+        </p>
+
+        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">To:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-to-address">
+          0x0000...0000
+        </p>
+
+        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">Value:</p>
+        <p style="font-size: 13px;" id="tx-value">0 tPLS</p>
+
+        <div id="tx-data-section" class="mt-2 hidden">
+          <p class="text-dim mb-1" style="font-size: 11px;">Data:</p>
+          <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; max-height: 80px; overflow-y: auto;" id="tx-data">
+            0x
+          </p>
+        </div>
+      </div>
+
+      <!-- Gas Price Selector -->
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Gas Price</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+          <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+            <input type="radio" name="gas-speed" value="slow" />
+            <div style="flex: 1;">
+              <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Slow</div>
+              <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="gas-slow-price">-- Gwei</div>
+            </div>
+          </label>
+
+          <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+            <input type="radio" name="gas-speed" value="normal" checked />
+            <div style="flex: 1;">
+              <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Normal</div>
+              <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="gas-normal-price">-- Gwei</div>
+            </div>
+          </label>
+
+          <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+            <input type="radio" name="gas-speed" value="fast" />
+            <div style="flex: 1;">
+              <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Fast</div>
+              <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="gas-fast-price">-- Gwei</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="radio" name="gas-speed" value="custom" id="gas-custom-radio" />
+            <span>Custom Gas Price</span>
+          </label>
+          <div id="custom-gas-input-container" class="hidden">
+            <input type="number" id="tx-custom-gas-price" class="form-control" placeholder="Enter gas price in Gwei" step="0.01" min="0" />
+          </div>
+        </div>
+
+        <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
+          <div>Estimated Gas: <span id="tx-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
+          <div>Max Fee: <span id="tx-max-fee" style="color: var(--terminal-fg);">--</span></div>
+        </div>
+      </div>
+
+      <!-- Advanced: Nonce Control -->
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Advanced</p>
+
+        <div style="margin-bottom: 12px;">
+          <p class="text-dim" style="font-size: 10px;">Transaction Nonce: <span id="tx-current-nonce" style="color: var(--terminal-fg); font-weight: bold;">--</span></p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="tx-custom-nonce-checkbox" />
+            <span style="font-size: 11px;">Custom Nonce (Replace Stuck TX)</span>
+          </label>
+          <div id="custom-nonce-input-container" class="hidden">
+            <input type="number" id="tx-custom-nonce" class="form-control" placeholder="Enter nonce" step="1" min="0" style="margin-top: 6px;" />
+            <p style="font-size: 10px; color: var(--terminal-warning); margin-top: 4px; margin-bottom: 0;">
+              ⚠️ Use same nonce as stuck transaction with higher gas price to replace it
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="border: 2px solid var(--terminal-warning); background: var(--terminal-bg-secondary);">
+        <div class="form-group">
+          <label class="form-label" style="color: var(--terminal-warning); font-weight: bold;">⚠️ Password Required</label>
+          <input type="password" id="tx-password" class="form-control" placeholder="Enter password to confirm transaction" style="border: 2px solid var(--terminal-warning); background: var(--terminal-bg);" />
+          <p style="font-size: 10px; color: var(--terminal-warning); margin-top: 6px; margin-bottom: 0;">
+            Enter your wallet password to approve this transaction
+          </p>
+        </div>
+      </div>
+
+      <p id="tx-error" class="text-danger text-center hidden"></p>
+
+      <div class="button-group mt-3" id="tx-approval-buttons">
+        <button id="btn-approve-transaction" class="btn-primary">CONFIRM</button>
+        <button id="btn-reject-transaction" class="btn-danger">REJECT</button>
+      </div>
+      </div><!-- end tx-approval-form -->
+
+      <!-- Transaction Status (shown after approval) -->
+      <div id="tx-status-section" class="hidden">
+        <div class="panel text-center" style="border-color: var(--terminal-success);">
+          <p style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">✅ Transaction Sent!</p>
+          <p class="text-dim" style="font-size: 11px;">Hash:</p>
+          <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; margin-bottom: 12px;" id="tx-status-hash">0x000...000</p>
+          <button id="btn-tx-status-explorer" class="btn-small">VIEW ON EXPLORER</button>
+        </div>
+
+        <div class="panel text-center" id="tx-status-indicator">
+          <p style="font-size: 14px; font-weight: bold;" id="tx-status-message">⏳ Waiting for confirmation...</p>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;" id="tx-status-details">This usually takes 10-30 seconds</p>
+        </div>
+
+        <!-- Pending actions (only shown while pending) -->
+        <div id="tx-status-pending-actions" class="button-group mt-2">
+          <button id="btn-tx-status-speed-up" class="btn-primary btn-small">SPEED UP</button>
+          <button id="btn-tx-status-cancel" class="btn-danger btn-small">CANCEL</button>
+        </div>
+
+        <div class="mt-2">
+          <button id="btn-close-tx-status" class="btn-small" style="width: 100%;">CLOSE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Token Approval Screen -->
+  <div id="screen-add-token" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Add Token</h1>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning);">
+        <p class="text-center mb-2" style="font-size: 13px;">
+          <strong id="token-site-origin">website.com</strong>
+        </p>
+        <p class="text-center text-dim" style="font-size: 11px;">
+          wants to add a token to your wallet
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">Token Symbol:</p>
+        <p style="font-size: 16px; font-weight: bold;" id="token-symbol">SYMBOL</p>
+
+        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">Contract Address:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="token-address">
+          0x0000...0000
+        </p>
+
+        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">Decimals:</p>
+        <p style="font-size: 13px;" id="token-decimals">18</p>
+
+        <div id="token-image-section" class="mt-2 text-center hidden">
+          <img id="token-image" src="" alt="Token logo" style="max-width: 80px; max-height: 80px; border-radius: 8px;" />
+        </div>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning); background: var(--terminal-bg-secondary);">
+        <p style="font-size: 11px; color: var(--terminal-warning); line-height: 1.5;">
+          ⚠️ <strong>Warning:</strong> Only add tokens you trust. Malicious tokens can steal your funds.
+        </p>
+        <p style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px; margin-bottom: 0;">
+          Always verify the contract address on a blockchain explorer before adding.
+        </p>
+      </div>
+
+      <p id="token-error" class="text-danger text-center hidden"></p>
+
+      <div class="button-group mt-3">
+        <button id="btn-approve-token" class="btn-primary">ADD TOKEN</button>
+        <button id="btn-reject-token" class="btn-danger">REJECT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transaction History Screen -->
+  <div id="screen-tx-history" class="hidden">
+    <div class="header">
+      <div class="header-title">TRANSACTION HISTORY</div>
+      <button id="btn-back-from-tx-history" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <!-- Filter Tabs -->
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <button id="filter-all-txs" class="btn-small" style="flex: 1;">ALL</button>
+        <button id="filter-pending-txs" class="btn-small" style="flex: 1;">PENDING</button>
+        <button id="filter-confirmed-txs" class="btn-small" style="flex: 1;">CONFIRMED</button>
+      </div>
+
+      <!-- Transaction List -->
+      <div id="tx-history-list" style="min-height: 200px;">
+        <p class="text-center text-dim">No transactions</p>
+      </div>
+
+      <!-- Clear History Button -->
+      <div class="mt-3">
+        <button id="btn-clear-tx-history" class="btn-danger btn-small">CLEAR HISTORY</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transaction Details Screen -->
+  <div id="screen-tx-details" class="hidden">
+    <div class="header">
+      <div class="header-title">TRANSACTION DETAILS</div>
+      <button id="btn-back-from-tx-details" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <!-- Status Badge -->
+      <div id="tx-status-badge" class="panel text-center mb-2" style="padding: 12px;">
+        <p style="font-size: 16px; font-weight: bold;" id="tx-status-text">⏳ PENDING</p>
+      </div>
+
+      <!-- Transaction Info -->
+      <div class="panel">
+        <p class="text-dim mb-1">Transaction Hash:</p>
+        <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all;" id="tx-detail-hash">0x000...000</p>
+        <button id="btn-copy-tx-hash" class="btn-small mt-1">COPY HASH</button>
+        <button id="btn-view-explorer" class="btn-small mt-1">VIEW ON EXPLORER</button>
+
+        <p class="text-dim mb-1 mt-2">From:</p>
+        <p style="font-family: var(--font-mono); font-size: 10px;" id="tx-detail-from">0x000...000</p>
+
+        <p class="text-dim mb-1 mt-2">To:</p>
+        <p style="font-family: var(--font-mono); font-size: 10px;" id="tx-detail-to">0x000...000</p>
+
+        <p class="text-dim mb-1 mt-2">Value:</p>
+        <p id="tx-detail-value">0 PLS</p>
+
+        <p class="text-dim mb-1 mt-2">Nonce:</p>
+        <p id="tx-detail-nonce">0</p>
+
+        <p class="text-dim mb-1 mt-2">Gas Price:</p>
+        <p id="tx-detail-gas-price">0 Gwei</p>
+
+        <p class="text-dim mb-1 mt-2">Network:</p>
+        <p id="tx-detail-network">PulseChain</p>
+
+        <p class="text-dim mb-1 mt-2">Timestamp:</p>
+        <p id="tx-detail-timestamp">--</p>
+
+        <div id="tx-detail-block-section" class="hidden">
+          <p class="text-dim mb-1 mt-2">Block Number:</p>
+          <p id="tx-detail-block">--</p>
+        </div>
+      </div>
+
+      <!-- Pending TX Actions -->
+      <div id="tx-pending-actions" class="hidden mt-3">
+        <div class="panel" style="border-color: var(--terminal-warning);">
+          <p style="color: var(--terminal-warning);">⚠️ <strong>Taking too long?</strong></p>
+          <p style="font-size: 10px;">Speed up or cancel this transaction with a higher gas price.</p>
+        </div>
+
+        <div class="button-group mt-2">
+          <button id="btn-speed-up-tx" class="btn-primary">SPEED UP</button>
+          <button id="btn-cancel-tx" class="btn-danger">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage Wallets Screen -->
+  <div id="screen-manage-wallets" class="hidden">
+    <div class="header">
+      <div class="header-title">MANAGE WALLETS</div>
+      <button id="btn-back-from-manage-wallets" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <div class="button-group">
+        <button id="btn-create-new-wallet-multi" class="btn-primary">+ CREATE NEW</button>
+        <button id="btn-import-wallet-multi" class="btn-primary">+ IMPORT</button>
+      </div>
+
+      <div class="mt-3">
+        <div class="panel-header">YOUR WALLETS (<span id="wallet-count">0</span>)</div>
+        <div id="wallet-list" class="mt-2">
+          <!-- Wallet list will be populated by JavaScript -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password Prompt Modal -->
+  <div id="modal-password-prompt" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="password-prompt-title">Enter Password</div>
+        <button class="modal-close" id="btn-close-password-prompt">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-dim mb-2" id="password-prompt-message">Enter your password to continue</p>
+        <div class="form-group">
+          <input type="password" id="password-prompt-input" placeholder="Enter password" autofocus />
+        </div>
+        <div id="password-prompt-error" class="form-error hidden"></div>
+        <div class="button-group mt-2">
+          <button id="btn-password-prompt-confirm" class="btn-primary">CONFIRM</button>
+          <button id="btn-password-prompt-cancel">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Display Secret Modal (for seed phrase / private key) -->
+  <div id="modal-display-secret" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="display-secret-title">Your Secret</div>
+        <button class="modal-close" id="btn-close-display-secret">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-warning mb-2">⚠️ Never share this with anyone!</p>
+        <div class="panel" style="background: var(--terminal-bg); border: 2px solid var(--terminal-warning);">
+          <div id="display-secret-content" style="word-break: break-all; user-select: text; cursor: text; font-family: var(--font-mono); line-height: 1.6;">
+            <!-- Secret will be displayed here -->
+          </div>
+        </div>
+        <div class="button-group mt-2">
+          <button id="btn-copy-secret" class="btn-primary">COPY TO CLIPBOARD</button>
+          <button id="btn-close-display-secret-btn">CLOSE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Wallet Modal -->
+  <div id="modal-add-wallet" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">ADD NEW WALLET</div>
+        <button class="modal-close" id="btn-close-add-wallet">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-dim mb-3">Choose how to add a wallet:</p>
+
+        <div class="panel mb-2" style="cursor: pointer; transition: all 0.2s;" id="add-wallet-option-create">
+          <div style="font-weight: bold; margin-bottom: 6px;">🎲 CREATE NEW WALLET</div>
+          <div class="text-dim" style="font-size: 11px;">Generate a new wallet with a new recovery phrase</div>
+        </div>
+
+        <div class="panel mb-2" style="cursor: pointer; transition: all 0.2s;" id="add-wallet-option-mnemonic">
+          <div style="font-weight: bold; margin-bottom: 6px;">📝 IMPORT FROM SEED PHRASE</div>
+          <div class="text-dim" style="font-size: 11px;">Restore wallet using 12-word recovery phrase</div>
+        </div>
+
+        <div class="panel mb-2" style="cursor: pointer; transition: all 0.2s;" id="add-wallet-option-privatekey">
+          <div style="font-weight: bold; margin-bottom: 6px;">🔑 IMPORT FROM PRIVATE KEY</div>
+          <div class="text-dim" style="font-size: 11px;">Import wallet using private key string</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create New Wallet (Multi) Modal -->
+  <div id="modal-create-wallet-multi" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">CREATE NEW WALLET</div>
+        <button class="modal-close" id="btn-close-create-wallet-multi">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Wallet Nickname</label>
+          <input type="text" id="input-new-wallet-nickname" placeholder="e.g., Trading Wallet" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Your Secret Recovery Phrase</label>
+          <div class="panel" style="background: var(--terminal-bg); border: 2px solid var(--terminal-warning);">
+            <div id="multi-mnemonic-display" style="word-break: break-all; user-select: text; font-family: var(--font-mono); line-height: 1.6;">
+              Generating...
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="border-color: var(--terminal-warning); background: var(--terminal-bg);">
+          <p class="text-warning" style="font-size: 11px; margin-bottom: 12px; line-height: 1.4;">
+            ⚠️ Write down your recovery phrase on paper and store it safely. This is the ONLY way to recover your wallet if you forget your password or lose access. Never share it with anyone!
+          </p>
+
+          <label class="form-label" style="color: var(--terminal-warning); font-weight: bold; margin-bottom: 8px;">Verify your backup:</label>
+          <p class="form-hint" style="margin-bottom: 8px;">To confirm you've written it down correctly, please enter these words from your recovery phrase:</p>
+
+          <div style="display: grid; gap: 8px;">
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-1-num-multi">1</span>:</label>
+              <input type="text" id="verify-word-1-multi" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-2-num-multi">6</span>:</label>
+              <input type="text" id="verify-word-2-multi" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 11px;">Word #<span id="verify-word-3-num-multi">12</span>:</label>
+              <input type="text" id="verify-word-3-multi" class="form-control" placeholder="Enter word" autocomplete="off" style="font-size: 11px;" />
+            </div>
+          </div>
+          <p id="verification-error-multi" class="text-danger hidden" style="font-size: 11px; margin-top: 8px;"></p>
+        </div>
+
+        <div class="button-group mt-2">
+          <button id="btn-confirm-create-wallet-multi" class="btn-primary">CREATE WALLET</button>
+          <button id="btn-cancel-create-wallet-multi">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import from Seed (Multi) Modal -->
+  <div id="modal-import-seed-multi" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">IMPORT FROM SEED PHRASE</div>
+        <button class="modal-close" id="btn-close-import-seed-multi">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Wallet Nickname</label>
+          <input type="text" id="input-import-seed-nickname" placeholder="e.g., Cold Storage" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">12-Word Recovery Phrase</label>
+          <textarea id="input-import-seed-phrase" rows="3" placeholder="Enter your 12-word seed phrase"></textarea>
+        </div>
+
+        <div id="import-seed-error-multi" class="form-error hidden"></div>
+
+        <div class="button-group mt-2">
+          <button id="btn-confirm-import-seed-multi" class="btn-primary">IMPORT WALLET</button>
+          <button id="btn-cancel-import-seed-multi">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import from Private Key (Multi) Modal -->
+  <div id="modal-import-key-multi" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">IMPORT FROM PRIVATE KEY</div>
+        <button class="modal-close" id="btn-close-import-key-multi">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Wallet Nickname</label>
+          <input type="text" id="input-import-key-nickname" placeholder="e.g., Hardware Backup" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Private Key</label>
+          <input type="password" id="input-import-private-key" placeholder="0x..." />
+        </div>
+
+        <div id="import-key-error-multi" class="form-error hidden"></div>
+
+        <div class="button-group mt-2">
+          <button id="btn-confirm-import-key-multi" class="btn-primary">IMPORT WALLET</button>
+          <button id="btn-cancel-import-key-multi">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Custom Token Modal -->
+  <div id="modal-add-token" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">ADD CUSTOM TOKEN</div>
+        <button class="modal-close" id="btn-close-add-token">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Token Contract Address</label>
+          <input type="text" id="input-token-address" class="form-control" placeholder="0x..." />
+        </div>
+
+        <div id="token-preview" class="panel hidden" style="margin-top: 16px;">
+          <p class="text-dim mb-1" style="font-size: 11px;">Token Info:</p>
+          <p style="font-size: 13px;"><strong id="token-preview-name">-</strong></p>
+          <p class="text-dim" style="font-size: 11px;">Symbol: <span id="token-preview-symbol">-</span></p>
+          <p class="text-dim" style="font-size: 11px;">Decimals: <span id="token-preview-decimals">-</span></p>
+        </div>
+
+        <div id="add-token-error" class="form-error hidden"></div>
+
+        <div class="button-group mt-2">
+          <button id="btn-confirm-add-token" class="btn-primary">ADD TOKEN</button>
+          <button id="btn-cancel-add-token">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename Wallet Modal -->
+  <div id="modal-rename-wallet" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">RENAME WALLET</div>
+        <button class="modal-close" id="btn-close-rename-wallet">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">New Nickname</label>
+          <input type="text" id="input-rename-wallet-nickname" placeholder="Enter new nickname" maxlength="30" />
+        </div>
+
+        <div id="rename-error" class="form-error hidden"></div>
+
+        <div class="button-group mt-2">
+          <button id="btn-confirm-rename-wallet" class="btn-primary">RENAME</button>
+          <button id="btn-cancel-rename-wallet">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transaction Success Modal -->
+  <div id="modal-tx-success" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title">Transaction Sent!</div>
+        <button class="modal-close" id="btn-close-tx-success">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-center mb-3" style="color: var(--terminal-success); font-size: 16px;">✓ Transaction Submitted</p>
+
+        <div class="panel">
+          <p class="text-dim mb-1" style="font-size: 11px;">Transaction Hash:</p>
+          <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-success-hash">
+            0x0000...0000
+          </p>
+          <button id="btn-copy-tx-hash" class="btn-link" style="font-size: 11px; margin-top: 8px;">Copy Tx Hash</button>
+        </div>
+
+        <p class="text-dim text-center mt-3" style="font-size: 10px;">
+          The transaction has been submitted to the network and is pending confirmation.
+        </p>
+
+        <div class="button-group mt-3">
+          <button id="btn-ok-tx-success" class="btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
