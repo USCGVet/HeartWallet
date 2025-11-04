@@ -1,5 +1,9 @@
 # HeartWallet v2.0
 
+
+**Developer:** USCG_Vet
+**Contact:** uscg_vet@protonmail.com
+
 **Independent cryptocurrency wallet for PulseChain & Ethereum**
 
 HeartWallet is a lightweight, secure Chrome extension wallet built for the PulseChain and Ethereum ecosystems. No gatekeepers, no tracking, just a simple wallet that works.
@@ -56,7 +60,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 
 1. **Clone or navigate to the project**
    ```bash
-   cd /mnt/d/HeartWallet/HeartWallet-v2
+   cd D:/HeartWallet/
    ```
 
 2. **Install dependencies**
@@ -73,7 +77,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
    - Open Chrome and go to `chrome://extensions/`
    - Enable "Developer mode" (top right)
    - Click "Load unpacked"
-   - Select the `.../HeartWallet-v2/dist/` folder
+   - Select the `.../HeartWallet/dist/` folder
 
 ## Development
 
@@ -264,9 +268,11 @@ MIT License - See LICENSE file
 
 ## Support
 
-- **GitHub**: [Coming soon]
-- **Issues**: Report bugs via GitHub Issues
-- **Community**: PulseChain Telegram
+**GitHub**: https://github.com/USCGVet/HeartWallet
+**Issues**: Report bugs via GitHub Issues
+**Telegram**: https://t.me/USCG_Vet_Chat
+**X (Twitter)**: https://x.com/uscgvet5555
+**Email**: uscg_vet@protonmail.com
 
 ## Contributing
 
