@@ -42,6 +42,8 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 ### 🌐 Web3 & DApp Features
 - **Full EIP-1193 provider** - Compatible with all Web3 DApps
 - **Transaction signing** with gas price control (Slow/Normal/Fast/Custom)
+- **Message signing (EIP-191)** - personal_sign and eth_sign support
+- **Typed data signing (EIP-712)** - signTypedData v3/v4 for permits and meta-transactions
 - **Contract interaction** - Call contract functions and send transactions
 - **Network switching** - PulseChain, Ethereum, Sepolia, PulseChain Testnet
 - **Connection management** - Approve/reject site connections
