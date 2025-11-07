@@ -10,6 +10,7 @@ import { load, save } from '../core/storage.js';
 import * as rpc from '../core/rpc.js';
 import * as txHistory from '../core/txHistory.js';
 import { validateTransactionRequest, sanitizeErrorMessage } from '../core/txValidation.js';
+import { personalSign, signTypedData, validateSignRequest } from '../core/signing.js';
 import { ethers } from 'ethers';
 
 // Service worker loaded
@@ -287,6 +288,15 @@ async function handleWalletRequest(message, sender) {
 
       case 'eth_getBlockByHash':
         return await handleGetBlockByHash(params);
+
+      case 'personal_sign':
+      case 'eth_sign':
+        return await handlePersonalSign(params, origin, method);
+
+      case 'eth_signTypedData':
+      case 'eth_signTypedData_v3':
+      case 'eth_signTypedData_v4':
+        return await handleSignTypedData(params, origin, method);
 
       default:
         return { error: { code: -32601, message: `Method ${method} not supported` } };
@@ -685,6 +695,9 @@ const pendingTransactions = new Map();
 
 // Pending token add requests (requestId -> { resolve, reject, origin, tokenInfo })
 const pendingTokenRequests = new Map();
+
+// Pending message signing requests (requestId -> { resolve, reject, origin, signRequest, approvalToken })
+const pendingSignRequests = new Map();
 
 // ===== RATE LIMITING =====
 // Prevents malicious dApps from spamming transaction approval requests
@@ -1376,6 +1389,207 @@ async function waitForConfirmation(tx, provider, address) {
   }
 }
 
+// ===== MESSAGE SIGNING HANDLERS =====
+
+// Handle personal_sign (EIP-191) - Sign a message
+async function handlePersonalSign(params, origin, method) {
+  // Check if site is connected
+  if (!await isSiteConnected(origin)) {
+    return { error: { code: 4100, message: 'Not authorized. Please connect your wallet first.' } };
+  }
+
+  // Validate sign request
+  const validation = validateSignRequest(method, params);
+  if (!validation.valid) {
+    console.warn('🫀 Invalid sign request from origin:', origin, validation.error);
+    return {
+      error: {
+        code: -32602,
+        message: 'Invalid sign request: ' + sanitizeErrorMessage(validation.error)
+      }
+    };
+  }
+
+  const { message, address } = validation.sanitized;
+
+  // Verify the address matches the connected account
+  const wallet = await getActiveWallet();
+  if (!wallet || wallet.address.toLowerCase() !== address.toLowerCase()) {
+    return {
+      error: {
+        code: 4100,
+        message: 'Requested address does not match connected account'
+      }
+    };
+  }
+
+  // Need user approval - create a pending request
+  return new Promise((resolve, reject) => {
+    const requestId = Date.now().toString() + '_sign';
+
+    // Generate one-time approval token for replay protection
+    const approvalToken = generateApprovalToken();
+    processedApprovals.set(approvalToken, {
+      timestamp: Date.now(),
+      requestId,
+      used: false
+    });
+
+    pendingSignRequests.set(requestId, {
+      resolve,
+      reject,
+      origin,
+      method,
+      signRequest: { message, address },
+      approvalToken
+    });
+
+    // Open approval popup
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`src/popup/popup.html?action=sign&requestId=${requestId}&method=${method}`),
+      type: 'popup',
+      width: 400,
+      height: 600
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      if (pendingSignRequests.has(requestId)) {
+        pendingSignRequests.delete(requestId);
+        reject(new Error('Sign request timeout'));
+      }
+    }, 300000);
+  });
+}
+
+// Handle eth_signTypedData (EIP-712) - Sign typed data
+async function handleSignTypedData(params, origin, method) {
+  // Check if site is connected
+  if (!await isSiteConnected(origin)) {
+    return { error: { code: 4100, message: 'Not authorized. Please connect your wallet first.' } };
+  }
+
+  // Validate sign request
+  const validation = validateSignRequest(method, params);
+  if (!validation.valid) {
+    console.warn('🫀 Invalid sign typed data request from origin:', origin, validation.error);
+    return {
+      error: {
+        code: -32602,
+        message: 'Invalid sign request: ' + sanitizeErrorMessage(validation.error)
+      }
+    };
+  }
+
+  const { address, typedData } = validation.sanitized;
+
+  // Verify the address matches the connected account
+  const wallet = await getActiveWallet();
+  if (!wallet || wallet.address.toLowerCase() !== address.toLowerCase()) {
+    return {
+      error: {
+        code: 4100,
+        message: 'Requested address does not match connected account'
+      }
+    };
+  }
+
+  // Need user approval - create a pending request
+  return new Promise((resolve, reject) => {
+    const requestId = Date.now().toString() + '_signTyped';
+
+    // Generate one-time approval token for replay protection
+    const approvalToken = generateApprovalToken();
+    processedApprovals.set(approvalToken, {
+      timestamp: Date.now(),
+      requestId,
+      used: false
+    });
+
+    pendingSignRequests.set(requestId, {
+      resolve,
+      reject,
+      origin,
+      method,
+      signRequest: { typedData, address },
+      approvalToken
+    });
+
+    // Open approval popup
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`src/popup/popup.html?action=signTyped&requestId=${requestId}&method=${method}`),
+      type: 'popup',
+      width: 400,
+      height: 650
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      if (pendingSignRequests.has(requestId)) {
+        pendingSignRequests.delete(requestId);
+        reject(new Error('Sign request timeout'));
+      }
+    }, 300000);
+  });
+}
+
+// Handle message signing approval from popup
+async function handleSignApproval(requestId, approved, sessionToken) {
+  if (!pendingSignRequests.has(requestId)) {
+    return { success: false, error: 'Request not found or expired' };
+  }
+
+  const { resolve, reject, origin, method, signRequest, approvalToken } = pendingSignRequests.get(requestId);
+
+  // Validate one-time approval token to prevent replay attacks
+  if (!validateAndUseApprovalToken(approvalToken)) {
+    pendingSignRequests.delete(requestId);
+    reject(new Error('Invalid or already used approval token - possible replay attack'));
+    return { success: false, error: 'Invalid approval token' };
+  }
+
+  pendingSignRequests.delete(requestId);
+
+  if (!approved) {
+    reject(new Error('User rejected the request'));
+    return { success: false, error: 'User rejected' };
+  }
+
+  try {
+    // Validate session and get password
+    const password = await validateSession(sessionToken);
+
+    // Unlock wallet
+    const { signer } = await unlockWallet(password);
+
+    let signature;
+
+    // Sign based on method
+    if (method === 'personal_sign' || method === 'eth_sign') {
+      signature = await personalSign(signer, signRequest.message);
+    } else if (method.startsWith('eth_signTypedData')) {
+      signature = await signTypedData(signer, signRequest.typedData);
+    } else {
+      throw new Error(`Unsupported signing method: ${method}`);
+    }
+
+    // Signature generated successfully
+    console.log('🫀 Message signed for origin:', origin);
+
+    resolve({ result: signature });
+    return { success: true, signature };
+  } catch (error) {
+    console.error('🫀 Error signing message:', error);
+    reject(error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Get sign request details (for popup)
+function getSignRequest(requestId) {
+  return pendingSignRequests.get(requestId);
+}
+
 // Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Received message
@@ -1448,6 +1662,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tokenApprovalResult = await handleTokenAddApproval(message.requestId, message.approved);
           console.log('🫀 Sending token add approval response:', tokenApprovalResult);
           sendResponse(tokenApprovalResult);
+          break;
+
+        case 'SIGN_APPROVAL':
+          const signApprovalResult = await handleSignApproval(
+            message.requestId,
+            message.approved,
+            message.sessionToken
+          );
+          console.log('🫀 Sending sign approval response:', signApprovalResult);
+          sendResponse(signApprovalResult);
+          break;
+
+        case 'GET_SIGN_REQUEST':
+          const signRequestInfo = getSignRequest(message.requestId);
+          console.log('🫀 Sending sign request info:', signRequestInfo);
+          sendResponse(signRequestInfo);
           break;
 
         case 'GET_TOKEN_ADD_REQUEST':
