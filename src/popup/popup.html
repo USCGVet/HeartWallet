@@ -879,6 +879,130 @@
     </div>
   </div>
 
+  <!-- Message Signing Approval Screen (personal_sign) -->
+  <div id="screen-sign-message" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Sign Message</h1>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning);">
+        <p class="text-center mb-2" style="font-size: 13px;">
+          <strong id="sign-site-origin">website.com</strong>
+        </p>
+        <p class="text-center text-dim" style="font-size: 11px;">
+          wants you to sign a message
+        </p>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-error);">
+        <p style="font-size: 11px; color: var(--terminal-error); margin-bottom: 8px;">
+          ⚠️ <strong>WARNING:</strong> Only sign messages from sites you trust!
+        </p>
+        <p style="font-size: 10px; color: var(--terminal-fg-dim);">
+          Signing a message proves you own this address. Malicious sites can use this for phishing.
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">Account:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="sign-address">
+          0x0000...0000
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Message:</p>
+        <div style="max-height: 200px; overflow-y: auto; padding: 12px; background: var(--terminal-bg-dark); border: 1px solid var(--terminal-border); border-radius: 4px;">
+          <pre id="sign-message-content" style="font-family: var(--font-mono); font-size: 10px; white-space: pre-wrap; word-break: break-word; margin: 0; color: var(--terminal-fg);">Loading...</pre>
+        </div>
+        <p id="sign-message-hex-warning" class="hidden" style="font-size: 10px; color: var(--terminal-warning); margin-top: 8px;">
+          ⚠️ This appears to be hex-encoded data. Be extra careful!
+        </p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="sign-password">Enter Password to Sign</label>
+        <input type="password" id="sign-password" class="form-control" placeholder="Password" />
+        <p id="sign-error" class="error-message hidden"></p>
+      </div>
+
+      <div style="display: flex; gap: 12px;">
+        <button id="btn-reject-sign" class="btn-small" style="flex: 1; background: var(--terminal-error);">
+          REJECT
+        </button>
+        <button id="btn-approve-sign" class="btn-small" style="flex: 1;">
+          SIGN MESSAGE
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Typed Data Signing Approval Screen (signTypedData) -->
+  <div id="screen-sign-typed-data" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Sign Typed Data</h1>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning);">
+        <p class="text-center mb-2" style="font-size: 13px;">
+          <strong id="sign-typed-site-origin">website.com</strong>
+        </p>
+        <p class="text-center text-dim" style="font-size: 11px;">
+          wants you to sign structured data
+        </p>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-info);">
+        <p style="font-size: 11px; margin-bottom: 8px;">
+          ℹ️ <strong>EIP-712 Typed Data Signing</strong>
+        </p>
+        <p style="font-size: 10px; color: var(--terminal-fg-dim);">
+          This is a structured message. Common uses: token permits, meta-transactions, and protocol approvals.
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">Account:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="sign-typed-address">
+          0x0000...0000
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Domain:</p>
+        <div style="padding: 8px; background: var(--terminal-bg-dark); border: 1px solid var(--terminal-border); border-radius: 4px; margin-bottom: 12px;">
+          <p style="font-size: 10px; margin: 4px 0;"><span class="text-dim">Name:</span> <span id="sign-typed-domain-name">--</span></p>
+          <p style="font-size: 10px; margin: 4px 0;"><span class="text-dim">Chain ID:</span> <span id="sign-typed-domain-chain">--</span></p>
+          <p id="sign-typed-domain-contract-row" class="hidden" style="font-size: 10px; margin: 4px 0;">
+            <span class="text-dim">Contract:</span> <span id="sign-typed-domain-contract" style="font-family: var(--font-mono);">--</span>
+          </p>
+        </div>
+
+        <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Message Data:</p>
+        <div style="max-height: 250px; overflow-y: auto; padding: 12px; background: var(--terminal-bg-dark); border: 1px solid var(--terminal-border); border-radius: 4px;">
+          <pre id="sign-typed-message-content" style="font-family: var(--font-mono); font-size: 9px; white-space: pre-wrap; word-break: break-word; margin: 0; color: var(--terminal-fg);">Loading...</pre>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="sign-typed-password">Enter Password to Sign</label>
+        <input type="password" id="sign-typed-password" class="form-control" placeholder="Password" />
+        <p id="sign-typed-error" class="error-message hidden"></p>
+      </div>
+
+      <div style="display: flex; gap: 12px;">
+        <button id="btn-reject-sign-typed" class="btn-small" style="flex: 1; background: var(--terminal-error);">
+          REJECT
+        </button>
+        <button id="btn-approve-sign-typed" class="btn-small" style="flex: 1;">
+          SIGN DATA
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add Token Approval Screen -->
   <div id="screen-add-token" class="hidden">
     <div class="container">

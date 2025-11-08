@@ -185,6 +185,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  if (action === 'sign' && requestId) {
+    // Show message signing approval screen
+    await handleMessageSignApprovalScreen(requestId);
+    return;
+  }
+
+  if (action === 'signTyped' && requestId) {
+    // Show typed data signing approval screen
+    await handleTypedDataSignApprovalScreen(requestId);
+    return;
+  }
+
   // Normal popup flow
   // Run migration first (converts old single-wallet to multi-wallet format)
   await migrateToMultiWallet();
@@ -3346,6 +3358,276 @@ async function handleTokenAddApprovalScreen(requestId) {
 
   } catch (error) {
     alert('Error loading token add request: ' + sanitizeError(error.message));
+    window.close();
+  }
+}
+
+// ===== MESSAGE SIGNING APPROVAL HANDLERS =====
+
+async function handleMessageSignApprovalScreen(requestId) {
+  // Load settings for theme
+  await loadSettings();
+  applyTheme();
+
+  // Get sign request details from background
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_SIGN_REQUEST',
+      requestId
+    });
+
+    if (!response || !response.origin) {
+      alert('Sign request not found or expired');
+      window.close();
+      return;
+    }
+
+    const { origin, method, signRequest } = response;
+    const { message, address } = signRequest;
+
+    // Populate sign details
+    document.getElementById('sign-site-origin').textContent = origin;
+    document.getElementById('sign-address').textContent = address;
+
+    // Format message for display
+    const messageEl = document.getElementById('sign-message-content');
+    let displayMessage = message;
+
+    // Check if message is hex-encoded
+    if (typeof message === 'string' && message.startsWith('0x')) {
+      document.getElementById('sign-message-hex-warning').classList.remove('hidden');
+      // Try to decode if it's readable text
+      try {
+        const bytes = ethers.getBytes(message);
+        const decoded = ethers.toUtf8String(bytes);
+        if (/^[\x20-\x7E\s]+$/.test(decoded)) {
+          displayMessage = decoded + '\n\n[Hex: ' + message + ']';
+        }
+      } catch {
+        // Keep as hex if decoding fails
+      }
+    } else {
+      document.getElementById('sign-message-hex-warning').classList.add('hidden');
+    }
+
+    messageEl.textContent = displayMessage;
+
+    // Show the signing approval screen
+    showScreen('screen-sign-message');
+
+    // Setup approve button
+    document.getElementById('btn-approve-sign').addEventListener('click', async () => {
+      const approveBtn = document.getElementById('btn-approve-sign');
+      const password = document.getElementById('sign-password').value;
+      const errorEl = document.getElementById('sign-error');
+
+      if (!password) {
+        errorEl.textContent = 'Please enter your password';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      // Disable button immediately to prevent double-clicking
+      approveBtn.disabled = true;
+      approveBtn.style.opacity = '0.5';
+      approveBtn.style.cursor = 'not-allowed';
+
+      try {
+        errorEl.classList.add('hidden');
+
+        // Create a temporary session for this signing using the entered password
+        const activeWallet = await getActiveWallet();
+        const tempSessionResponse = await chrome.runtime.sendMessage({
+          type: 'CREATE_SESSION',
+          password,
+          walletId: activeWallet.id,
+          durationMs: 60000 // 1 minute temporary session
+        });
+
+        if (!tempSessionResponse.success) {
+          throw new Error('Invalid password');
+        }
+
+        const response = await chrome.runtime.sendMessage({
+          type: 'SIGN_APPROVAL',
+          requestId,
+          approved: true,
+          sessionToken: tempSessionResponse.sessionToken
+        });
+
+        if (response.success) {
+          // Close the popup window
+          window.close();
+        } else {
+          errorEl.textContent = response.error || 'Signing failed';
+          errorEl.classList.remove('hidden');
+          // Re-enable button on error so user can try again
+          approveBtn.disabled = false;
+          approveBtn.style.opacity = '1';
+          approveBtn.style.cursor = 'pointer';
+        }
+      } catch (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        // Re-enable button on error so user can try again
+        approveBtn.disabled = false;
+        approveBtn.style.opacity = '1';
+        approveBtn.style.cursor = 'pointer';
+      }
+    });
+
+    // Setup reject button
+    document.getElementById('btn-reject-sign').addEventListener('click', async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'SIGN_APPROVAL',
+          requestId,
+          approved: false
+        });
+
+        // Close the popup window
+        window.close();
+      } catch (error) {
+        alert('Error rejecting sign request: ' + error.message);
+        window.close();
+      }
+    });
+
+  } catch (error) {
+    alert('Error loading sign request: ' + sanitizeError(error.message));
+    window.close();
+  }
+}
+
+async function handleTypedDataSignApprovalScreen(requestId) {
+  // Load settings for theme
+  await loadSettings();
+  applyTheme();
+
+  // Get sign request details from background
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_SIGN_REQUEST',
+      requestId
+    });
+
+    if (!response || !response.origin) {
+      alert('Sign request not found or expired');
+      window.close();
+      return;
+    }
+
+    const { origin, method, signRequest } = response;
+    const { typedData, address } = signRequest;
+
+    // Populate sign details
+    document.getElementById('sign-typed-site-origin').textContent = origin;
+    document.getElementById('sign-typed-address').textContent = address;
+
+    // Populate domain information
+    if (typedData.domain) {
+      document.getElementById('sign-typed-domain-name').textContent = typedData.domain.name || 'Unknown';
+      document.getElementById('sign-typed-domain-chain').textContent = typedData.domain.chainId || '--';
+
+      if (typedData.domain.verifyingContract) {
+        document.getElementById('sign-typed-domain-contract').textContent = typedData.domain.verifyingContract;
+        document.getElementById('sign-typed-domain-contract-row').classList.remove('hidden');
+      } else {
+        document.getElementById('sign-typed-domain-contract-row').classList.add('hidden');
+      }
+    }
+
+    // Format typed data for display
+    const messageEl = document.getElementById('sign-typed-message-content');
+    const displayData = {
+      primaryType: typedData.primaryType || 'Unknown',
+      message: typedData.message
+    };
+    messageEl.textContent = JSON.stringify(displayData, null, 2);
+
+    // Show the signing approval screen
+    showScreen('screen-sign-typed-data');
+
+    // Setup approve button
+    document.getElementById('btn-approve-sign-typed').addEventListener('click', async () => {
+      const approveBtn = document.getElementById('btn-approve-sign-typed');
+      const password = document.getElementById('sign-typed-password').value;
+      const errorEl = document.getElementById('sign-typed-error');
+
+      if (!password) {
+        errorEl.textContent = 'Please enter your password';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      // Disable button immediately to prevent double-clicking
+      approveBtn.disabled = true;
+      approveBtn.style.opacity = '0.5';
+      approveBtn.style.cursor = 'not-allowed';
+
+      try {
+        errorEl.classList.add('hidden');
+
+        // Create a temporary session for this signing using the entered password
+        const activeWallet = await getActiveWallet();
+        const tempSessionResponse = await chrome.runtime.sendMessage({
+          type: 'CREATE_SESSION',
+          password,
+          walletId: activeWallet.id,
+          durationMs: 60000 // 1 minute temporary session
+        });
+
+        if (!tempSessionResponse.success) {
+          throw new Error('Invalid password');
+        }
+
+        const response = await chrome.runtime.sendMessage({
+          type: 'SIGN_APPROVAL',
+          requestId,
+          approved: true,
+          sessionToken: tempSessionResponse.sessionToken
+        });
+
+        if (response.success) {
+          // Close the popup window
+          window.close();
+        } else {
+          errorEl.textContent = response.error || 'Signing failed';
+          errorEl.classList.remove('hidden');
+          // Re-enable button on error so user can try again
+          approveBtn.disabled = false;
+          approveBtn.style.opacity = '1';
+          approveBtn.style.cursor = 'pointer';
+        }
+      } catch (error) {
+        errorEl.textContent = error.message;
+        errorEl.classList.remove('hidden');
+        // Re-enable button on error so user can try again
+        approveBtn.disabled = false;
+        approveBtn.style.opacity = '1';
+        approveBtn.style.cursor = 'pointer';
+      }
+    });
+
+    // Setup reject button
+    document.getElementById('btn-reject-sign-typed').addEventListener('click', async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'SIGN_APPROVAL',
+          requestId,
+          approved: false
+        });
+
+        // Close the popup window
+        window.close();
+      } catch (error) {
+        alert('Error rejecting sign request: ' + error.message);
+        window.close();
+      }
+    });
+
+  } catch (error) {
+    alert('Error loading typed data sign request: ' + sanitizeError(error.message));
     window.close();
   }
 }
