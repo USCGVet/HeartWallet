@@ -966,8 +966,31 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
     // Validate session and get password (now async)
     const password = await validateSession(sessionToken);
 
-    // Unlock wallet
-    const { signer } = await unlockWallet(password);
+    // Unlock wallet with auto-upgrade notification
+    const { signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        // Notify user that wallet encryption is being upgraded
+        console.log(`🔐 Auto-upgrading wallet encryption: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()} iterations`);
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+          title: '🔐 Security Upgrade in Progress',
+          message: `Upgrading wallet encryption to ${info.recommendedIterations.toLocaleString()} iterations for enhanced security...`,
+          priority: 2
+        });
+      }
+    });
+
+    // Show completion notification if upgrade occurred
+    if (upgraded) {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+        title: '✅ Security Upgrade Complete',
+        message: `Wallet encryption upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()} iterations`,
+        priority: 2
+      });
+    }
 
     // Get current network
     const network = await getCurrentNetwork();
@@ -1197,8 +1220,12 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
       return { success: false, error: 'Transaction is not pending' };
     }
 
-    // Get wallet and unlock
-    const { signer } = await unlockWallet(password);
+    // Get wallet and unlock (auto-upgrade if needed)
+    const { signer } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+      }
+    });
 
     // Get network and create provider with automatic failover
     const network = originalTx.network;
@@ -1275,8 +1302,12 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
       return { success: false, error: 'Transaction is not pending' };
     }
 
-    // Get wallet and unlock
-    const { signer } = await unlockWallet(password);
+    // Get wallet and unlock (auto-upgrade if needed)
+    const { signer } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+      }
+    });
 
     // Get network and create provider with automatic failover
     const network = originalTx.network;
@@ -1559,8 +1590,12 @@ async function handleSignApproval(requestId, approved, sessionToken) {
     // Validate session and get password
     const password = await validateSession(sessionToken);
 
-    // Unlock wallet
-    const { signer } = await unlockWallet(password);
+    // Unlock wallet (auto-upgrade if needed)
+    const { signer } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+      }
+    });
 
     let signature;
 

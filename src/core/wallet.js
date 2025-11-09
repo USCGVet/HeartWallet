@@ -2,26 +2,98 @@
  * core/wallet.js
  *
  * Multi-wallet creation, import, and key management
+ *
+ * SECURITY: Uses self-describing encryption format with iteration metadata
+ * for future-proof cryptographic agility.
  */
 
 import { ethers } from 'ethers';
 import { save, load } from './storage.js';
 import { isValidMnemonic, isValidPrivateKey, validatePasswordStrength } from './validation.js';
 
-// ===== ADDITIONAL ENCRYPTION LAYER =====
-// Adds AES-GCM encryption on top of ethers.js keystore encryption
-// This provides defense-in-depth against Chrome storage compromise
+// ===== PBKDF2 ITERATION RECOMMENDATIONS =====
+// Based on historical OWASP data and GPU cracking speed trends
+//
+// Historical OWASP Recommendations:
+// - 2016: 10,000 iterations
+// - 2021: 310,000 iterations (31x in 5 years = 97% CAGR)
+// - 2023: 600,000 iterations (1.94x in 2 years = 39% CAGR)
+//
+// GPU Cracking Speed Growth (2016-2022):
+// - GTX 1080 → RTX 4090: 8x improvement = 39% CAGR
+//
+// Model: 35% CAGR (doubling every ~2.3 years)
+// Rationale: Conservative estimate matching GPU improvements
+const ITERATION_MILESTONES = [
+  // Historical OWASP recommendations (actual data)
+  { year: 2016, iterations: 10000,   source: 'OWASP 2016' },
+  { year: 2021, iterations: 310000,  source: 'OWASP 2021' },
+  { year: 2023, iterations: 600000,  source: 'OWASP 2023' },
+
+  // Projected using 35% CAGR from 2023 baseline
+  { year: 2024, iterations: 810000,  source: 'Projected (35% CAGR)' },
+  { year: 2025, iterations: 1094000, source: 'Projected (35% CAGR)' },
+  { year: 2026, iterations: 1477000, source: 'Projected (35% CAGR)' },
+  { year: 2027, iterations: 1994000, source: 'Projected (35% CAGR)' },
+  { year: 2028, iterations: 2692000, source: 'Projected (35% CAGR)' },
+  { year: 2029, iterations: 3635000, source: 'Projected (35% CAGR)' },
+  { year: 2030, iterations: 4907000, source: 'Projected (35% CAGR)' },
+  { year: 2031, iterations: 5000000, source: 'Capped for UX (~2sec on slow devices)' },
+];
+
+/**
+ * Gets recommended PBKDF2 iteration count for current year
+ * Uses historical OWASP data and exponential growth model
+ *
+ * @param {number} year - Year to get recommendation for (defaults to current year)
+ * @returns {number} Recommended iteration count
+ */
+function getCurrentRecommendedIterations(year = new Date().getFullYear()) {
+  // Find exact match first
+  const exactMatch = ITERATION_MILESTONES.find(m => m.year === year);
+  if (exactMatch) return exactMatch.iterations;
+
+  // Find surrounding milestones for interpolation
+  const before = ITERATION_MILESTONES
+    .filter(m => m.year < year)
+    .sort((a, b) => b.year - a.year)[0];
+
+  const after = ITERATION_MILESTONES
+    .filter(m => m.year > year)
+    .sort((a, b) => a.year - b.year)[0];
+
+  // Before all milestones: use earliest
+  if (!before) return ITERATION_MILESTONES[0].iterations;
+
+  // After all milestones: use latest (capped)
+  if (!after) return ITERATION_MILESTONES[ITERATION_MILESTONES.length - 1].iterations;
+
+  // Exponential interpolation (accurate for CAGR-based growth)
+  const yearRange = after.year - before.year;
+  const iterationRatio = after.iterations / before.iterations;
+  const yearProgress = (year - before.year) / yearRange;
+
+  return Math.floor(before.iterations * Math.pow(iterationRatio, yearProgress));
+}
+
+// Legacy iteration count for backward compatibility
+const LEGACY_ITERATIONS = 100000;
+
+// ===== SELF-DESCRIBING ENCRYPTION FORMAT =====
+// Format: [4 bytes: iteration count][16 bytes: salt][12 bytes: IV][variable: ciphertext]
+// This allows iteration count to evolve over time without breaking existing wallets
 
 /**
  * Derives an encryption key from password using PBKDF2
  * @param {string} password - User password
- * @param {Uint8Array} salt - Salt for key derivation
+ * @param {Uint8Array} salt - Salt for key derivation (16 bytes)
+ * @param {number} iterations - PBKDF2 iteration count
  * @returns {Promise<CryptoKey>}
  */
-async function deriveEncryptionKey(password, salt) {
+async function deriveEncryptionKey(password, salt, iterations) {
   const encoder = new TextEncoder();
   const passwordBuffer = encoder.encode(password);
-  
+
   // Import password as key material
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -30,13 +102,13 @@ async function deriveEncryptionKey(password, salt) {
     false,
     ['deriveBits', 'deriveKey']
   );
-  
+
   // Derive AES-GCM key
   return await crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
       salt: salt,
-      iterations: 100000,
+      iterations: iterations,
       hash: 'SHA-256'
     },
     keyMaterial,
@@ -47,15 +119,16 @@ async function deriveEncryptionKey(password, salt) {
 }
 
 /**
- * Encrypts data with AES-GCM (additional layer)
+ * Encrypts data with AES-GCM and stores iteration count in metadata
  * @param {string} data - Data to encrypt
  * @param {string} password - User password
- * @returns {Promise<string>} Base64 encoded encrypted data with salt and iv
+ * @param {number} iterations - PBKDF2 iterations (defaults to current recommendation)
+ * @returns {Promise<string>} Base64 encoded encrypted data with metadata
  */
-async function encryptWithAES(data, password) {
+async function encryptWithAES(data, password, iterations = getCurrentRecommendedIterations()) {
   const encoder = new TextEncoder();
   const dataBuffer = encoder.encode(data);
-  
+
   // SECURITY: Generate cryptographically random salt and IV
   // crypto.getRandomValues() uses the browser's CSPRNG (Cryptographically Secure
   // Pseudo-Random Number Generator), which ensures:
@@ -65,29 +138,38 @@ async function encryptWithAES(data, password) {
   // Each encryption operation gets a unique IV, which is critical for AES-GCM security
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  
-  // Derive key
-  const key = await deriveEncryptionKey(password, salt);
-  
+
+  // Derive key with specified iterations
+  const key = await deriveEncryptionKey(password, salt, iterations);
+
   // Encrypt
   const encryptedBuffer = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: iv },
     key,
     dataBuffer
   );
-  
-  // Combine salt + iv + encrypted data
-  const combined = new Uint8Array(salt.length + iv.length + encryptedBuffer.byteLength);
-  combined.set(salt, 0);
-  combined.set(iv, salt.length);
-  combined.set(new Uint8Array(encryptedBuffer), salt.length + iv.length);
-  
+
+  // Prepend iteration count as 4-byte big-endian integer
+  const iterationBytes = new Uint8Array(4);
+  new DataView(iterationBytes.buffer).setUint32(0, iterations, false); // Big-endian
+
+  // Combine: [iterations][salt][IV][ciphertext]
+  const combined = new Uint8Array(
+    4 + salt.length + iv.length + encryptedBuffer.byteLength
+  );
+  combined.set(iterationBytes, 0);
+  combined.set(salt, 4);
+  combined.set(iv, 4 + salt.length);
+  combined.set(new Uint8Array(encryptedBuffer), 4 + salt.length + iv.length);
+
   // Return as base64
   return btoa(String.fromCharCode(...combined));
 }
 
 /**
- * Decrypts AES-GCM encrypted data
+ * Decrypts AES-GCM encrypted data, reading iteration count from metadata
+ * Handles both new format (with iteration metadata) and legacy format
+ *
  * @param {string} encryptedData - Base64 encoded encrypted data
  * @param {string} password - User password
  * @returns {Promise<string>} Decrypted data
@@ -96,27 +178,76 @@ async function decryptWithAES(encryptedData, password) {
   try {
     // Decode from base64
     const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
-    
-    // Extract salt, iv, and encrypted data
-    const salt = combined.slice(0, 16);
-    const iv = combined.slice(16, 28);
-    const encrypted = combined.slice(28);
-    
-    // Derive key
-    const key = await deriveEncryptionKey(password, salt);
-    
+
+    let iterationCount;
+    let salt, iv, encrypted;
+
+    // Auto-detect format: new (with metadata) vs legacy
+    if (combined.length >= 4) {
+      const possibleIterations = new DataView(combined.buffer, 0, 4).getUint32(0, false);
+
+      // Heuristic: valid iteration counts are 100k-5M
+      // If first 4 bytes are in this range, it's the new self-describing format
+      if (possibleIterations >= 100000 && possibleIterations <= 5000000) {
+        // ✅ NEW FORMAT - read iteration count from metadata
+        iterationCount = possibleIterations;
+        salt = combined.slice(4, 20);
+        iv = combined.slice(20, 32);
+        encrypted = combined.slice(32);
+      } else {
+        // ✅ LEGACY FORMAT - use hardcoded legacy iteration count
+        iterationCount = LEGACY_ITERATIONS;
+        salt = combined.slice(0, 16);
+        iv = combined.slice(16, 28);
+        encrypted = combined.slice(28);
+      }
+    } else {
+      throw new Error('Invalid encrypted data format');
+    }
+
+    // Derive key using the stored iteration count
+    const key = await deriveEncryptionKey(password, salt, iterationCount);
+
     // Decrypt
     const decryptedBuffer = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: iv },
       key,
       encrypted
     );
-    
+
     // Convert to string
     const decoder = new TextDecoder();
     return decoder.decode(decryptedBuffer);
   } catch (error) {
+    if (error.message === 'Invalid encrypted data format') {
+      throw error;
+    }
     throw new Error('Decryption failed - incorrect password or corrupted data');
+  }
+}
+
+/**
+ * Extracts iteration count from encrypted data without decrypting
+ * @param {string} encryptedData - Base64 encoded encrypted data
+ * @returns {number} Iteration count, or LEGACY_ITERATIONS if legacy format
+ */
+function getIterationsFromEncrypted(encryptedData) {
+  try {
+    const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+
+    if (combined.length >= 4) {
+      const possibleIterations = new DataView(combined.buffer, 0, 4).getUint32(0, false);
+
+      // Check if it looks like a valid iteration count
+      if (possibleIterations >= 100000 && possibleIterations <= 5000000) {
+        return possibleIterations;
+      }
+    }
+
+    // Legacy format
+    return LEGACY_ITERATIONS;
+  } catch (error) {
+    return LEGACY_ITERATIONS;
   }
 }
 
@@ -298,12 +429,15 @@ export async function addWallet(type, data, password, nickname = null) {
       throw new Error('This wallet already exists in your wallet list');
     }
 
+    // Get current recommended iterations
+    const currentIterations = getCurrentRecommendedIterations();
+
     // Double encryption:
     // 1. Encrypt wallet with ethers.js (creates encrypted JSON keystore)
     const encryptedJson = await wallet.encrypt(password);
-    
-    // 2. Encrypt the keystore again with AES-GCM (additional security layer)
-    const doubleEncrypted = await encryptWithAES(encryptedJson, password);
+
+    // 2. Encrypt the keystore again with AES-GCM using current iteration recommendations
+    const doubleEncrypted = await encryptWithAES(encryptedJson, password, currentIterations);
 
     // Generate nickname if not provided
     const finalNickname = nickname || await generateDefaultNickname();
@@ -316,7 +450,8 @@ export async function addWallet(type, data, password, nickname = null) {
       encryptedKeystore: doubleEncrypted,
       createdAt: Date.now(),
       importMethod: type,
-      encryptionVersion: 2 // Track encryption version for future upgrades
+      lastSecurityUpgrade: Date.now(), // Track when encryption was last upgraded
+      currentIterations: currentIterations // Store for UI display
     };
 
     // Get current wallets data
@@ -337,6 +472,8 @@ export async function addWallet(type, data, password, nickname = null) {
 
     // Save updated data
     await save(WALLETS_KEY, walletsData);
+
+    console.log(`🔐 Wallet created with ${currentIterations.toLocaleString()} PBKDF2 iterations`);
 
     // Return wallet info
     return {
@@ -432,28 +569,37 @@ export async function deleteWallet(walletId, password) {
 
 /**
  * Unlocks the active wallet and returns signer
+ * Auto-upgrades encryption if using outdated iteration count
+ *
  * @param {string} password - User password
- * @returns {Promise<{address: string, signer: ethers.Wallet}>}
+ * @param {Object} options - Optional settings
+ * @param {boolean} options.skipUpgrade - Skip auto-upgrade (for testing)
+ * @param {Function} options.onUpgradeStart - Callback when upgrade starts
+ * @returns {Promise<{address: string, signer: ethers.Wallet, upgraded?: boolean}>}
  * @throws {Error} If password is incorrect or no active wallet
  */
-export async function unlockWallet(password) {
+export async function unlockWallet(password, options = {}) {
   const activeWallet = await getActiveWallet();
 
   if (!activeWallet) {
     throw new Error('No wallet found. Please create or import a wallet.');
   }
 
-  return await unlockSpecificWallet(activeWallet.id, password);
+  return await unlockSpecificWallet(activeWallet.id, password, options);
 }
 
 /**
- * Unlocks a specific wallet by ID
+ * Unlocks a specific wallet by ID with auto-upgrade capability
+ *
  * @param {string} walletId - Wallet ID to unlock
  * @param {string} password - User password
- * @returns {Promise<{address: string, signer: ethers.Wallet}>}
+ * @param {Object} options - Optional settings
+ * @param {boolean} options.skipUpgrade - Skip auto-upgrade (for testing/export)
+ * @param {Function} options.onUpgradeStart - Callback when upgrade starts
+ * @returns {Promise<{address: string, signer: ethers.Wallet, upgraded?: boolean, iterationsBefore?: number, iterationsAfter?: number}>}
  * @throws {Error} If password is incorrect or wallet not found
  */
-export async function unlockSpecificWallet(walletId, password) {
+export async function unlockSpecificWallet(walletId, password, options = {}) {
   try {
     const walletsData = await getAllWallets();
     const wallet = walletsData.walletList.find(w => w.id === walletId);
@@ -462,12 +608,7 @@ export async function unlockSpecificWallet(walletId, password) {
       throw new Error('Wallet not found');
     }
 
-    // SECURITY: All wallets MUST use double encryption (version 2)
-    if (!wallet.encryptionVersion || wallet.encryptionVersion < 2) {
-      throw new Error('This wallet uses outdated encryption. Please re-import your wallet for enhanced security.');
-    }
-
-    // Decrypt the AES-GCM layer first
+    // Decrypt the AES-GCM layer (automatically detects iteration count)
     const keystoreJson = await decryptWithAES(wallet.encryptedKeystore, password);
 
     // Then decrypt wallet using ethers.js keystore
@@ -482,9 +623,66 @@ export async function unlockSpecificWallet(walletId, password) {
       await save(WALLETS_KEY, walletsData);
     }
 
+    // ===== AUTO-UPGRADE SYSTEM =====
+    // Check if wallet encryption needs security upgrade
+    if (!options.skipUpgrade) {
+      const currentIterations = getIterationsFromEncrypted(wallet.encryptedKeystore);
+      const recommendedIterations = getCurrentRecommendedIterations();
+
+      // Upgrade if current iterations are below recommendation
+      if (currentIterations < recommendedIterations) {
+        const iterationsBefore = currentIterations;
+
+        console.log(`🔐 Wallet encryption upgrade available:`);
+        console.log(`   Current: ${currentIterations.toLocaleString()} iterations`);
+        console.log(`   Recommended: ${recommendedIterations.toLocaleString()} iterations`);
+
+        // Notify user via callback if provided
+        if (options.onUpgradeStart) {
+          options.onUpgradeStart({
+            currentIterations,
+            recommendedIterations,
+            estimatedTimeMs: Math.floor((recommendedIterations / 100000) * 100) // ~100ms per 100k iterations
+          });
+        }
+
+        console.log(`🔄 Upgrading wallet security...`);
+        const upgradeStart = Date.now();
+
+        // Re-encrypt with current recommendations
+        // Layer 1: ethers.js keystore (unchanged)
+        const newKeystoreJson = await signer.encrypt(password);
+
+        // Layer 2: AES-GCM with new iteration count
+        const newEncrypted = await encryptWithAES(
+          newKeystoreJson,
+          password,
+          recommendedIterations
+        );
+
+        // Update wallet
+        wallet.encryptedKeystore = newEncrypted;
+        wallet.lastSecurityUpgrade = Date.now();
+        wallet.currentIterations = recommendedIterations;
+        await save(WALLETS_KEY, walletsData);
+
+        const upgradeTime = Date.now() - upgradeStart;
+        console.log(`✅ Wallet upgraded to ${recommendedIterations.toLocaleString()} iterations (${upgradeTime}ms)`);
+
+        return {
+          address: signer.address,
+          signer: signer,
+          upgraded: true,
+          iterationsBefore,
+          iterationsAfter: recommendedIterations
+        };
+      }
+    }
+
     return {
       address: signer.address,
-      signer: signer
+      signer: signer,
+      upgraded: false
     };
   } catch (error) {
     if (error.message.includes('incorrect password') || error.message.includes('Decryption failed')) {
@@ -501,7 +699,8 @@ export async function unlockSpecificWallet(walletId, password) {
  * @throws {Error} If password is incorrect
  */
 export async function exportPrivateKey(password) {
-  const { signer } = await unlockWallet(password);
+  // Skip upgrade when exporting (user just wants the key)
+  const { signer } = await unlockWallet(password, { skipUpgrade: true });
   return signer.privateKey;
 }
 
@@ -512,7 +711,8 @@ export async function exportPrivateKey(password) {
  * @throws {Error} If password is incorrect
  */
 export async function exportMnemonic(password) {
-  const { signer } = await unlockWallet(password);
+  // Skip upgrade when exporting (user just wants the mnemonic)
+  const { signer } = await unlockWallet(password, { skipUpgrade: true });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
 }
 
@@ -524,7 +724,7 @@ export async function exportMnemonic(password) {
  * @throws {Error} If password is incorrect or wallet not found
  */
 export async function exportPrivateKeyForWallet(walletId, password) {
-  const { signer } = await unlockSpecificWallet(walletId, password);
+  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true });
   return signer.privateKey;
 }
 
@@ -536,8 +736,32 @@ export async function exportPrivateKeyForWallet(walletId, password) {
  * @throws {Error} If password is incorrect or wallet not found
  */
 export async function exportMnemonicForWallet(walletId, password) {
-  const { signer } = await unlockSpecificWallet(walletId, password);
+  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
+}
+
+/**
+ * Gets security information for a wallet
+ * @param {string} walletId - Wallet ID
+ * @returns {Promise<{currentIterations: number, recommendedIterations: number, needsUpgrade: boolean, lastUpgrade: number}>}
+ */
+export async function getWalletSecurityInfo(walletId) {
+  const walletsData = await getAllWallets();
+  const wallet = walletsData.walletList.find(w => w.id === walletId);
+
+  if (!wallet) {
+    throw new Error('Wallet not found');
+  }
+
+  const currentIterations = getIterationsFromEncrypted(wallet.encryptedKeystore);
+  const recommendedIterations = getCurrentRecommendedIterations();
+
+  return {
+    currentIterations,
+    recommendedIterations,
+    needsUpgrade: currentIterations < recommendedIterations,
+    lastUpgrade: wallet.lastSecurityUpgrade || wallet.createdAt
+  };
 }
 
 /**
