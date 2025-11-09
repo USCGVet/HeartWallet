@@ -960,7 +960,28 @@ async function handleUnlock() {
   try {
     errorDiv.classList.add('hidden');
 
-    const { address, signer } = await unlockWallet(password);
+    // Unlock wallet with auto-upgrade notification
+    const { address, signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        console.log(`🔐 Auto-upgrading wallet encryption: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()} iterations`);
+        // Show visual feedback in UI
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'status-message info';
+        statusDiv.textContent = `🔐 Upgrading wallet security to ${info.recommendedIterations.toLocaleString()} iterations...`;
+        errorDiv.parentElement.insertBefore(statusDiv, errorDiv);
+        setTimeout(() => statusDiv.remove(), 3000);
+      }
+    });
+
+    // Show upgrade completion message if wallet was upgraded
+    if (upgraded) {
+      console.log(`✅ Wallet upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()} iterations`);
+      const statusDiv = document.createElement('div');
+      statusDiv.className = 'status-message success';
+      statusDiv.textContent = `✅ Security upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()} iterations`;
+      errorDiv.parentElement.insertBefore(statusDiv, errorDiv);
+      setTimeout(() => statusDiv.remove(), 5000);
+    }
 
     // Success! Clear failed attempts
     await clearFailedAttempts();
@@ -1553,8 +1574,21 @@ async function handleSendTransaction() {
   try {
     errorEl.classList.add('hidden');
 
-    // Unlock wallet with password
-    const { signer } = await unlockWallet(password);
+    // Unlock wallet with password and auto-upgrade if needed
+    const { signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
+      onUpgradeStart: (info) => {
+        console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'status-message info';
+        statusDiv.textContent = '🔐 Upgrading wallet security...';
+        errorEl.parentElement.insertBefore(statusDiv, errorEl);
+        setTimeout(() => statusDiv.remove(), 3000);
+      }
+    });
+
+    if (upgraded) {
+      console.log(`✅ Wallet upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()}`);
+    }
 
     // Get provider with automatic failover and connect signer
     const provider = await rpc.getProvider(currentState.network);
