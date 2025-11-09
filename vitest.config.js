@@ -4,7 +4,7 @@ import { resolve } from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'jsdom',
+    environment: 'happy-dom',
     pool: 'vmThreads',
     setupFiles: ['./tests/setup.js'],
     coverage: {
