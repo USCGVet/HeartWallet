@@ -48,7 +48,7 @@ const ITERATION_MILESTONES = [
  * @param {number} year - Year to get recommendation for (defaults to current year)
  * @returns {number} Recommended iteration count
  */
-function getCurrentRecommendedIterations(year = new Date().getFullYear()) {
+export function getCurrentRecommendedIterations(year = new Date().getFullYear()) {
   // Find exact match first
   const exactMatch = ITERATION_MILESTONES.find(m => m.year === year);
   if (exactMatch) return exactMatch.iterations;
@@ -254,6 +254,11 @@ function getIterationsFromEncrypted(encryptedData) {
 // Storage keys
 const OLD_WALLET_KEY = 'wallet_encrypted'; // Legacy single wallet
 const WALLETS_KEY = 'wallets_multi'; // New multi-wallet structure
+
+// ===== CONCURRENCY CONTROL =====
+// Prevents race conditions when multiple tabs upgrade the same wallet simultaneously
+// Maps wallet ID to upgrade Promise
+const ongoingUpgrades = new Map();
 
 /**
  * Migration: Converts old single-wallet format to new multi-wallet format
@@ -631,50 +636,97 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
 
       // Upgrade if current iterations are below recommendation
       if (currentIterations < recommendedIterations) {
-        const iterationsBefore = currentIterations;
+        // CONCURRENCY CONTROL: Check if upgrade already in progress for this wallet
+        if (ongoingUpgrades.has(walletId)) {
+          console.log(`⏳ Wallet upgrade already in progress, waiting for completion...`);
 
-        console.log(`🔐 Wallet encryption upgrade available:`);
-        console.log(`   Current: ${currentIterations.toLocaleString()} iterations`);
-        console.log(`   Recommended: ${recommendedIterations.toLocaleString()} iterations`);
+          // Wait for the ongoing upgrade to complete
+          await ongoingUpgrades.get(walletId);
 
-        // Notify user via callback if provided
-        if (options.onUpgradeStart) {
-          options.onUpgradeStart({
-            currentIterations,
-            recommendedIterations,
-            estimatedTimeMs: Math.floor((recommendedIterations / 100000) * 100) // ~100ms per 100k iterations
-          });
+          // Reload wallet data after upgrade completes
+          const updatedWalletsData = await getAllWallets();
+          const updatedWallet = updatedWalletsData.walletList.find(w => w.id === walletId);
+
+          // Return with upgraded flag set to true (another tab did the upgrade)
+          return {
+            address: signer.address,
+            signer: signer,
+            upgraded: true,
+            iterationsBefore: currentIterations,
+            iterationsAfter: recommendedIterations,
+            upgradedByConcurrentTab: true
+          };
         }
 
-        console.log(`🔄 Upgrading wallet security...`);
-        const upgradeStart = Date.now();
+        // Start upgrade and track it
+        const upgradePromise = (async () => {
+          try {
+            const iterationsBefore = currentIterations;
 
-        // Re-encrypt with current recommendations
-        // Layer 1: ethers.js keystore (unchanged)
-        const newKeystoreJson = await signer.encrypt(password);
+            console.log(`🔐 Wallet encryption upgrade available:`);
+            console.log(`   Current: ${currentIterations.toLocaleString()} iterations`);
+            console.log(`   Recommended: ${recommendedIterations.toLocaleString()} iterations`);
 
-        // Layer 2: AES-GCM with new iteration count
-        const newEncrypted = await encryptWithAES(
-          newKeystoreJson,
-          password,
-          recommendedIterations
-        );
+            // Notify user via callback if provided
+            if (options.onUpgradeStart) {
+              options.onUpgradeStart({
+                currentIterations,
+                recommendedIterations,
+                estimatedTimeMs: Math.floor((recommendedIterations / 100000) * 100) // ~100ms per 100k iterations
+              });
+            }
 
-        // Update wallet
-        wallet.encryptedKeystore = newEncrypted;
-        wallet.lastSecurityUpgrade = Date.now();
-        wallet.currentIterations = recommendedIterations;
-        await save(WALLETS_KEY, walletsData);
+            console.log(`🔄 Upgrading wallet security...`);
+            const upgradeStart = Date.now();
 
-        const upgradeTime = Date.now() - upgradeStart;
-        console.log(`✅ Wallet upgraded to ${recommendedIterations.toLocaleString()} iterations (${upgradeTime}ms)`);
+            // Re-encrypt with current recommendations
+            // Layer 1: ethers.js keystore (unchanged)
+            const newKeystoreJson = await signer.encrypt(password);
+
+            // Layer 2: AES-GCM with new iteration count
+            const newEncrypted = await encryptWithAES(
+              newKeystoreJson,
+              password,
+              recommendedIterations
+            );
+
+            // Update wallet (reload to get latest state)
+            const latestWalletsData = await getAllWallets();
+            const latestWallet = latestWalletsData.walletList.find(w => w.id === walletId);
+
+            if (!latestWallet) {
+              throw new Error('Wallet not found during upgrade');
+            }
+
+            latestWallet.encryptedKeystore = newEncrypted;
+            latestWallet.lastSecurityUpgrade = Date.now();
+            latestWallet.currentIterations = recommendedIterations;
+            await save(WALLETS_KEY, latestWalletsData);
+
+            const upgradeTime = Date.now() - upgradeStart;
+            console.log(`✅ Wallet upgraded to ${recommendedIterations.toLocaleString()} iterations (${upgradeTime}ms)`);
+
+            return {
+              iterationsBefore,
+              iterationsAfter: recommendedIterations
+            };
+          } finally {
+            // Clean up tracking
+            ongoingUpgrades.delete(walletId);
+          }
+        })();
+
+        // Track the ongoing upgrade
+        ongoingUpgrades.set(walletId, upgradePromise);
+
+        // Wait for upgrade to complete
+        const upgradeResult = await upgradePromise;
 
         return {
           address: signer.address,
           signer: signer,
           upgraded: true,
-          iterationsBefore,
-          iterationsAfter: recommendedIterations
+          ...upgradeResult
         };
       }
     }
