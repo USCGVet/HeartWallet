@@ -87,12 +87,13 @@ describe('tokens.js', () => {
       expect(result).toEqual(Object.keys(DEFAULT_TOKENS.pulsechain));
     });
 
-    it('should return empty array for network with no defaults', async () => {
+    it('should return default tokens for ethereum network', async () => {
       storage.load.mockResolvedValue(null);
 
       const result = await getEnabledDefaultTokens('ethereum');
 
-      expect(result).toEqual([]);
+      // Ethereum now has HEX as a default token
+      expect(result).toEqual(['HEX']);
     });
   });
 
@@ -150,15 +151,17 @@ describe('tokens.js', () => {
       expect(result[0].isDefault).toBe(true);
     });
 
-    it('should handle network with no tokens at all', async () => {
+    it('should handle ethereum network with default HEX token', async () => {
       storage.load
         .mockResolvedValueOnce(null) // no custom tokens
         .mockResolvedValueOnce(null); // no enabled defaults stored
 
       const result = await getAllTokens('ethereum');
 
-      // Ethereum has no default tokens in DEFAULT_TOKENS
-      expect(result).toEqual([]);
+      // Ethereum now has HEX as a default token
+      expect(result.length).toBe(1);
+      expect(result[0].symbol).toBe('HEX');
+      expect(result[0].isDefault).toBe(true);
     });
   });
 

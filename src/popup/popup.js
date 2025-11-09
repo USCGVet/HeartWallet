@@ -267,7 +267,7 @@ async function saveNetwork() {
 
 function applyTheme() {
   // Remove all theme classes
-  document.body.classList.remove('theme-high-contrast', 'theme-professional', 'theme-amber', 'theme-cga', 'theme-classic');
+  document.body.classList.remove('theme-high-contrast', 'theme-professional', 'theme-amber', 'theme-cga', 'theme-classic', 'theme-heart');
 
   // Apply current theme
   if (currentState.settings.theme !== 'high-contrast') {

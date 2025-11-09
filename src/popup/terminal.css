@@ -121,6 +121,38 @@ body.theme-classic {
   --terminal-glow-bright: rgba(0, 204, 0, 0.8);
 }
 
+/* ===== HEART THEME ===== */
+body.theme-heart {
+  /* Backgrounds - Dark slate/charcoal from logo */
+  --terminal-bg: #2a3340;
+  --terminal-bg-secondary: #353d4d;
+
+  /* Foreground - Warm peach/cream tones */
+  --terminal-fg: #ffd7a8;
+  --terminal-fg-dim: #e8c4a0;
+  --terminal-fg-bright: #ffe8d0;
+
+  /* Accents - Coral red, orange, and complementary colors */
+  --terminal-success: #ff6b6b;
+  --terminal-warning: #ff8c5a;
+  --terminal-error: #ff4545;
+  --terminal-info: #ffd7a8;
+
+  /* Glow effects - Soft coral glow */
+  --terminal-glow: rgba(255, 107, 107, 0.4);
+  --terminal-glow-bright: rgba(255, 107, 107, 0.7);
+
+  /* Borders - Warm peach/orange */
+  --terminal-border: #ff8c5a;
+  --terminal-border-dim: #e8956a;
+
+  /* Use sans-serif font for modern look */
+  font-family: var(--font-sans);
+
+  /* Rounded corners for softer appearance */
+  --border-radius: 6px;
+}
+
 /* ===== BASE STYLES ===== */
 * {
   box-sizing: border-box;
@@ -150,8 +182,16 @@ body.theme-professional {
   letter-spacing: 0;
 }
 
-/* ===== SCANLINES EFFECT (not for professional theme) ===== */
-body:not(.theme-professional)::before {
+/* Use sans-serif for heart theme */
+body.theme-heart {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+/* ===== SCANLINES EFFECT (not for professional or heart themes) ===== */
+body:not(.theme-professional):not(.theme-heart)::before {
   content: '';
   position: fixed;
   top: 0;

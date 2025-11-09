@@ -95,7 +95,17 @@ export const DEFAULT_TOKENS = {
       logo: 'heart.png'
     }
   },
-  ethereum: {},
+  ethereum: {
+    'HEX': {
+      name: 'HEX',
+      symbol: 'HEX',
+      address: '0x2b591e99afe9f32eaa6214f7b7629768c40eeb39',
+      decimals: 8,
+      logo: 'hex.png',
+      homeUrl: 'https://hex.com',
+      dexScreenerUrl: 'https://dexscreener.com/ethereum/0x9e0905249ceefffb9605e034b534544684a58be6'
+    }
+  },
   sepolia: {}
 };
 
