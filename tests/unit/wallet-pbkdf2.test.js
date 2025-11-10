@@ -267,7 +267,7 @@ describe('Multi-Wallet Management', () => {
 
     const wallets = await walletModule.getAllWallets();
     expect(wallets.walletList).toHaveLength(10);
-  });
+  }, 60000); // 60 second timeout for creating 10 wallets with high iterations
 
   it('should prevent duplicate addresses', async () => {
     const testPrivateKey = '0x' + '1'.repeat(64);
@@ -319,12 +319,12 @@ describe('Security Information', () => {
 describe('Password Validation', () => {
   it('should reject weak passwords', async () => {
     const weakPasswords = [
-      'short',
-      'no-uppercase-123!',
-      'NO-LOWERCASE-123!',
-      'NoNumbers!',
-      'NoSpecialChars123',
-      'OnlyEleven1!'
+      'short',                    // Too short (5 chars)
+      'no-uppercase-123!',        // Missing uppercase
+      'NO-LOWERCASE-123!',        // Missing lowercase
+      'NoNumbers!',               // Missing number (only 10 chars too)
+      'NoSpecialChars123',        // Missing special char
+      'JustElev1!'                // Only 11 chars (needs 12+)
     ];
 
     for (const password of weakPasswords) {
@@ -529,5 +529,107 @@ describe('Integration: Create, Import, Export, Delete', () => {
     // 7. Re-import from private key
     const fromPrivateKey = await walletModule.addWallet('privatekey', { privateKey }, testPassword, 'From PK');
     expect(fromPrivateKey.address).toBe(created.address);
+  }, 30000); // 30 second timeout for full lifecycle with multiple operations
+});
+
+describe('Additional Security Tests', () => {
+  const testPassword = 'SecurePassword123!@#';
+
+  it('should produce different encrypted outputs for same data with different passwords', async () => {
+    const password1 = 'StrongPassword1!@#';
+    const password2 = 'DifferentPass2!@#';
+
+    // Create two wallets with same mnemonic but different passwords
+    const mnemonic = 'test walk nut penalty hip pave soap entry language right filter choice';
+
+    const wallet1 = await walletModule.addWallet('mnemonic', { mnemonic }, password1, 'Wallet 1');
+    const wallets1 = await walletModule.getAllWallets();
+    const encrypted1 = wallets1.walletList[0].encryptedKeystore;
+
+    // Clear and recreate with different password
+    Object.keys(mockStorage).forEach(key => delete mockStorage[key]);
+
+    const wallet2 = await walletModule.addWallet('mnemonic', { mnemonic }, password2, 'Wallet 2');
+    const wallets2 = await walletModule.getAllWallets();
+    const encrypted2 = wallets2.walletList[0].encryptedKeystore;
+
+    // Same mnemonic should produce same address
+    expect(wallet1.address).toBe(wallet2.address);
+
+    // But different encrypted outputs
+    expect(encrypted1).not.toBe(encrypted2);
   });
+
+  it('should produce different encrypted outputs each time (unique salts)', async () => {
+    const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+    const wallet1 = await walletModule.addWallet('mnemonic', { mnemonic }, testPassword, 'Wallet 1');
+    const wallets1 = await walletModule.getAllWallets();
+    const encrypted1 = wallets1.walletList[0].encryptedKeystore;
+
+    // Clear and recreate with same password
+    Object.keys(mockStorage).forEach(key => delete mockStorage[key]);
+
+    const wallet2 = await walletModule.addWallet('mnemonic', { mnemonic }, testPassword, 'Wallet 2');
+    const wallets2 = await walletModule.getAllWallets();
+    const encrypted2 = wallets2.walletList[0].encryptedKeystore;
+
+    // Same mnemonic and password should produce same address
+    expect(wallet1.address).toBe(wallet2.address);
+
+    // But different encrypted outputs due to different salts
+    expect(encrypted1).not.toBe(encrypted2);
+  });
+
+  it('should fail to unlock with incorrect password', async () => {
+    await walletModule.addWallet('create', {}, testPassword, 'Test Wallet');
+
+    const wrongPassword = 'WrongPassword123!@#';
+
+    await expect(
+      walletModule.unlockWallet(wrongPassword)
+    ).rejects.toThrow();
+  });
+
+  it('should store iteration count in metadata for efficiency', async () => {
+    const wallet = await walletModule.addWallet('create', {}, testPassword, 'Test Wallet');
+    const wallets = await walletModule.getAllWallets();
+    const walletData = wallets.walletList[0];
+
+    // Check metadata field exists
+    expect(walletData.currentIterations).toBeDefined();
+    expect(typeof walletData.currentIterations).toBe('number');
+    expect(walletData.currentIterations).toBeGreaterThan(100000);
+  });
+
+  it('should track security upgrade timestamp', async () => {
+    const wallet = await walletModule.addWallet('create', {}, testPassword, 'Test Wallet');
+    const wallets = await walletModule.getAllWallets();
+    const walletData = wallets.walletList[0];
+
+    expect(walletData.lastSecurityUpgrade).toBeDefined();
+    expect(walletData.lastSecurityUpgrade).toBeGreaterThan(0);
+    expect(walletData.createdAt).toBeDefined();
+
+    // lastSecurityUpgrade should be at or after creation
+    expect(walletData.lastSecurityUpgrade).toBeGreaterThanOrEqual(walletData.createdAt);
+  });
+
+  it('should handle special characters in passwords correctly', async () => {
+    const specialPasswords = [
+      'Test!@#$%^&*()123Aa',
+      'Pass[]{};:\'"<>,.?/123Bb',
+      'Valid|\\`~+=_-123Cc'
+    ];
+
+    for (const password of specialPasswords) {
+      Object.keys(mockStorage).forEach(key => delete mockStorage[key]);
+
+      const wallet = await walletModule.addWallet('create', {}, password, 'Test');
+      expect(wallet.address).toBeDefined();
+
+      // Should be able to unlock with same password
+      await expect(walletModule.unlockWallet(password)).resolves.not.toThrow();
+    }
+  }, 20000); // 20 second timeout for 3 wallets (create + unlock each)
 });

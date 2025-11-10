@@ -286,51 +286,147 @@
       <button id="btn-back-from-send" class="header-btn">←</button>
     </div>
     <div class="container">
-      <div class="panel">
-        <p class="text-dim mb-2" style="font-size: 11px;">From</p>
-        <p style="font-family: var(--font-mono); font-size: 12px; word-break: break-all;" id="send-from-address">
-          0x0000...0000
-        </p>
-      </div>
-
-      <div class="panel">
-        <div class="form-group">
-          <label class="form-label">Asset</label>
-          <select id="send-asset-select" class="form-control">
-            <option value="native">Native (PLS)</option>
-          </select>
+      <!-- Send Form (hidden after sending) -->
+      <div id="send-form">
+        <div class="panel">
+          <p class="text-dim mb-2" style="font-size: 11px;">From</p>
+          <p style="font-family: var(--font-mono); font-size: 12px; word-break: break-all;" id="send-from-address">
+            0x0000...0000
+          </p>
         </div>
 
-        <p class="text-dim mt-2" style="font-size: 11px;">
-          Available: <span id="send-available-balance" style="cursor: help;" title="">0</span> <span id="send-balance-symbol">tPLS</span>
-        </p>
-      </div>
+        <div class="panel">
+          <div class="form-group">
+            <label class="form-label">Asset</label>
+            <select id="send-asset-select" class="form-control">
+              <option value="native">Native (PLS)</option>
+            </select>
+          </div>
 
-      <div class="panel">
-        <div class="form-group">
-          <label class="form-label">Recipient Address</label>
-          <input type="text" id="send-to-address" class="form-control" placeholder="0x..." />
+          <p class="text-dim mt-2" style="font-size: 11px;">
+            Available: <span id="send-available-balance" style="cursor: help;" title="">0</span> <span id="send-balance-symbol">tPLS</span>
+          </p>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Amount</label>
-          <input type="text" id="send-amount" class="form-control" placeholder="0.0" />
-          <button id="btn-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+        <div class="panel">
+          <div class="form-group">
+            <label class="form-label">Recipient Address</label>
+            <input type="text" id="send-to-address" class="form-control" placeholder="0x..." />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Amount</label>
+            <input type="text" id="send-amount" class="form-control" placeholder="0.0" />
+            <button id="btn-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+          </div>
         </div>
-      </div>
 
-      <div class="panel">
-        <div class="form-group">
-          <label class="form-label">Password</label>
-          <input type="password" id="send-password" class="form-control" placeholder="Enter password" />
+        <!-- Gas Price Selector -->
+        <div class="panel">
+          <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Gas Price</p>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="send-gas-speed" value="slow" />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Slow</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="send-gas-slow-price">-- Gwei</div>
+              </div>
+            </label>
+
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="send-gas-speed" value="normal" checked />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Normal</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="send-gas-normal-price">-- Gwei</div>
+              </div>
+            </label>
+
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="send-gas-speed" value="fast" />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Fast</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="send-gas-fast-price">-- Gwei</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="radio" name="send-gas-speed" value="custom" id="send-gas-custom-radio" />
+              <span>Custom Gas Price</span>
+            </label>
+            <div id="send-custom-gas-input-container" class="hidden">
+              <input type="number" id="send-custom-gas-price" class="form-control" placeholder="Enter gas price in Gwei" step="0.01" min="0" />
+            </div>
+          </div>
+
+          <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
+            <div>Estimated Gas: <span id="send-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
+            <div>Max Fee: <span id="send-max-fee" style="color: var(--terminal-fg);">--</span></div>
+          </div>
         </div>
-      </div>
 
-      <p id="send-error" class="text-danger text-center hidden"></p>
+        <!-- Advanced: Nonce Control -->
+        <div class="panel">
+          <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Advanced</p>
 
-      <div class="button-group mt-3">
-        <button id="btn-confirm-send" class="btn-primary">SEND</button>
-        <button id="btn-cancel-send" class="btn-secondary">CANCEL</button>
+          <div style="margin-bottom: 12px;">
+            <p class="text-dim" style="font-size: 10px;">Transaction Nonce: <span id="send-current-nonce" style="color: var(--terminal-fg); font-weight: bold;">--</span></p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="send-custom-nonce-checkbox" />
+              <span style="font-size: 11px;">Custom Nonce (Replace Stuck TX)</span>
+            </label>
+            <div id="send-custom-nonce-input-container" class="hidden">
+              <input type="number" id="send-custom-nonce" class="form-control" placeholder="Enter nonce" step="1" min="0" style="margin-top: 6px;" />
+              <p style="font-size: 10px; color: var(--terminal-warning); margin-top: 4px; margin-bottom: 0;">
+                ⚠️ Use same nonce as stuck transaction with higher gas price to replace it
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" id="send-password" class="form-control" placeholder="Enter password" />
+          </div>
+        </div>
+
+        <p id="send-error" class="text-danger text-center hidden"></p>
+
+        <div class="button-group mt-3">
+          <button id="btn-confirm-send" class="btn-primary">SEND</button>
+          <button id="btn-cancel-send" class="btn-secondary">CANCEL</button>
+        </div>
+      </div><!-- end send-form -->
+
+      <!-- Transaction Status (shown after sending) -->
+      <div id="send-status-section" class="hidden">
+        <div class="panel text-center" style="border-color: var(--terminal-success);">
+          <p style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">✅ Transaction Sent!</p>
+          <p class="text-dim" style="font-size: 11px;">Hash:</p>
+          <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; margin-bottom: 12px;" id="send-status-hash">0x000...000</p>
+          <button id="btn-send-status-explorer" class="btn-small">VIEW ON EXPLORER</button>
+        </div>
+
+        <div class="panel text-center" id="send-status-indicator">
+          <p style="font-size: 14px; font-weight: bold;" id="send-status-message">⏳ Waiting for confirmation...</p>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;" id="send-status-details">This usually takes 10-30 seconds</p>
+        </div>
+
+        <!-- Pending actions (only shown while pending) -->
+        <div id="send-status-pending-actions" class="button-group mt-2">
+          <button id="btn-send-status-speed-up" class="btn-primary btn-small">SPEED UP</button>
+          <button id="btn-send-status-cancel" class="btn-danger btn-small">CANCEL</button>
+        </div>
+
+        <div class="mt-2">
+          <button id="btn-close-send-status" class="btn-small" style="width: 100%;">CLOSE</button>
+        </div>
       </div>
     </div>
   </div>
@@ -465,25 +561,124 @@
         </div>
       </div>
 
-      <!-- Send Form -->
-      <div class="panel">
-        <div class="panel-header">Send Token</div>
-        <div class="form-group">
-          <label class="form-label">Recipient Address</label>
-          <input type="text" id="token-details-recipient" class="form-control" placeholder="0x..." />
+      <!-- Send Form (hidden after sending) -->
+      <div id="token-send-form">
+        <div class="panel">
+          <div class="panel-header">Send Token</div>
+          <div class="form-group">
+            <label class="form-label">Recipient Address</label>
+            <input type="text" id="token-details-recipient" class="form-control" placeholder="0x..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Amount</label>
+            <input type="text" id="token-details-amount" class="form-control" placeholder="0.0" />
+            <button id="btn-token-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Amount</label>
-          <input type="text" id="token-details-amount" class="form-control" placeholder="0.0" />
-          <button id="btn-token-send-max" class="btn-link" style="font-size: 11px; margin-top: 4px;">Send Max</button>
+
+        <!-- Gas Price Selector -->
+        <div class="panel">
+          <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Gas Price</p>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="token-gas-speed" value="slow" />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Slow</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="token-gas-slow-price">-- Gwei</div>
+              </div>
+            </label>
+
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="token-gas-speed" value="normal" checked />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Normal</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="token-gas-normal-price">-- Gwei</div>
+              </div>
+            </label>
+
+            <label class="gas-option" style="cursor: pointer; border: 1px solid var(--terminal-border); padding: 8px; display: flex; align-items: center; gap: 6px;">
+              <input type="radio" name="token-gas-speed" value="fast" />
+              <div style="flex: 1;">
+                <div style="font-size: 11px; font-weight: bold; color: var(--terminal-fg);">Fast</div>
+                <div style="font-size: 10px; color: var(--terminal-fg-dim);" id="token-gas-fast-price">-- Gwei</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="radio" name="token-gas-speed" value="custom" id="token-gas-custom-radio" />
+              <span>Custom Gas Price</span>
+            </label>
+            <div id="token-custom-gas-input-container" class="hidden">
+              <input type="number" id="token-custom-gas-price" class="form-control" placeholder="Enter gas price in Gwei" step="0.01" min="0" />
+            </div>
+          </div>
+
+          <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
+            <div>Estimated Gas: <span id="token-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
+            <div>Max Fee: <span id="token-max-fee" style="color: var(--terminal-fg);">--</span></div>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Password</label>
-          <input type="password" id="token-details-password" class="form-control" placeholder="Enter password" />
+
+        <!-- Advanced: Nonce Control -->
+        <div class="panel">
+          <p class="text-dim mb-2" style="font-size: 11px; font-weight: bold;">Advanced</p>
+
+          <div style="margin-bottom: 12px;">
+            <p class="text-dim" style="font-size: 10px;">Transaction Nonce: <span id="token-current-nonce" style="color: var(--terminal-fg); font-weight: bold;">--</span></p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="token-custom-nonce-checkbox" />
+              <span style="font-size: 11px;">Custom Nonce (Replace Stuck TX)</span>
+            </label>
+            <div id="token-custom-nonce-input-container" class="hidden">
+              <input type="number" id="token-custom-nonce" class="form-control" placeholder="Enter nonce" step="1" min="0" style="margin-top: 6px;" />
+              <p style="font-size: 10px; color: var(--terminal-warning); margin-top: 4px; margin-bottom: 0;">
+                ⚠️ Use same nonce as stuck transaction with higher gas price to replace it
+              </p>
+            </div>
+          </div>
         </div>
+
+        <div class="panel">
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" id="token-details-password" class="form-control" placeholder="Enter password" />
+          </div>
+        </div>
+
         <p id="token-details-send-error" class="text-danger text-center hidden"></p>
         <div class="button-group mt-3">
           <button id="btn-token-send" class="btn-primary">SEND</button>
+        </div>
+      </div><!-- end token-send-form -->
+
+      <!-- Transaction Status (shown after sending) -->
+      <div id="token-send-status-section" class="hidden">
+        <div class="panel text-center" style="border-color: var(--terminal-success);">
+          <p style="font-size: 16px; font-weight: bold; margin-bottom: 8px;">✅ Transaction Sent!</p>
+          <p class="text-dim" style="font-size: 11px;">Hash:</p>
+          <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; margin-bottom: 12px;" id="token-send-status-hash">0x000...000</p>
+          <button id="btn-token-send-status-explorer" class="btn-small">VIEW ON EXPLORER</button>
+        </div>
+
+        <div class="panel text-center" id="token-send-status-indicator">
+          <p style="font-size: 14px; font-weight: bold;" id="token-send-status-message">⏳ Waiting for confirmation...</p>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;" id="token-send-status-details">This usually takes 10-30 seconds</p>
+        </div>
+
+        <!-- Pending actions (only shown while pending) -->
+        <div id="token-send-status-pending-actions" class="button-group mt-2">
+          <button id="btn-token-send-status-speed-up" class="btn-primary btn-small">SPEED UP</button>
+          <button id="btn-token-send-status-cancel" class="btn-danger btn-small">CANCEL</button>
+        </div>
+
+        <div class="mt-2">
+          <button id="btn-close-token-send-status" class="btn-small" style="width: 100%;">CLOSE</button>
         </div>
       </div>
     </div>
