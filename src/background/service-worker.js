@@ -1742,6 +1742,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: true, transaction: txDetail });
           break;
 
+        case 'SAVE_TX':
+          await txHistory.addTxToHistory(message.address, message.transaction);
+          sendResponse({ success: true });
+          break;
+
+        case 'SAVE_AND_MONITOR_TX':
+          await txHistory.addTxToHistory(message.address, message.transaction);
+
+          // Start monitoring for confirmation in background
+          (async () => {
+            try {
+              const network = message.transaction.network || 'pulsechainTestnet';
+              const provider = await rpc.getProvider(network);
+              const tx = { hash: message.transaction.hash };
+              await waitForConfirmation(tx, provider, message.address);
+            } catch (error) {
+              console.error('Error monitoring transaction:', error);
+            }
+          })();
+
+          sendResponse({ success: true });
+          break;
+
         case 'CLEAR_TX_HISTORY':
           await txHistory.clearTxHistory(message.address);
           sendResponse({ success: true });

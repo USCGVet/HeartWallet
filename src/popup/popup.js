@@ -1481,7 +1481,52 @@ async function showSendScreen() {
   document.getElementById('send-password').value = '';
   document.getElementById('send-error').classList.add('hidden');
 
+  // Show form and hide status section (reset state)
+  document.getElementById('send-form').classList.remove('hidden');
+  document.getElementById('send-status-section').classList.add('hidden');
+
   showScreen('screen-send');
+
+  // Populate gas prices and nonce
+  const symbol = symbols[currentState.network] || 'TOKEN';
+  const txRequest = {
+    from: currentState.address,
+    to: currentState.address, // Dummy for estimation
+    value: '0x0'
+  };
+  await populateSendGasPrices(currentState.network, txRequest, symbol);
+
+  // Fetch and display nonce
+  try {
+    const nonceHex = await rpc.getTransactionCount(currentState.network, currentState.address, 'pending');
+    const nonce = parseInt(nonceHex, 16);
+    document.getElementById('send-current-nonce').textContent = nonce;
+  } catch (error) {
+    console.error('Error fetching nonce:', error);
+    document.getElementById('send-current-nonce').textContent = 'Error';
+  }
+
+  // Setup custom nonce checkbox
+  const customNonceCheckbox = document.getElementById('send-custom-nonce-checkbox');
+  const customNonceContainer = document.getElementById('send-custom-nonce-input-container');
+  customNonceCheckbox.checked = false;
+  customNonceContainer.classList.add('hidden');
+
+  // Remove old listener if exists and add new one
+  const newCheckbox = customNonceCheckbox.cloneNode(true);
+  customNonceCheckbox.parentNode.replaceChild(newCheckbox, customNonceCheckbox);
+
+  document.getElementById('send-custom-nonce-checkbox').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      customNonceContainer.classList.remove('hidden');
+      const currentNonce = document.getElementById('send-current-nonce').textContent;
+      if (currentNonce !== '--' && currentNonce !== 'Error') {
+        document.getElementById('send-custom-nonce').value = currentNonce;
+      }
+    } else {
+      customNonceContainer.classList.add('hidden');
+    }
+  });
 }
 
 async function handleAssetChange() {
@@ -1574,6 +1619,12 @@ async function handleSendTransaction() {
   try {
     errorEl.classList.add('hidden');
 
+    // Disable send button to prevent double-clicking
+    const sendBtn = document.getElementById('btn-confirm-send');
+    sendBtn.disabled = true;
+    sendBtn.style.opacity = '0.5';
+    sendBtn.style.cursor = 'not-allowed';
+
     // Unlock wallet with password and auto-upgrade if needed
     const { signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
       onUpgradeStart: (info) => {
@@ -1590,6 +1641,20 @@ async function handleSendTransaction() {
       console.log(`✅ Wallet upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()}`);
     }
 
+    // Get selected gas price
+    const gasPrice = getSelectedSendGasPrice();
+
+    // Get custom nonce if provided
+    const customNonceCheckbox = document.getElementById('send-custom-nonce-checkbox');
+    const customNonceInput = document.getElementById('send-custom-nonce');
+    let customNonce = null;
+    if (customNonceCheckbox.checked && customNonceInput.value) {
+      customNonce = parseInt(customNonceInput.value);
+      if (isNaN(customNonce) || customNonce < 0) {
+        throw new Error('Invalid custom nonce');
+      }
+    }
+
     // Get provider with automatic failover and connect signer
     const provider = await rpc.getProvider(currentState.network);
     const connectedSigner = signer.connect(provider);
@@ -1602,6 +1667,17 @@ async function handleSendTransaction() {
         to: toAddress,
         value: ethers.parseEther(amount)
       };
+
+      // Add gas price if selected
+      if (gasPrice) {
+        tx.gasPrice = gasPrice;
+      }
+
+      // Add custom nonce if provided
+      if (customNonce !== null) {
+        tx.nonce = customNonce;
+      }
+
       txResponse = await connectedSigner.sendTransaction(tx);
       symbol = symbols[currentState.network] || 'tokens';
     } else {
@@ -1614,12 +1690,46 @@ async function handleSendTransaction() {
       }
 
       const amountWei = erc20.parseTokenAmount(amount, token.decimals);
-      txResponse = await erc20.transferToken(connectedSigner, token.address, toAddress, amountWei);
+
+      // For token transfers, we need to pass gas options to the transfer function
+      const txOptions = {};
+      if (gasPrice) {
+        txOptions.gasPrice = gasPrice;
+      }
+      if (customNonce !== null) {
+        txOptions.nonce = customNonce;
+      }
+
+      // Note: This requires updating erc20.transferToken to accept options
+      // For now, we'll send the transaction manually
+      const tokenContract = new ethers.Contract(
+        token.address,
+        ['function transfer(address to, uint256 amount) returns (bool)'],
+        connectedSigner
+      );
+
+      txResponse = await tokenContract.transfer(toAddress, amountWei, txOptions);
       symbol = token.symbol;
     }
 
-    // Show success modal with tx hash
-    showTransactionSuccessModal(txResponse.hash);
+    // Save transaction to history and start monitoring
+    await chrome.runtime.sendMessage({
+      type: 'SAVE_AND_MONITOR_TX',
+      address: currentState.address,
+      transaction: {
+        hash: txResponse.hash,
+        timestamp: Date.now(),
+        from: currentState.address,
+        to: toAddress,
+        value: selectedAsset === 'native' ? ethers.parseEther(amount).toString() : '0',
+        gasPrice: gasPrice || (await txResponse.provider.getFeeData()).gasPrice.toString(),
+        nonce: txResponse.nonce,
+        network: currentState.network,
+        status: 'pending',
+        blockNumber: null,
+        type: selectedAsset === 'native' ? 'send' : 'token'
+      }
+    });
 
     // Send desktop notification
     if (chrome.notifications) {
@@ -1627,16 +1737,13 @@ async function handleSendTransaction() {
         type: 'basic',
         iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
         title: 'Transaction Sent',
-        message: `Sent ${amount} ${symbol} to ${toAddress.slice(0, 10)}...`,
+        message: `Sending ${amount} ${symbol} to ${toAddress.slice(0, 10)}...`,
         priority: 2
       });
     }
 
-    // Return to dashboard
-    showScreen('screen-dashboard');
-
-    // Wait for transaction confirmation in background
-    waitForTransactionConfirmation(txResponse.hash, amount, symbol);
+    // Show transaction status screen
+    await showSendTransactionStatus(txResponse.hash, currentState.network, amount, symbol);
 
   } catch (error) {
     console.error('Send transaction error:', error);
@@ -1644,6 +1751,12 @@ async function handleSendTransaction() {
       ? 'Incorrect password'
       : 'Transaction failed: ' + error.message;
     errorEl.classList.remove('hidden');
+
+    // Re-enable send button on error
+    const sendBtn = document.getElementById('btn-confirm-send');
+    sendBtn.disabled = false;
+    sendBtn.style.opacity = '1';
+    sendBtn.style.cursor = 'pointer';
   }
 }
 
@@ -2129,8 +2242,69 @@ async function showTokenDetails(symbol, isDefault, customAddress = null) {
   document.getElementById('token-details-password').value = '';
   document.getElementById('token-details-send-error').classList.add('hidden');
 
+  // Show form and hide status section (reset state)
+  document.getElementById('token-send-form').classList.remove('hidden');
+  document.getElementById('token-send-status-section').classList.add('hidden');
+
   // Show screen
   showScreen('screen-token-details');
+
+  // Populate gas prices and nonce
+  const networkSymbols = {
+    'pulsechainTestnet': 'tPLS',
+    'pulsechain': 'PLS',
+    'ethereum': 'ETH',
+    'sepolia': 'SEP'
+  };
+  const networkSymbol = networkSymbols[network] || 'TOKEN';
+
+  // Create a token transfer transaction for gas estimation
+  const provider = await rpc.getProvider(network);
+  const tokenContract = new ethers.Contract(
+    tokenData.address,
+    ['function transfer(address to, uint256 amount) returns (bool)'],
+    provider
+  );
+  const dummyAmount = ethers.parseUnits('1', tokenData.decimals);
+  const txRequest = {
+    from: currentState.address,
+    to: tokenData.address,
+    data: tokenContract.interface.encodeFunctionData('transfer', [currentState.address, dummyAmount])
+  };
+
+  await populateTokenGasPrices(network, txRequest, networkSymbol);
+
+  // Fetch and display nonce
+  try {
+    const nonceHex = await rpc.getTransactionCount(network, currentState.address, 'pending');
+    const nonce = parseInt(nonceHex, 16);
+    document.getElementById('token-current-nonce').textContent = nonce;
+  } catch (error) {
+    console.error('Error fetching nonce:', error);
+    document.getElementById('token-current-nonce').textContent = 'Error';
+  }
+
+  // Setup custom nonce checkbox
+  const customNonceCheckbox = document.getElementById('token-custom-nonce-checkbox');
+  const customNonceContainer = document.getElementById('token-custom-nonce-input-container');
+  customNonceCheckbox.checked = false;
+  customNonceContainer.classList.add('hidden');
+
+  // Remove old listener if exists and add new one
+  const newCheckbox = customNonceCheckbox.cloneNode(true);
+  customNonceCheckbox.parentNode.replaceChild(newCheckbox, customNonceCheckbox);
+
+  document.getElementById('token-custom-nonce-checkbox').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      customNonceContainer.classList.remove('hidden');
+      const currentNonce = document.getElementById('token-current-nonce').textContent;
+      if (currentNonce !== '--' && currentNonce !== 'Error') {
+        document.getElementById('token-custom-nonce').value = currentNonce;
+      }
+    } else {
+      customNonceContainer.classList.add('hidden');
+    }
+  });
 }
 
 function handleCopyTokenDetailsAddress() {
@@ -2186,6 +2360,12 @@ async function handleTokenSend() {
   }
 
   try {
+    // Disable send button to prevent double-clicking
+    const sendBtn = document.getElementById('btn-token-send');
+    sendBtn.disabled = true;
+    sendBtn.style.opacity = '0.5';
+    sendBtn.style.cursor = 'not-allowed';
+
     const amountBN = ethers.parseUnits(amount, tokenData.decimals);
 
     // Check balance
@@ -2193,58 +2373,114 @@ async function handleTokenSend() {
     if (amountBN > balanceWei) {
       errorEl.textContent = 'Insufficient balance';
       errorEl.classList.remove('hidden');
+      // Re-enable button on validation error
+      sendBtn.disabled = false;
+      sendBtn.style.opacity = '1';
+      sendBtn.style.cursor = 'pointer';
       return;
     }
 
-    // Decrypt wallet
-    const encryptedWallet = await load('encrypted_wallet');
-    if (!encryptedWallet) {
-      errorEl.textContent = 'Wallet not found';
-      errorEl.classList.remove('hidden');
-      return;
-    }
-
-    let decryptedWallet;
+    // Unlock wallet with password and auto-upgrade if needed
+    let signer;
     try {
-      decryptedWallet = await wallet.decryptWallet(encryptedWallet, password);
+      const unlockResult = await unlockWallet(password, {
+        onUpgradeStart: (info) => {
+          console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+        }
+      });
+      signer = unlockResult.signer;
+
+      if (unlockResult.upgraded) {
+        console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
+      }
     } catch (err) {
-      errorEl.textContent = 'Incorrect password';
+      errorEl.textContent = err.message || 'Incorrect password';
       errorEl.classList.remove('hidden');
+      // Re-enable button on password error
+      sendBtn.disabled = false;
+      sendBtn.style.opacity = '1';
+      sendBtn.style.cursor = 'pointer';
       return;
     }
 
-    // Get the current wallet index
-    const walletIndex = currentState.walletIndex || 0;
-    const walletInstance = decryptedWallet.wallets[walletIndex];
+    // Get selected gas price
+    const gasPrice = getSelectedTokenGasPrice();
 
-    // Create signer with automatic RPC failover
+    // Get custom nonce if provided
+    const customNonceCheckbox = document.getElementById('token-custom-nonce-checkbox');
+    const customNonceInput = document.getElementById('token-custom-nonce');
+    let customNonce = null;
+    if (customNonceCheckbox.checked && customNonceInput.value) {
+      customNonce = parseInt(customNonceInput.value);
+      if (isNaN(customNonce) || customNonce < 0) {
+        throw new Error('Invalid custom nonce');
+      }
+    }
+
+    // Get provider with automatic failover and connect signer
     const provider = await rpc.getProvider(currentState.network);
-    const signer = new ethers.Wallet(walletInstance.privateKey, provider);
+    const connectedSigner = signer.connect(provider);
 
-    // Send token
-    const tx = await erc20.transferToken(
-      signer,
+    // Send token with gas options
+    const tokenContract = new ethers.Contract(
       tokenData.address,
-      recipient,
-      amountBN.toString()
+      ['function transfer(address to, uint256 amount) returns (bool)'],
+      connectedSigner
     );
 
-    // Wait for transaction to be sent
-    const receipt = await tx.wait();
+    const txOptions = {};
+    if (gasPrice) {
+      txOptions.gasPrice = gasPrice;
+    }
+    if (customNonce !== null) {
+      txOptions.nonce = customNonce;
+    }
 
-    // Clear form
-    document.getElementById('token-details-recipient').value = '';
-    document.getElementById('token-details-amount').value = '';
-    document.getElementById('token-details-password').value = '';
+    const tx = await tokenContract.transfer(recipient, amountBN, txOptions);
 
-    // Show success and go back
-    alert(`Transaction sent!\n\nTx Hash: ${tx.hash}`);
-    showScreen('screen-tokens');
+    // Save transaction to history and start monitoring
+    await chrome.runtime.sendMessage({
+      type: 'SAVE_AND_MONITOR_TX',
+      address: currentState.address,
+      transaction: {
+        hash: tx.hash,
+        timestamp: Date.now(),
+        from: currentState.address,
+        to: recipient,
+        value: '0',
+        gasPrice: gasPrice || (await tx.provider.getFeeData()).gasPrice.toString(),
+        nonce: tx.nonce,
+        network: currentState.network,
+        status: 'pending',
+        blockNumber: null,
+        type: 'token'
+      }
+    });
+
+    // Send desktop notification
+    if (chrome.notifications) {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+        title: 'Transaction Sent',
+        message: `Sending ${amount} ${tokenData.symbol} to ${recipient.slice(0, 10)}...`,
+        priority: 2
+      });
+    }
+
+    // Show transaction status screen
+    await showTokenSendTransactionStatus(tx.hash, currentState.network, amount, tokenData.symbol);
 
   } catch (error) {
     console.error('Error sending token:', error);
     errorEl.textContent = error.message || 'Transaction failed';
     errorEl.classList.remove('hidden');
+
+    // Re-enable send button on error
+    const sendBtn = document.getElementById('btn-token-send');
+    sendBtn.disabled = false;
+    sendBtn.style.opacity = '1';
+    sendBtn.style.cursor = 'pointer';
   }
 }
 
@@ -3110,6 +3346,474 @@ async function fetchAndDisplayNonce(address, network) {
     console.error('Error fetching nonce:', error);
     document.getElementById('tx-current-nonce').textContent = 'Error';
   }
+}
+
+// ===== SEND SCREEN GAS PRICE HELPERS =====
+
+// Populate gas prices for Send screen
+async function populateSendGasPrices(network, txRequest, symbol) {
+  try {
+    const gasPriceHex = await rpc.getGasPrice(network);
+    const gasPriceWei = BigInt(gasPriceHex);
+    const gasPriceGwei = Number(gasPriceWei) / 1e9;
+
+    const slowGwei = (gasPriceGwei * 0.8).toFixed(2);
+    const normalGwei = gasPriceGwei.toFixed(2);
+    const fastGwei = (gasPriceGwei * 1.5).toFixed(2);
+
+    document.getElementById('send-gas-slow-price').textContent = `${slowGwei} Gwei`;
+    document.getElementById('send-gas-normal-price').textContent = `${normalGwei} Gwei`;
+    document.getElementById('send-gas-fast-price').textContent = `${fastGwei} Gwei`;
+
+    try {
+      const estimatedGasHex = await rpc.estimateGas(network, txRequest);
+      const estimatedGas = BigInt(estimatedGasHex);
+
+      document.getElementById('send-estimated-gas').textContent = estimatedGas.toString();
+
+      const maxFeeWei = estimatedGas * gasPriceWei;
+      const maxFeeEth = ethers.formatEther(maxFeeWei.toString());
+      document.getElementById('send-max-fee').textContent = `${parseFloat(maxFeeEth).toFixed(8)} ${symbol}`;
+
+      const updateMaxFee = () => {
+        const selectedSpeed = document.querySelector('input[name="send-gas-speed"]:checked')?.value;
+        let selectedGwei;
+
+        if (selectedSpeed === 'slow') {
+          selectedGwei = parseFloat(slowGwei);
+        } else if (selectedSpeed === 'normal') {
+          selectedGwei = parseFloat(normalGwei);
+        } else if (selectedSpeed === 'fast') {
+          selectedGwei = parseFloat(fastGwei);
+        } else if (selectedSpeed === 'custom') {
+          selectedGwei = parseFloat(document.getElementById('send-custom-gas-price').value) || parseFloat(normalGwei);
+        } else {
+          selectedGwei = parseFloat(normalGwei);
+        }
+
+        const selectedGasPriceWei = BigInt(Math.floor(selectedGwei * 1e9));
+        const selectedMaxFeeWei = estimatedGas * selectedGasPriceWei;
+        const selectedMaxFeeEth = ethers.formatEther(selectedMaxFeeWei.toString());
+        document.getElementById('send-max-fee').textContent = `${parseFloat(selectedMaxFeeEth).toFixed(8)} ${symbol}`;
+      };
+
+      document.querySelectorAll('input[name="send-gas-speed"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+          updateMaxFee();
+
+          document.querySelectorAll('.gas-option').forEach(label => {
+            const input = label.querySelector('input[name="send-gas-speed"]');
+            if (input && input.checked) {
+              label.style.borderColor = 'var(--terminal-success)';
+              label.style.borderWidth = '2px';
+            } else {
+              label.style.borderColor = 'var(--terminal-border)';
+              label.style.borderWidth = '1px';
+            }
+          });
+
+          const customContainer = document.getElementById('send-custom-gas-input-container');
+          if (radio.value === 'custom' && radio.checked) {
+            customContainer.classList.remove('hidden');
+            setTimeout(() => {
+              document.getElementById('send-custom-gas-price').focus();
+            }, 100);
+          } else if (customContainer) {
+            customContainer.classList.add('hidden');
+          }
+        });
+      });
+
+      document.querySelectorAll('.gas-option').forEach(label => {
+        const input = label.querySelector('input[name="send-gas-speed"]');
+        if (input && input.checked) {
+          label.style.borderColor = 'var(--terminal-success)';
+          label.style.borderWidth = '2px';
+        }
+      });
+
+      const customGasInput = document.getElementById('send-custom-gas-price');
+      customGasInput.addEventListener('input', () => {
+        document.getElementById('send-gas-custom-radio').checked = true;
+        updateMaxFee();
+      });
+
+    } catch (gasEstimateError) {
+      console.error('Error estimating gas:', gasEstimateError);
+      document.getElementById('send-estimated-gas').textContent = '21000 (default)';
+      document.getElementById('send-max-fee').textContent = 'Unable to estimate';
+    }
+
+  } catch (error) {
+    console.error('Error fetching gas price:', error);
+    document.getElementById('send-gas-slow-price').textContent = 'Error';
+    document.getElementById('send-gas-normal-price').textContent = 'Error';
+    document.getElementById('send-gas-fast-price').textContent = 'Error';
+  }
+}
+
+// Get selected gas price from Send screen
+function getSelectedSendGasPrice() {
+  const selectedSpeed = document.querySelector('input[name="send-gas-speed"]:checked')?.value;
+
+  if (selectedSpeed === 'custom') {
+    const customGwei = parseFloat(document.getElementById('send-custom-gas-price').value);
+    if (customGwei && customGwei > 0) {
+      return ethers.parseUnits(customGwei.toString(), 'gwei').toString();
+    }
+  }
+
+  let gweiText;
+  if (selectedSpeed === 'slow') {
+    gweiText = document.getElementById('send-gas-slow-price').textContent;
+  } else if (selectedSpeed === 'fast') {
+    gweiText = document.getElementById('send-gas-fast-price').textContent;
+  } else {
+    gweiText = document.getElementById('send-gas-normal-price').textContent;
+  }
+
+  const gwei = parseFloat(gweiText);
+  if (gwei && gwei > 0) {
+    return ethers.parseUnits(gwei.toString(), 'gwei').toString();
+  }
+
+  return null;
+}
+
+// Populate gas prices for Token Send
+async function populateTokenGasPrices(network, txRequest, symbol) {
+  try {
+    const gasPriceHex = await rpc.getGasPrice(network);
+    const gasPriceWei = BigInt(gasPriceHex);
+    const gasPriceGwei = Number(gasPriceWei) / 1e9;
+
+    const slowGwei = (gasPriceGwei * 0.8).toFixed(2);
+    const normalGwei = gasPriceGwei.toFixed(2);
+    const fastGwei = (gasPriceGwei * 1.5).toFixed(2);
+
+    document.getElementById('token-gas-slow-price').textContent = `${slowGwei} Gwei`;
+    document.getElementById('token-gas-normal-price').textContent = `${normalGwei} Gwei`;
+    document.getElementById('token-gas-fast-price').textContent = `${fastGwei} Gwei`;
+
+    try {
+      const estimatedGasHex = await rpc.estimateGas(network, txRequest);
+      const estimatedGas = BigInt(estimatedGasHex);
+
+      document.getElementById('token-estimated-gas').textContent = estimatedGas.toString();
+
+      const maxFeeWei = estimatedGas * gasPriceWei;
+      const maxFeeEth = ethers.formatEther(maxFeeWei.toString());
+      document.getElementById('token-max-fee').textContent = `${parseFloat(maxFeeEth).toFixed(8)} ${symbol}`;
+
+      const updateMaxFee = () => {
+        const selectedSpeed = document.querySelector('input[name="token-gas-speed"]:checked')?.value;
+        let selectedGwei;
+
+        if (selectedSpeed === 'slow') {
+          selectedGwei = parseFloat(slowGwei);
+        } else if (selectedSpeed === 'normal') {
+          selectedGwei = parseFloat(normalGwei);
+        } else if (selectedSpeed === 'fast') {
+          selectedGwei = parseFloat(fastGwei);
+        } else if (selectedSpeed === 'custom') {
+          selectedGwei = parseFloat(document.getElementById('token-custom-gas-price').value) || parseFloat(normalGwei);
+        } else {
+          selectedGwei = parseFloat(normalGwei);
+        }
+
+        const selectedGasPriceWei = BigInt(Math.floor(selectedGwei * 1e9));
+        const selectedMaxFeeWei = estimatedGas * selectedGasPriceWei;
+        const selectedMaxFeeEth = ethers.formatEther(selectedMaxFeeWei.toString());
+        document.getElementById('token-max-fee').textContent = `${parseFloat(selectedMaxFeeEth).toFixed(8)} ${symbol}`;
+      };
+
+      document.querySelectorAll('input[name="token-gas-speed"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+          updateMaxFee();
+
+          document.querySelectorAll('.gas-option').forEach(label => {
+            const input = label.querySelector('input[name="token-gas-speed"]');
+            if (input && input.checked) {
+              label.style.borderColor = 'var(--terminal-success)';
+              label.style.borderWidth = '2px';
+            } else {
+              label.style.borderColor = 'var(--terminal-border)';
+              label.style.borderWidth = '1px';
+            }
+          });
+
+          const customContainer = document.getElementById('token-custom-gas-input-container');
+          if (radio.value === 'custom' && radio.checked) {
+            customContainer.classList.remove('hidden');
+            setTimeout(() => {
+              document.getElementById('token-custom-gas-price').focus();
+            }, 100);
+          } else if (customContainer) {
+            customContainer.classList.add('hidden');
+          }
+        });
+      });
+
+      document.querySelectorAll('.gas-option').forEach(label => {
+        const input = label.querySelector('input[name="token-gas-speed"]');
+        if (input && input.checked) {
+          label.style.borderColor = 'var(--terminal-success)';
+          label.style.borderWidth = '2px';
+        }
+      });
+
+      const customGasInput = document.getElementById('token-custom-gas-price');
+      customGasInput.addEventListener('input', () => {
+        document.getElementById('token-gas-custom-radio').checked = true;
+        updateMaxFee();
+      });
+
+    } catch (gasEstimateError) {
+      console.error('Error estimating gas:', gasEstimateError);
+      document.getElementById('token-estimated-gas').textContent = '65000 (default)';
+      document.getElementById('token-max-fee').textContent = 'Unable to estimate';
+    }
+
+  } catch (error) {
+    console.error('Error fetching gas price:', error);
+    document.getElementById('token-gas-slow-price').textContent = 'Error';
+    document.getElementById('token-gas-normal-price').textContent = 'Error';
+    document.getElementById('token-gas-fast-price').textContent = 'Error';
+  }
+}
+
+// Get selected gas price from Token Send
+function getSelectedTokenGasPrice() {
+  const selectedSpeed = document.querySelector('input[name="token-gas-speed"]:checked')?.value;
+
+  if (selectedSpeed === 'custom') {
+    const customGwei = parseFloat(document.getElementById('token-custom-gas-price').value);
+    if (customGwei && customGwei > 0) {
+      return ethers.parseUnits(customGwei.toString(), 'gwei').toString();
+    }
+  }
+
+  let gweiText;
+  if (selectedSpeed === 'slow') {
+    gweiText = document.getElementById('token-gas-slow-price').textContent;
+  } else if (selectedSpeed === 'fast') {
+    gweiText = document.getElementById('token-gas-fast-price').textContent;
+  } else {
+    gweiText = document.getElementById('token-gas-normal-price').textContent;
+  }
+
+  const gwei = parseFloat(gweiText);
+  if (gwei && gwei > 0) {
+    return ethers.parseUnits(gwei.toString(), 'gwei').toString();
+  }
+
+  return null;
+}
+
+// Show transaction status for Send screen
+async function showSendTransactionStatus(txHash, network, amount, symbol) {
+  // Hide send form
+  document.getElementById('send-form').classList.add('hidden');
+
+  // Show status section
+  const statusSection = document.getElementById('send-status-section');
+  statusSection.classList.remove('hidden');
+
+  // Populate transaction hash
+  document.getElementById('send-status-hash').textContent = txHash;
+
+  // Setup View on Explorer button
+  document.getElementById('btn-send-status-explorer').onclick = () => {
+    const url = getExplorerUrl(network, 'tx', txHash);
+    chrome.tabs.create({ url });
+  };
+
+  // Get active wallet address
+  const wallet = await getActiveWallet();
+  const address = wallet?.address;
+
+  // Poll for transaction status
+  let pollInterval;
+  const updateStatus = async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (response.success && response.transaction) {
+        const tx = response.transaction;
+        const statusMessage = document.getElementById('send-status-message');
+        const statusDetails = document.getElementById('send-status-details');
+        const pendingActions = document.getElementById('send-status-pending-actions');
+
+        if (tx.status === 'confirmed') {
+          statusMessage.textContent = '✅ Transaction Confirmed!';
+          statusDetails.textContent = `Block: ${tx.blockNumber}`;
+          statusDetails.style.color = 'var(--terminal-success)';
+          pendingActions.classList.add('hidden');
+
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+
+          // Note: Desktop notification is sent by background service worker
+          // No need to send another one here to avoid duplicates
+
+          // Auto-close and return to dashboard after 2 seconds
+          setTimeout(() => {
+            showScreen('screen-dashboard');
+            // Refresh dashboard
+            updateDashboard();
+          }, 2000);
+        } else if (tx.status === 'failed') {
+          statusMessage.textContent = '❌ Transaction Failed';
+          statusDetails.textContent = 'The transaction was rejected or replaced';
+          statusDetails.style.color = '#ff4444';
+          pendingActions.classList.add('hidden');
+
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+        } else {
+          statusMessage.textContent = '⏳ Waiting for confirmation...';
+          statusDetails.textContent = 'This usually takes 10-30 seconds';
+          statusDetails.style.color = 'var(--terminal-fg-dim)';
+          pendingActions.classList.remove('hidden');
+        }
+      }
+    } catch (error) {
+      console.error('Error checking transaction status:', error);
+    }
+  };
+
+  await updateStatus();
+  pollInterval = setInterval(updateStatus, 3000);
+
+  // Setup close button
+  document.getElementById('btn-close-send-status').onclick = () => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+    }
+    showScreen('screen-dashboard');
+    updateDashboard();
+  };
+
+  // Setup Speed Up button
+  document.getElementById('btn-send-status-speed-up').onclick = async () => {
+    // TODO: Implement speed up transaction functionality
+    alert('Speed Up functionality will be implemented in a future update');
+  };
+
+  // Setup Cancel button
+  document.getElementById('btn-send-status-cancel').onclick = async () => {
+    // TODO: Implement cancel transaction functionality
+    alert('Cancel functionality will be implemented in a future update');
+  };
+}
+
+// Show transaction status for Token Send
+async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
+  // Hide token send form
+  document.getElementById('token-send-form').classList.add('hidden');
+
+  // Show status section
+  const statusSection = document.getElementById('token-send-status-section');
+  statusSection.classList.remove('hidden');
+
+  // Populate transaction hash
+  document.getElementById('token-send-status-hash').textContent = txHash;
+
+  // Setup View on Explorer button
+  document.getElementById('btn-token-send-status-explorer').onclick = () => {
+    const url = getExplorerUrl(network, 'tx', txHash);
+    chrome.tabs.create({ url });
+  };
+
+  // Get active wallet address
+  const wallet = await getActiveWallet();
+  const address = wallet?.address;
+
+  // Poll for transaction status
+  let pollInterval;
+  const updateStatus = async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (response.success && response.transaction) {
+        const tx = response.transaction;
+        const statusMessage = document.getElementById('token-send-status-message');
+        const statusDetails = document.getElementById('token-send-status-details');
+        const pendingActions = document.getElementById('token-send-status-pending-actions');
+
+        if (tx.status === 'confirmed') {
+          statusMessage.textContent = '✅ Transaction Confirmed!';
+          statusDetails.textContent = `Block: ${tx.blockNumber}`;
+          statusDetails.style.color = 'var(--terminal-success)';
+          pendingActions.classList.add('hidden');
+
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+
+          // Note: Desktop notification is sent by background service worker
+          // No need to send another one here to avoid duplicates
+
+          // Auto-close and return to tokens screen after 2 seconds
+          setTimeout(() => {
+            showScreen('screen-tokens');
+            // Refresh tokens
+            loadTokensScreen();
+          }, 2000);
+        } else if (tx.status === 'failed') {
+          statusMessage.textContent = '❌ Transaction Failed';
+          statusDetails.textContent = 'The transaction was rejected or replaced';
+          statusDetails.style.color = '#ff4444';
+          pendingActions.classList.add('hidden');
+
+          if (pollInterval) {
+            clearInterval(pollInterval);
+          }
+        } else {
+          statusMessage.textContent = '⏳ Waiting for confirmation...';
+          statusDetails.textContent = 'This usually takes 10-30 seconds';
+          statusDetails.style.color = 'var(--terminal-fg-dim)';
+          pendingActions.classList.remove('hidden');
+        }
+      }
+    } catch (error) {
+      console.error('Error checking transaction status:', error);
+    }
+  };
+
+  await updateStatus();
+  pollInterval = setInterval(updateStatus, 3000);
+
+  // Setup close button
+  document.getElementById('btn-close-token-send-status').onclick = () => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+    }
+    showScreen('screen-tokens');
+    loadTokensScreen();
+  };
+
+  // Setup Speed Up button
+  document.getElementById('btn-token-send-status-speed-up').onclick = async () => {
+    // TODO: Implement speed up transaction functionality
+    alert('Speed Up functionality will be implemented in a future update');
+  };
+
+  // Setup Cancel button
+  document.getElementById('btn-token-send-status-cancel').onclick = async () => {
+    // TODO: Implement cancel transaction functionality
+    alert('Cancel functionality will be implemented in a future update');
+  };
 }
 
 async function handleTransactionApprovalScreen(requestId) {

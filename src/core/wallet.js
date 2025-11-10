@@ -805,7 +805,8 @@ export async function getWalletSecurityInfo(walletId) {
     throw new Error('Wallet not found');
   }
 
-  const currentIterations = getIterationsFromEncrypted(wallet.encryptedKeystore);
+  // Use metadata field if available (more efficient), otherwise parse encrypted data
+  const currentIterations = wallet.currentIterations || getIterationsFromEncrypted(wallet.encryptedKeystore);
   const recommendedIterations = getCurrentRecommendedIterations();
 
   return {
