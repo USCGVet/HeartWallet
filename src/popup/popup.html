@@ -948,27 +948,74 @@
           </p>
         </div>
 
-        <div class="panel">
-        <p class="text-dim mb-1" style="font-size: 11px;">From:</p>
-        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-from-address">
-          0x0000...0000
-        </p>
+        <!-- Contract & Function Information -->
+        <div id="tx-contract-info" class="panel hidden" style="border-color: var(--terminal-success);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+            <div style="flex: 1;">
+              <p class="text-dim mb-1" style="font-size: 10px;">INTERACTING WITH CONTRACT</p>
+              <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; margin-bottom: 6px;" id="tx-contract-address">
+                0x0000...0000
+              </p>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span id="tx-verified-badge" class="hidden" style="display: inline-block; font-size: 9px; padding: 2px 6px; border-radius: 3px; background: var(--terminal-success); color: var(--terminal-bg);">
+                  ✓ VERIFIED
+                </span>
+                <span id="tx-unverified-badge" class="hidden" style="display: inline-block; font-size: 9px; padding: 2px 6px; border-radius: 3px; background: var(--terminal-warning); color: var(--terminal-bg);">
+                  ⚠️ UNVERIFIED
+                </span>
+              </div>
+            </div>
+            <a id="tx-contract-link" href="#" target="_blank" class="btn-small" style="font-size: 9px; padding: 4px 8px; white-space: nowrap;">
+              VIEW CONTRACT →
+            </a>
+          </div>
 
-        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">To:</p>
-        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-to-address">
-          0x0000...0000
-        </p>
+          <div style="border-top: 1px solid var(--terminal-border); padding-top: 12px;">
+            <p class="text-dim mb-1" style="font-size: 10px;">FUNCTION CALL</p>
+            <p style="font-size: 13px; font-weight: bold; margin-bottom: 4px;" id="tx-function-name">
+              Unknown Function
+            </p>
+            <p class="text-dim" style="font-size: 10px;" id="tx-function-description">
+              Contract interaction
+            </p>
+          </div>
 
-        <p class="text-dim mb-1 mt-2" style="font-size: 11px;">Value:</p>
-        <p style="font-size: 13px;" id="tx-value">0 tPLS</p>
-
-        <div id="tx-data-section" class="mt-2 hidden">
-          <p class="text-dim mb-1" style="font-size: 11px;">Data:</p>
-          <p style="font-family: var(--font-mono); font-size: 10px; word-break: break-all; max-height: 80px; overflow-y: auto;" id="tx-data">
-            0x
-          </p>
+          <!-- Parameters -->
+          <div id="tx-params-section" class="hidden" style="border-top: 1px solid var(--terminal-border); padding-top: 12px; margin-top: 12px;">
+            <p class="text-dim mb-2" style="font-size: 10px;">PARAMETERS</p>
+            <div id="tx-params-list" style="max-height: 200px; overflow-y: auto;">
+              <!-- Parameters will be populated here -->
+            </div>
+          </div>
         </div>
-      </div>
+
+        <!-- Basic Transaction Info -->
+        <div class="panel">
+          <p class="text-dim mb-1" style="font-size: 11px;">From:</p>
+          <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-from-address">
+            0x0000...0000
+          </p>
+
+          <p class="text-dim mb-1 mt-2" style="font-size: 11px;">To:</p>
+          <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="tx-to-address">
+            0x0000...0000
+          </p>
+
+          <p class="text-dim mb-1 mt-2" style="font-size: 11px;">Value:</p>
+          <p style="font-size: 13px;" id="tx-value">0 tPLS</p>
+
+          <!-- Raw data section (collapsible for advanced users) -->
+          <div id="tx-data-section" class="mt-2 hidden">
+            <details style="margin-top: 12px;">
+              <summary style="cursor: pointer; font-size: 10px; color: var(--terminal-dim); user-select: none;">Advanced: View Raw Data</summary>
+              <div style="margin-top: 8px; padding: 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); border-radius: 4px;">
+                <p style="font-family: var(--font-mono); font-size: 9px; word-break: break-all; max-height: 120px; overflow-y: auto; margin: 0;" id="tx-data">
+                  0x
+                </p>
+              </div>
+            </details>
+          </div>
+        </div>
 
       <!-- Gas Price Selector -->
       <div class="panel">

@@ -1,4 +1,4 @@
-import { l as load, s as save, G as getAddress, A as getBytes, B as toUtf8String, i as isAddress, g as getProvider, u as unlockWallet, b as getActiveWallet, H as getTransactionByHash, I as getTransactionReceipt, J as sendRawTransaction, x as getGasPrice, y as estimateGas, K as call, n as getTransactionCount, j as getBalance, L as getBlockByNumber, M as getBlockNumber } from "./rpc.js";
+import { l as load, s as save, G as getAddress, A as getBytes, B as toUtf8String, i as isAddress, g as getProvider, u as unlockWallet, b as getActiveWallet, H as getTransactionByHash, J as getTransactionReceipt, K as sendRawTransaction, x as getGasPrice, y as estimateGas, L as call, n as getTransactionCount, j as getBalance, M as getBlockByNumber, N as getBlockNumber } from "./rpc.js";
 const TX_HISTORY_KEY = "txHistory_v1";
 const TX_HISTORY_SETTINGS_KEY = "txHistorySettings";
 const MAX_TXS_PER_ADDRESS = 20;

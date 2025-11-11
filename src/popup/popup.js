@@ -28,6 +28,7 @@ import * as rpc from '../core/rpc.js';
 import { ethers } from 'ethers';
 import QRCode from 'qrcode';
 import * as tokens from '../core/tokens.js';
+import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 
@@ -3833,6 +3834,88 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
   };
 }
 
+/**
+ * Format parameter value for display based on type
+ */
+function formatParameterValue(value, type) {
+  try {
+    // Handle arrays
+    if (type.includes('[]')) {
+      if (Array.isArray(value)) {
+        const elementType = type.replace('[]', '');
+        const formattedElements = value.map((v, i) => {
+          const formattedValue = formatParameterValue(v, elementType);
+          return `[${i}]: ${formattedValue}`;
+        });
+        return formattedElements.join('<br>');
+      }
+    }
+
+    // Handle addresses
+    if (type === 'address') {
+      const shortAddr = `${value.slice(0, 6)}...${value.slice(-4)}`;
+      return `<span title="${value}" style="cursor: help;">${shortAddr}</span>`;
+    }
+
+    // Handle numbers (uint/int)
+    if (type.startsWith('uint') || type.startsWith('int')) {
+      const valueStr = value.toString();
+
+      // For large numbers, try to show both raw and formatted
+      if (valueStr.length > 18) {
+        try {
+          const etherValue = ethers.formatEther(valueStr);
+          // Only show ether conversion if it makes sense (> 0.000001)
+          if (parseFloat(etherValue) > 0.000001) {
+            return `${valueStr}<br><span style="color: var(--terminal-dim); font-size: 9px;">(≈ ${parseFloat(etherValue).toFixed(6)} tokens)</span>`;
+          }
+        } catch (e) {
+          // If conversion fails, just show raw
+        }
+      }
+
+      return valueStr;
+    }
+
+    // Handle booleans
+    if (type === 'bool') {
+      return value ? '<span style="color: var(--terminal-success);">true</span>' : '<span style="color: var(--terminal-warning);">false</span>';
+    }
+
+    // Handle bytes
+    if (type === 'bytes' || type.startsWith('bytes')) {
+      if (typeof value === 'string') {
+        if (value.length > 66) {
+          return `${value.slice(0, 66)}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
+        }
+        return value;
+      }
+    }
+
+    // Handle strings
+    if (type === 'string') {
+      if (value.length > 50) {
+        return `${value.slice(0, 50)}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
+      }
+      return value;
+    }
+
+    // Default: convert to string
+    if (typeof value === 'object' && value !== null) {
+      const jsonStr = JSON.stringify(value, null, 2);
+      if (jsonStr.length > 100) {
+        return `<pre style="font-size: 9px; overflow-x: auto;">${jsonStr.slice(0, 100)}...</pre>`;
+      }
+      return `<pre style="font-size: 9px;">${jsonStr}</pre>`;
+    }
+
+    return String(value);
+  } catch (error) {
+    console.error('Error formatting parameter value:', error);
+    return String(value);
+  }
+}
+
 async function handleTransactionApprovalScreen(requestId) {
   // Load settings for theme
   await loadSettings();
@@ -3878,12 +3961,99 @@ async function handleTransactionApprovalScreen(requestId) {
       document.getElementById('tx-value').textContent = `0 ${symbol}`;
     }
 
-    // Show data section if there's contract data
-    if (txRequest.data && txRequest.data !== '0x') {
-      document.getElementById('tx-data-section').classList.remove('hidden');
-      document.getElementById('tx-data').textContent = txRequest.data;
-    } else {
-      document.getElementById('tx-data-section').classList.add('hidden');
+    // Decode transaction data
+    let decodedTx = null;
+    const chainIdMap = {
+      'pulsechain': 369,
+      'pulsechainTestnet': 943,
+      'ethereum': 1,
+      'sepolia': 11155111
+    };
+    const chainId = chainIdMap[network] || 369;
+
+    // Show loading state
+    document.getElementById('tx-contract-info').classList.add('hidden');
+    document.getElementById('tx-function-name').textContent = 'Decoding...';
+
+    try {
+      decodedTx = await decodeTransaction(txRequest, chainId);
+      console.log('🫀 Decoded transaction:', decodedTx);
+
+      // Show contract info if it's a contract interaction
+      if (decodedTx && decodedTx.type !== 'transfer' && decodedTx.contract) {
+        const contractInfo = document.getElementById('tx-contract-info');
+        contractInfo.classList.remove('hidden');
+
+        // Update contract address
+        document.getElementById('tx-contract-address').textContent = decodedTx.contract.address;
+
+        // Update verification badge
+        if (decodedTx.contract.verified) {
+          document.getElementById('tx-verified-badge').classList.remove('hidden');
+          document.getElementById('tx-unverified-badge').classList.add('hidden');
+          contractInfo.style.borderColor = 'var(--terminal-success)';
+        } else {
+          document.getElementById('tx-verified-badge').classList.add('hidden');
+          document.getElementById('tx-unverified-badge').classList.remove('hidden');
+          contractInfo.style.borderColor = 'var(--terminal-warning)';
+        }
+
+        // Update explorer link
+        const contractLink = document.getElementById('tx-contract-link');
+        contractLink.href = decodedTx.explorerUrl;
+
+        // Update function info
+        document.getElementById('tx-function-name').textContent = decodedTx.method || 'Unknown Function';
+        document.getElementById('tx-function-description').textContent = decodedTx.description || 'Contract interaction';
+
+        // Show parameters if available
+        if (decodedTx.params && decodedTx.params.length > 0) {
+          const paramsSection = document.getElementById('tx-params-section');
+          const paramsList = document.getElementById('tx-params-list');
+          paramsSection.classList.remove('hidden');
+
+          let paramsHTML = '';
+          for (const param of decodedTx.params) {
+            const valueDisplay = formatParameterValue(param.value, param.type);
+            paramsHTML += `
+              <div style="margin-bottom: 12px; padding: 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); border-radius: 4px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                  <span style="font-size: 10px; color: var(--terminal-dim);">${param.name}</span>
+                  <span style="font-size: 9px; color: var(--terminal-dim); font-family: var(--font-mono);">${param.type}</span>
+                </div>
+                <div style="font-size: 10px; font-family: var(--font-mono); word-break: break-all;">
+                  ${valueDisplay}
+                </div>
+              </div>
+            `;
+          }
+          paramsList.innerHTML = paramsHTML;
+        } else {
+          document.getElementById('tx-params-section').classList.add('hidden');
+        }
+      } else {
+        document.getElementById('tx-contract-info').classList.add('hidden');
+      }
+
+      // Show raw data section for advanced users
+      if (txRequest.data && txRequest.data !== '0x') {
+        document.getElementById('tx-data-section').classList.remove('hidden');
+        document.getElementById('tx-data').textContent = txRequest.data;
+      } else {
+        document.getElementById('tx-data-section').classList.add('hidden');
+      }
+
+    } catch (error) {
+      console.error('Error decoding transaction:', error);
+      document.getElementById('tx-contract-info').classList.add('hidden');
+
+      // Show raw data as fallback
+      if (txRequest.data && txRequest.data !== '0x') {
+        document.getElementById('tx-data-section').classList.remove('hidden');
+        document.getElementById('tx-data').textContent = txRequest.data;
+      } else {
+        document.getElementById('tx-data-section').classList.add('hidden');
+      }
     }
 
     // Show the transaction approval screen
