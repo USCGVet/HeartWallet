@@ -1076,7 +1076,9 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       from: signer.address,
       to: txRequest.to || null,
       value: txRequest.value || '0',
+      data: tx.data || '0x',
       gasPrice: tx.gasPrice ? tx.gasPrice.toString() : '0',
+      gasLimit: tx.gasLimit ? tx.gasLimit.toString() : null,
       nonce: tx.nonce,
       network: network,
       status: txHistory.TX_STATUS.PENDING,
@@ -1205,7 +1207,7 @@ function getTokenAddRequest(requestId) {
 }
 
 // Speed up a pending transaction by replacing it with higher gas price
-async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, gasPriceMultiplier = 1.2) {
+async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, gasPriceMultiplier = 1.2, customGasPrice = null) {
   try {
     // Validate session (now async)
     const password = await validateSession(sessionToken);
@@ -1232,17 +1234,30 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
     const provider = await rpc.getProvider(network);
     const wallet = signer.connect(provider);
 
-    // Calculate new gas price (1.2x of original by default)
-    const originalGasPrice = BigInt(originalTx.gasPrice);
-    const newGasPrice = (originalGasPrice * BigInt(Math.floor(gasPriceMultiplier * 100))) / BigInt(100);
+    // Calculate new gas price
+    let newGasPrice;
+    if (customGasPrice) {
+      // Use custom gas price provided by user
+      newGasPrice = BigInt(customGasPrice);
+    } else {
+      // Calculate from multiplier (1.2x of original by default)
+      const originalGasPrice = BigInt(originalTx.gasPrice);
+      newGasPrice = (originalGasPrice * BigInt(Math.floor(gasPriceMultiplier * 100))) / BigInt(100);
+    }
 
-    // Create replacement transaction with same nonce
+    // Create replacement transaction with same nonce, data, and gasLimit
     const replacementTx = {
       to: originalTx.to,
       value: originalTx.value,
+      data: originalTx.data || '0x',
       nonce: originalTx.nonce,
       gasPrice: newGasPrice
     };
+
+    // Include gasLimit if it was in the original transaction
+    if (originalTx.gasLimit) {
+      replacementTx.gasLimit = originalTx.gasLimit;
+    }
 
     // Speeding up transaction
 
@@ -1256,7 +1271,9 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
       from: address,
       to: originalTx.to,
       value: originalTx.value,
+      data: originalTx.data || '0x',
       gasPrice: newGasPrice.toString(),
+      gasLimit: originalTx.gasLimit,
       nonce: originalTx.nonce,
       network: network,
       status: txHistory.TX_STATUS.PENDING,
@@ -1322,8 +1339,10 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
     const cancelTx = {
       to: address,  // Send to self
       value: '0',   // Zero value
+      data: '0x',   // Empty data
       nonce: originalTx.nonce,
-      gasPrice: newGasPrice
+      gasPrice: newGasPrice,
+      gasLimit: 21000  // Standard gas limit for simple ETH transfer
     };
 
     // Cancelling transaction
@@ -1338,7 +1357,9 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
       from: address,
       to: address,
       value: '0',
+      data: '0x',
       gasPrice: newGasPrice.toString(),
+      gasLimit: '21000',
       nonce: originalTx.nonce,
       network: network,
       status: txHistory.TX_STATUS.PENDING,
@@ -1364,6 +1385,75 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
     return { success: true, txHash: tx.hash };
   } catch (error) {
     console.error('🫀 Error cancelling transaction:', error);
+    return { success: false, error: sanitizeErrorMessage(error.message) };
+  }
+}
+
+// Get current network gas price (for speed-up UI)
+async function getCurrentNetworkGasPrice(network) {
+  try {
+    const provider = await rpc.getProvider(network);
+    const feeData = await provider.getFeeData();
+
+    if (!feeData.gasPrice) {
+      return { success: false, error: 'Could not fetch gas price' };
+    }
+
+    return {
+      success: true,
+      gasPrice: feeData.gasPrice.toString(),
+      gasPriceGwei: (Number(feeData.gasPrice) / 1e9).toFixed(2)
+    };
+  } catch (error) {
+    console.error('🫀 Error fetching current gas price:', error);
+    return { success: false, error: sanitizeErrorMessage(error.message) };
+  }
+}
+
+// Refresh transaction status from blockchain
+async function refreshTransactionStatus(address, txHash, network) {
+  try {
+    const provider = await rpc.getProvider(network);
+
+    // Get transaction receipt from blockchain
+    const receipt = await provider.getTransactionReceipt(txHash);
+
+    if (!receipt) {
+      // Transaction still pending (not mined yet)
+      return {
+        success: true,
+        status: 'pending',
+        message: 'Transaction is still pending on the blockchain'
+      };
+    }
+
+    // Transaction has been mined
+    let newStatus;
+    if (receipt.status === 1) {
+      newStatus = txHistory.TX_STATUS.CONFIRMED;
+    } else {
+      newStatus = txHistory.TX_STATUS.FAILED;
+    }
+
+    // Update local transaction history
+    await txHistory.updateTxStatus(
+      address,
+      txHash,
+      newStatus,
+      receipt.blockNumber
+    );
+
+    return {
+      success: true,
+      status: newStatus,
+      blockNumber: receipt.blockNumber,
+      message: newStatus === txHistory.TX_STATUS.CONFIRMED
+        ? 'Transaction confirmed on blockchain'
+        : 'Transaction failed on blockchain'
+    };
+
+  } catch (error) {
+    console.error('🫀 Error refreshing transaction status:', error);
     return { success: false, error: sanitizeErrorMessage(error.message) };
   }
 }
@@ -1770,12 +1860,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: true });
           break;
 
+        case 'GET_CURRENT_GAS_PRICE':
+          const gasPriceResult = await getCurrentNetworkGasPrice(message.network);
+          sendResponse(gasPriceResult);
+          break;
+
+        case 'REFRESH_TX_STATUS':
+          const refreshResult = await refreshTransactionStatus(
+            message.address,
+            message.txHash,
+            message.network
+          );
+          sendResponse(refreshResult);
+          break;
+
         case 'SPEED_UP_TX':
           const speedUpResult = await handleSpeedUpTransaction(
             message.address,
             message.txHash,
             message.sessionToken,
-            message.gasPriceMultiplier || 1.2
+            message.gasPriceMultiplier || 1.2,
+            message.customGasPrice || null
           );
           sendResponse(speedUpResult);
           break;

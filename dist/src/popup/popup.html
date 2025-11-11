@@ -361,6 +361,10 @@
             </div>
           </div>
 
+          <button id="btn-refresh-send-gas" class="btn-primary btn-small" style="width: 100%; margin-top: 8px;">
+            🔄 REFRESH GAS PRICE
+          </button>
+
           <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
             <div>Estimated Gas: <span id="send-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
             <div>Max Fee: <span id="send-max-fee" style="color: var(--terminal-fg);">--</span></div>
@@ -615,6 +619,10 @@
               <input type="number" id="token-custom-gas-price" class="form-control" placeholder="Enter gas price in Gwei" step="0.01" min="0" />
             </div>
           </div>
+
+          <button id="btn-refresh-token-gas" class="btn-primary btn-small" style="width: 100%; margin-top: 8px;">
+            🔄 REFRESH GAS PRICE
+          </button>
 
           <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
             <div>Estimated Gas: <span id="token-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
@@ -1004,6 +1012,10 @@
           </div>
         </div>
 
+        <button id="btn-refresh-approval-gas" class="btn-primary btn-small" style="width: 100%; margin-top: 8px;">
+          🔄 REFRESH GAS PRICE
+        </button>
+
         <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
           <div>Estimated Gas: <span id="tx-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
           <div>Max Fee: <span id="tx-max-fee" style="color: var(--terminal-fg);">--</span></div>
@@ -1290,6 +1302,11 @@
         <p style="font-size: 16px; font-weight: bold;" id="tx-status-text">⏳ PENDING</p>
       </div>
 
+      <!-- Refresh Status Button -->
+      <button id="btn-refresh-tx-status" class="btn-primary btn-small" style="width: 100%; margin-bottom: 12px;">
+        🔄 REFRESH STATUS FROM BLOCKCHAIN
+      </button>
+
       <!-- Transaction Info -->
       <div class="panel">
         <p class="text-dim mb-1">Transaction Hash:</p>
@@ -1376,6 +1393,66 @@
         <div class="button-group mt-2">
           <button id="btn-password-prompt-confirm" class="btn-primary">CONFIRM</button>
           <button id="btn-password-prompt-cancel">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Speed Up Transaction Modal -->
+  <div id="modal-speed-up-tx" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Speed Up Transaction</div>
+        <button class="modal-close" id="btn-close-speed-up-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-dim mb-2" style="font-size: 11px;">Your transaction is stuck because the gas price is too low. Review current network conditions:</p>
+
+        <!-- Gas Price Comparison Panel -->
+        <div class="panel" style="background: var(--terminal-bg); border: 1px solid var(--terminal-primary);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">ORIGINAL GAS:</span>
+            <span id="speed-up-original-gas" style="font-size: 11px; color: var(--terminal-danger);">-- Gwei</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">CURRENT NETWORK:</span>
+            <span id="speed-up-current-gas" style="font-size: 11px; font-weight: bold;">-- Gwei</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; border-top: 1px solid var(--terminal-dim); padding-top: 8px; margin-top: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">RECOMMENDED:</span>
+            <span id="speed-up-recommended-gas" style="font-size: 11px; color: var(--terminal-success); font-weight: bold;">-- Gwei</span>
+          </div>
+          <div id="speed-up-comparison-message" class="mt-2" style="font-size: 9px; color: var(--terminal-warning); text-align: center;">
+            <!-- Comparison message will appear here -->
+          </div>
+        </div>
+
+        <!-- Refresh Button -->
+        <button id="btn-refresh-gas-price" class="btn-primary btn-small mt-2" style="width: 100%;">
+          🔄 REFRESH GAS PRICE
+        </button>
+
+        <!-- Custom Gas Price Input (Advanced) -->
+        <div class="mt-3">
+          <details>
+            <summary style="cursor: pointer; font-size: 10px; color: var(--terminal-dim); user-select: none;">Advanced: Set Custom Gas Price</summary>
+            <div class="form-group mt-2">
+              <label style="font-size: 10px;">Custom Gas Price (Gwei):</label>
+              <input type="number" id="speed-up-custom-gas" placeholder="e.g., 150" step="0.1" min="0" />
+              <p style="font-size: 9px; color: var(--terminal-dim); margin-top: 4px;">Leave empty to use recommended price</p>
+            </div>
+          </details>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="button-group mt-3">
+          <button id="btn-confirm-speed-up" class="btn-primary">CONFIRM SPEED UP</button>
+          <button id="btn-cancel-speed-up">CANCEL</button>
+        </div>
+
+        <!-- Loading State -->
+        <div id="speed-up-loading" class="hidden mt-2" style="text-align: center;">
+          <p style="font-size: 10px; color: var(--terminal-dim);">⏳ Loading gas prices...</p>
         </div>
       </div>
     </div>

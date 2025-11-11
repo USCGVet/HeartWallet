@@ -495,6 +495,22 @@ function setupEventListeners() {
   });
   document.getElementById('btn-speed-up-tx')?.addEventListener('click', handleSpeedUpTransaction);
   document.getElementById('btn-cancel-tx')?.addEventListener('click', handleCancelTransaction);
+  document.getElementById('btn-refresh-tx-status')?.addEventListener('click', refreshTransactionStatus);
+
+  // Speed-up transaction modal
+  document.getElementById('btn-close-speed-up-modal')?.addEventListener('click', () => {
+    document.getElementById('modal-speed-up-tx').classList.add('hidden');
+  });
+  document.getElementById('btn-cancel-speed-up')?.addEventListener('click', () => {
+    document.getElementById('modal-speed-up-tx').classList.add('hidden');
+  });
+  document.getElementById('btn-confirm-speed-up')?.addEventListener('click', confirmSpeedUp);
+  document.getElementById('btn-refresh-gas-price')?.addEventListener('click', refreshGasPrices);
+
+  // Gas price refresh buttons
+  document.getElementById('btn-refresh-approval-gas')?.addEventListener('click', refreshApprovalGasPrice);
+  document.getElementById('btn-refresh-send-gas')?.addEventListener('click', refreshSendGasPrice);
+  document.getElementById('btn-refresh-token-gas')?.addEventListener('click', refreshTokenGasPrice);
 
   // Add token modal
   document.getElementById('btn-close-add-token')?.addEventListener('click', () => {
@@ -706,42 +722,34 @@ function setupEventListeners() {
   document.getElementById('btn-tx-status-speed-up')?.addEventListener('click', async () => {
     if (!txStatusCurrentHash || !txStatusCurrentAddress) return;
 
-    const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to speed up this transaction with higher gas price (1.2x)');
-    if (!password) return;
-
     try {
-      const activeWallet = await getActiveWallet();
-      const sessionResponse = await chrome.runtime.sendMessage({
-        type: 'CREATE_SESSION',
-        password: password,
-        walletId: activeWallet.id,
-        durationMs: 60000
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: txStatusCurrentAddress,
+        txHash: txStatusCurrentHash
       });
 
-      if (!sessionResponse.success) {
-        alert('Invalid password');
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
         return;
       }
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'SPEED_UP_TX',
-        address: txStatusCurrentAddress,
-        txHash: txStatusCurrentHash,
-        sessionToken: sessionResponse.sessionToken,
-        gasPriceMultiplier: 1.2
-      });
+      const tx = txResponse.transaction;
 
-      if (response.success) {
-        alert(`Transaction sped up!\nNew TX: ${response.txHash.slice(0, 20)}...\n\nThe window will now close.`);
-        if (txStatusPollInterval) {
-          clearInterval(txStatusPollInterval);
-        }
-        window.close();
-      } else {
-        alert('Error speeding up transaction: ' + sanitizeError(response.error));
-      }
+      // Store state for modal
+      speedUpModalState.txHash = txStatusCurrentHash;
+      speedUpModalState.address = txStatusCurrentAddress;
+      speedUpModalState.network = tx.network;
+      speedUpModalState.originalGasPrice = tx.gasPrice;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-speed-up-tx').classList.remove('hidden');
+      await refreshGasPrices();
+
     } catch (error) {
-      alert('Error: ' + sanitizeError(error.message));
+      console.error('Error opening speed-up modal:', error);
+      alert('Error loading gas prices');
     }
   });
 
@@ -3192,6 +3200,9 @@ async function handleConnectionApprovalScreen(origin, requestId) {
 // ===== TRANSACTION APPROVAL =====
 // Populate gas price options
 async function populateGasPrices(network, txRequest, symbol) {
+  // Store params for refresh button
+  gasPriceRefreshState.approval = { network, txRequest, symbol };
+
   try {
     // Fetch current gas price from RPC
     const gasPriceHex = await rpc.getGasPrice(network);
@@ -3352,6 +3363,9 @@ async function fetchAndDisplayNonce(address, network) {
 
 // Populate gas prices for Send screen
 async function populateSendGasPrices(network, txRequest, symbol) {
+  // Store params for refresh button
+  gasPriceRefreshState.send = { network, txRequest, symbol };
+
   try {
     const gasPriceHex = await rpc.getGasPrice(network);
     const gasPriceWei = BigInt(gasPriceHex);
@@ -3482,6 +3496,9 @@ function getSelectedSendGasPrice() {
 
 // Populate gas prices for Token Send
 async function populateTokenGasPrices(network, txRequest, symbol) {
+  // Store params for refresh button
+  gasPriceRefreshState.token = { network, txRequest, symbol };
+
   try {
     const gasPriceHex = await rpc.getGasPrice(network);
     const gasPriceWei = BigInt(gasPriceHex);
@@ -4401,6 +4418,56 @@ async function showTransactionHistory() {
   await renderTransactionHistory('all');
 }
 
+// Refresh transaction from the list view
+async function refreshTransactionFromList(txHash) {
+  if (!currentState.address) return;
+
+  try {
+    // Get transaction to get network
+    const txResponse = await chrome.runtime.sendMessage({
+      type: 'GET_TX_BY_HASH',
+      address: currentState.address,
+      txHash: txHash
+    });
+
+    if (!txResponse.success || !txResponse.transaction) {
+      alert('Transaction not found');
+      return;
+    }
+
+    const network = txResponse.transaction.network;
+
+    // Refresh status from blockchain
+    const refreshResponse = await chrome.runtime.sendMessage({
+      type: 'REFRESH_TX_STATUS',
+      address: currentState.address,
+      txHash: txHash,
+      network: network
+    });
+
+    if (!refreshResponse.success) {
+      alert('Error: ' + refreshResponse.error);
+      return;
+    }
+
+    // Show brief notification
+    if (refreshResponse.status === 'confirmed') {
+      alert(`✅ Transaction confirmed on block ${refreshResponse.blockNumber}!`);
+    } else if (refreshResponse.status === 'failed') {
+      alert('❌ Transaction failed on blockchain');
+    } else {
+      alert('⏳ Still pending on blockchain');
+    }
+
+    // Refresh the transaction list to show updated status
+    await renderTransactionHistory(document.querySelector('[id^="filter-"][class*="active"]')?.id.replace('filter-', '').replace('-txs', '') || 'all');
+
+  } catch (error) {
+    console.error('Error refreshing transaction:', error);
+    alert('Error refreshing status');
+  }
+}
+
 async function renderTransactionHistory(filter = 'all') {
   const listEl = document.getElementById('tx-history-list');
   if (!currentState.address) {
@@ -4446,10 +4513,18 @@ async function renderTransactionHistory(filter = 'all') {
       const valueEth = ethers.formatEther(tx.value || '0');
       const gasGwei = ethers.formatUnits(tx.gasPrice || '0', 'gwei');
 
+      // Add refresh button for pending transactions
+      const refreshButton = tx.status === 'pending'
+        ? `<button class="btn-small" style="font-size: 9px; padding: 4px 8px; margin-left: 8px;" data-refresh-tx="${tx.hash}">🔄 Refresh</button>`
+        : '';
+
       html += `
         <div class="panel mb-2" style="padding: 12px; cursor: pointer; border-color: ${statusColor};" data-tx-hash="${tx.hash}">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="color: ${statusColor}; font-size: 14px;">${statusIcon} ${tx.status.toUpperCase()}</span>
+            <div style="display: flex; align-items: center;">
+              <span style="color: ${statusColor}; font-size: 14px;">${statusIcon} ${tx.status.toUpperCase()}</span>
+              ${refreshButton}
+            </div>
             <span class="text-dim" style="font-size: 10px;">${date}</span>
           </div>
           <p class="text-dim" style="font-size: 10px; margin-bottom: 4px;">Hash: ${tx.hash.slice(0, 20)}...</p>
@@ -4461,7 +4536,7 @@ async function renderTransactionHistory(filter = 'all') {
 
     listEl.innerHTML = html;
 
-    // Add click handlers
+    // Add click handlers for transaction items
     listEl.querySelectorAll('[data-tx-hash]').forEach(el => {
       el.addEventListener('click', () => {
         const txHash = el.dataset.txHash;
@@ -4469,9 +4544,76 @@ async function renderTransactionHistory(filter = 'all') {
       });
     });
 
+    // Add click handlers for refresh buttons
+    listEl.querySelectorAll('[data-refresh-tx]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault(); // Prevent default button behavior
+        e.stopPropagation(); // Prevent opening transaction details
+        const txHash = btn.dataset.refreshTx;
+        await refreshTransactionFromList(txHash);
+      });
+    });
+
   } catch (error) {
     console.error('Error loading transaction history:', error);
     listEl.innerHTML = '<p class="text-center text-dim">Error loading transactions</p>';
+  }
+}
+
+// Refresh transaction status from blockchain
+async function refreshTransactionStatus() {
+  if (!currentState.address || !currentState.currentTxHash) return;
+
+  const btn = document.getElementById('btn-refresh-tx-status');
+  if (!btn) return;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = '⏳ Checking blockchain...';
+
+    // Get current transaction to get network
+    const txResponse = await chrome.runtime.sendMessage({
+      type: 'GET_TX_BY_HASH',
+      address: currentState.address,
+      txHash: currentState.currentTxHash
+    });
+
+    if (!txResponse.success || !txResponse.transaction) {
+      throw new Error('Transaction not found');
+    }
+
+    const network = txResponse.transaction.network;
+
+    // Refresh status from blockchain
+    const refreshResponse = await chrome.runtime.sendMessage({
+      type: 'REFRESH_TX_STATUS',
+      address: currentState.address,
+      txHash: currentState.currentTxHash,
+      network: network
+    });
+
+    if (!refreshResponse.success) {
+      throw new Error(refreshResponse.error || 'Failed to refresh status');
+    }
+
+    // Show result message
+    if (refreshResponse.status === 'pending') {
+      alert('✋ Transaction is still pending on the blockchain.\n\nIt has not been mined yet.');
+    } else if (refreshResponse.status === 'confirmed') {
+      alert(`✅ Status updated!\n\nTransaction is CONFIRMED on block ${refreshResponse.blockNumber}`);
+    } else {
+      alert('❌ Status updated!\n\nTransaction FAILED on the blockchain.');
+    }
+
+    // Reload transaction details to show updated status
+    await showTransactionDetails(currentState.currentTxHash);
+
+  } catch (error) {
+    console.error('Error refreshing transaction status:', error);
+    alert('Error refreshing status: ' + error.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 REFRESH STATUS FROM BLOCKCHAIN';
   }
 }
 
@@ -4545,20 +4687,144 @@ async function showTransactionDetails(txHash) {
   }
 }
 
+// State for gas price refresh across different forms
+let gasPriceRefreshState = {
+  approval: { network: null, txRequest: null, symbol: null },
+  send: { network: null, txRequest: null, symbol: null },
+  token: { network: null, txRequest: null, symbol: null }
+};
+
+// State for speed-up modal
+let speedUpModalState = {
+  txHash: null,
+  address: null,
+  network: null,
+  originalGasPrice: null,
+  currentGasPrice: null,
+  recommendedGasPrice: null
+};
+
 async function handleSpeedUpTransaction() {
   if (!currentState.address || !currentState.currentTxHash) return;
 
-  const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to speed up this transaction with higher gas price (1.2x)');
-  if (!password) return;
+  try {
+    // Get transaction details
+    const txResponse = await chrome.runtime.sendMessage({
+      type: 'GET_TX_BY_HASH',
+      address: currentState.address,
+      txHash: currentState.currentTxHash
+    });
+
+    if (!txResponse.success || !txResponse.transaction) {
+      alert('Could not load transaction details');
+      return;
+    }
+
+    const tx = txResponse.transaction;
+
+    // Store state for modal
+    speedUpModalState.txHash = currentState.currentTxHash;
+    speedUpModalState.address = currentState.address;
+    speedUpModalState.network = tx.network;
+    speedUpModalState.originalGasPrice = tx.gasPrice;
+
+    // Show modal and load gas prices
+    document.getElementById('modal-speed-up-tx').classList.remove('hidden');
+    await refreshGasPrices();
+
+  } catch (error) {
+    console.error('Error opening speed-up modal:', error);
+    alert('Error loading gas prices');
+  }
+}
+
+async function refreshGasPrices() {
+  const loadingEl = document.getElementById('speed-up-loading');
+  const refreshBtn = document.getElementById('btn-refresh-gas-price');
 
   try {
+    // Show loading state
+    loadingEl.classList.remove('hidden');
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '⏳ Loading...';
+
+    // Fetch current network gas price
+    const gasResponse = await chrome.runtime.sendMessage({
+      type: 'GET_CURRENT_GAS_PRICE',
+      network: speedUpModalState.network
+    });
+
+    if (!gasResponse.success) {
+      throw new Error(gasResponse.error || 'Failed to fetch gas price');
+    }
+
+    // Store current and calculate recommended (current + 10%)
+    speedUpModalState.currentGasPrice = gasResponse.gasPrice;
+    const currentGwei = parseFloat(gasResponse.gasPriceGwei);
+    const recommendedGwei = (currentGwei * 1.1).toFixed(2);
+    speedUpModalState.recommendedGasPrice = (BigInt(gasResponse.gasPrice) * BigInt(110) / BigInt(100)).toString();
+
+    // Update UI
+    const originalGwei = (Number(speedUpModalState.originalGasPrice) / 1e9).toFixed(2);
+    document.getElementById('speed-up-original-gas').textContent = `${originalGwei} Gwei`;
+    document.getElementById('speed-up-current-gas').textContent = `${currentGwei} Gwei`;
+    document.getElementById('speed-up-recommended-gas').textContent = `${recommendedGwei} Gwei`;
+
+    // Calculate and show comparison
+    const comparison = currentGwei / parseFloat(originalGwei);
+    const messageEl = document.getElementById('speed-up-comparison-message');
+    if (comparison > 2) {
+      messageEl.textContent = `⚠️ Network gas is ${comparison.toFixed(0)}x higher than your transaction!`;
+      messageEl.style.color = 'var(--terminal-danger)';
+    } else if (comparison > 1.2) {
+      messageEl.textContent = `Network gas is ${comparison.toFixed(1)}x higher than your transaction`;
+      messageEl.style.color = 'var(--terminal-warning)';
+    } else {
+      messageEl.textContent = 'Network gas is close to your transaction price';
+      messageEl.style.color = 'var(--terminal-success)';
+    }
+
+  } catch (error) {
+    console.error('Error refreshing gas prices:', error);
+    document.getElementById('speed-up-comparison-message').textContent = `Error: ${error.message}`;
+    document.getElementById('speed-up-comparison-message').style.color = 'var(--terminal-danger)';
+  } finally {
+    loadingEl.classList.add('hidden');
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = '🔄 REFRESH GAS PRICE';
+  }
+}
+
+async function confirmSpeedUp() {
+  try {
+    // Get custom gas price if provided
+    const customGasInput = document.getElementById('speed-up-custom-gas').value;
+    let gasPriceToUse = speedUpModalState.recommendedGasPrice;
+
+    if (customGasInput && customGasInput.trim() !== '') {
+      const customGwei = parseFloat(customGasInput);
+      if (isNaN(customGwei) || customGwei <= 0) {
+        alert('Invalid gas price. Please enter a positive number.');
+        return;
+      }
+      // Convert Gwei to Wei
+      gasPriceToUse = (BigInt(Math.floor(customGwei * 1e9))).toString();
+    }
+
+    // Close modal
+    document.getElementById('modal-speed-up-tx').classList.add('hidden');
+
+    // Get password
+    const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to confirm speed-up');
+    if (!password) return;
+
     // Create temporary session
     const activeWallet = await getActiveWallet();
     const sessionResponse = await chrome.runtime.sendMessage({
       type: 'CREATE_SESSION',
       password: password,
       walletId: activeWallet.id,
-      durationMs: 60000 // 1 minute temp session
+      durationMs: 60000
     });
 
     if (!sessionResponse.success) {
@@ -4566,18 +4832,17 @@ async function handleSpeedUpTransaction() {
       return;
     }
 
-    // Speed up transaction
+    // Speed up transaction with custom gas price
     const response = await chrome.runtime.sendMessage({
       type: 'SPEED_UP_TX',
-      address: currentState.address,
-      txHash: currentState.currentTxHash,
+      address: speedUpModalState.address,
+      txHash: speedUpModalState.txHash,
       sessionToken: sessionResponse.sessionToken,
-      gasPriceMultiplier: 1.2
+      customGasPrice: gasPriceToUse
     });
 
     if (response.success) {
       alert(`Transaction sped up!\nNew TX: ${response.txHash.slice(0, 20)}...`);
-      // Refresh the transaction details
       showTransactionDetails(response.txHash);
     } else {
       alert('Error speeding up transaction: ' + response.error);
@@ -4586,6 +4851,66 @@ async function handleSpeedUpTransaction() {
   } catch (error) {
     console.error('Error speeding up transaction:', error);
     alert('Error speeding up transaction');
+  }
+}
+
+// Refresh gas prices for transaction approval screen
+async function refreshApprovalGasPrice() {
+  const btn = document.getElementById('btn-refresh-approval-gas');
+  if (!btn || !gasPriceRefreshState.approval.network) return;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = '⏳ Loading...';
+
+    const { network, txRequest, symbol } = gasPriceRefreshState.approval;
+    await populateGasPrices(network, txRequest, symbol);
+  } catch (error) {
+    console.error('Error refreshing gas price:', error);
+    alert('Error refreshing gas price');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 REFRESH GAS PRICE';
+  }
+}
+
+// Refresh gas prices for send screen
+async function refreshSendGasPrice() {
+  const btn = document.getElementById('btn-refresh-send-gas');
+  if (!btn || !gasPriceRefreshState.send.network) return;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = '⏳ Loading...';
+
+    const { network, txRequest, symbol } = gasPriceRefreshState.send;
+    await populateSendGasPrices(network, txRequest, symbol);
+  } catch (error) {
+    console.error('Error refreshing gas price:', error);
+    alert('Error refreshing gas price');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 REFRESH GAS PRICE';
+  }
+}
+
+// Refresh gas prices for token send screen
+async function refreshTokenGasPrice() {
+  const btn = document.getElementById('btn-refresh-token-gas');
+  if (!btn || !gasPriceRefreshState.token.network) return;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = '⏳ Loading...';
+
+    const { network, txRequest, symbol } = gasPriceRefreshState.token;
+    await populateTokenGasPrices(network, txRequest, symbol);
+  } catch (error) {
+    console.error('Error refreshing gas price:', error);
+    alert('Error refreshing gas price');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 REFRESH GAS PRICE';
   }
 }
 

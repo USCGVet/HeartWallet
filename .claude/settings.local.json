@@ -8,7 +8,8 @@
       "Bash(node:*)",
       "Bash(git add:*)",
       "Bash(git reset:*)",
-      "Bash(./node_modules/.bin/vite:*)"
+      "Bash(./node_modules/.bin/vite:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
