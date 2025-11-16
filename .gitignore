@@ -14,3 +14,4 @@ testnetWallet.txt
 *.key
 keystore/
 wallets/
+**/CHROME_STORE_SUBMISSION.md
