@@ -14,7 +14,10 @@
       "WebSearch",
       "WebFetch(domain:sourcify.dev)",
       "WebFetch(domain:scan.mypinata.cloud)",
-      "WebFetch(domain:api.scan.pulsechain.com)"
+      "WebFetch(domain:api.scan.pulsechain.com)",
+      "Bash(npm audit:*)",
+      "Bash(npm update:*)",
+      "Bash(npm run test:unit:*)"
     ],
     "deny": [],
     "ask": []

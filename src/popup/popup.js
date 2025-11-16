@@ -91,7 +91,8 @@ let currentState = {
     showTestNetworks: true,
     decimalPlaces: 8,
     theme: 'high-contrast',
-    maxGasPriceGwei: 1000 // Maximum gas price in Gwei (default 1000)
+    maxGasPriceGwei: 1000, // Maximum gas price in Gwei (default 1000)
+    allowEthSign: false // Allow dangerous eth_sign method (disabled by default for security)
   },
   networkSettings: null, // Will be loaded from storage or use defaults
   lastActivityTime: null, // Track last activity for auto-lock
@@ -508,6 +509,16 @@ function setupEventListeners() {
   document.getElementById('btn-confirm-speed-up')?.addEventListener('click', confirmSpeedUp);
   document.getElementById('btn-refresh-gas-price')?.addEventListener('click', refreshGasPrices);
 
+  // Cancel transaction modal
+  document.getElementById('btn-close-cancel-modal')?.addEventListener('click', () => {
+    document.getElementById('modal-cancel-tx').classList.add('hidden');
+  });
+  document.getElementById('btn-close-cancel')?.addEventListener('click', () => {
+    document.getElementById('modal-cancel-tx').classList.add('hidden');
+  });
+  document.getElementById('btn-confirm-cancel')?.addEventListener('click', confirmCancelTransaction);
+  document.getElementById('btn-refresh-cancel-gas-price')?.addEventListener('click', refreshCancelGasPrices);
+
   // Gas price refresh buttons
   document.getElementById('btn-refresh-approval-gas')?.addEventListener('click', refreshApprovalGasPrice);
   document.getElementById('btn-refresh-send-gas')?.addEventListener('click', refreshSendGasPrice);
@@ -540,7 +551,26 @@ function setupEventListeners() {
     saveSettings();
   });
   document.getElementById('setting-max-gas-price')?.addEventListener('change', (e) => {
-    currentState.settings.maxGasPriceGwei = parseInt(e.target.value);
+    const value = parseFloat(e.target.value);
+    // Validate: must be positive number
+    if (isNaN(value) || value <= 0) {
+      alert('Gas price must be a positive number');
+      e.target.value = currentState.settings.maxGasPriceGwei || 1000;
+      return;
+    }
+    // Validate: reasonable maximum (100,000 Gwei = 0.0001 ETH per gas)
+    if (value > 100000) {
+      const confirmed = confirm(
+        'Warning: Setting max gas price above 100,000 Gwei is extremely high.\n\n' +
+        'This could allow massive transaction fees.\n\n' +
+        'Are you sure you want to set it to ' + value + ' Gwei?'
+      );
+      if (!confirmed) {
+        e.target.value = currentState.settings.maxGasPriceGwei || 1000;
+        return;
+      }
+    }
+    currentState.settings.maxGasPriceGwei = value;
     saveSettings();
   });
   document.getElementById('setting-show-testnets')?.addEventListener('change', (e) => {
@@ -548,8 +578,33 @@ function setupEventListeners() {
     saveSettings();
     updateNetworkSelector();
   });
+  document.getElementById('setting-allow-eth-sign')?.addEventListener('change', (e) => {
+    // If trying to enable, show strong warning
+    if (e.target.checked) {
+      const confirmed = confirm(
+        '⚠️ DANGER: ENABLE eth_sign?\n\n' +
+        'eth_sign is a DEPRECATED and DANGEROUS signing method.\n\n' +
+        'Malicious sites can use it to sign transactions that could drain your entire wallet.\n\n' +
+        'This method should ONLY be enabled if:\n' +
+        '• You fully trust the site requesting it\n' +
+        '• You understand what data is being signed\n' +
+        '• The site cannot use personal_sign instead\n\n' +
+        'Do you want to enable this dangerous method?'
+      );
+
+      if (!confirmed) {
+        // User cancelled, revert the checkbox
+        e.target.checked = false;
+        return;
+      }
+    }
+
+    currentState.settings.allowEthSign = e.target.checked;
+    saveSettings();
+  });
   document.getElementById('btn-view-seed')?.addEventListener('click', handleViewSeed);
   document.getElementById('btn-export-key')?.addEventListener('click', handleExportKey);
+  document.getElementById('btn-use-current-gas-price')?.addEventListener('click', handleUseCurrentGasPrice);
 
   // Password prompt modal
   document.getElementById('btn-password-prompt-confirm')?.addEventListener('click', () => {
@@ -757,41 +812,33 @@ function setupEventListeners() {
   document.getElementById('btn-tx-status-cancel')?.addEventListener('click', async () => {
     if (!txStatusCurrentHash || !txStatusCurrentAddress) return;
 
-    const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to cancel this transaction by sending a 0-value replacement');
-    if (!password) return;
-
     try {
-      const activeWallet = await getActiveWallet();
-      const sessionResponse = await chrome.runtime.sendMessage({
-        type: 'CREATE_SESSION',
-        password: password,
-        walletId: activeWallet.id,
-        durationMs: 60000
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: txStatusCurrentAddress,
+        txHash: txStatusCurrentHash
       });
 
-      if (!sessionResponse.success) {
-        alert('Invalid password');
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
         return;
       }
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'CANCEL_TX',
-        address: txStatusCurrentAddress,
-        txHash: txStatusCurrentHash,
-        sessionToken: sessionResponse.sessionToken
-      });
+      const tx = txResponse.transaction;
 
-      if (response.success) {
-        alert(`Transaction cancelled!\nCancellation TX: ${response.txHash.slice(0, 20)}...\n\nThe window will now close.`);
-        if (txStatusPollInterval) {
-          clearInterval(txStatusPollInterval);
-        }
-        window.close();
-      } else {
-        alert('Error cancelling transaction: ' + sanitizeError(response.error));
-      }
+      // Store state for modal
+      cancelModalState.txHash = txStatusCurrentHash;
+      cancelModalState.address = txStatusCurrentAddress;
+      cancelModalState.network = tx.network;
+      cancelModalState.originalGasPrice = tx.gasPrice;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-cancel-tx').classList.remove('hidden');
+      await refreshCancelGasPrices();
     } catch (error) {
-      alert('Error: ' + sanitizeError(error.message));
+      console.error('Error opening cancel modal:', error);
+      alert('Error loading gas prices');
     }
   });
 
@@ -1163,12 +1210,14 @@ async function updateRecentTransactions() {
   if (!txListEl || !currentState.address) return;
 
   // Show loading state
+  // SECURITY: innerHTML is safe here - string is hardcoded. DO NOT add dynamic data without escaping.
   txListEl.innerHTML = '<p class="text-center text-dim">Loading transactions...</p>';
 
   try {
     const transactions = await rpc.getRecentTransactions(currentState.network, currentState.address, 3, 1000);
 
     if (transactions.length === 0) {
+      // SECURITY: innerHTML is safe here - string is hardcoded. DO NOT add dynamic data without escaping.
       txListEl.innerHTML = '<p class="text-center text-dim">No recent transactions</p>';
       return;
     }
@@ -2585,6 +2634,95 @@ function loadSettingsToUI() {
   document.getElementById('setting-theme').value = currentState.settings.theme;
   document.getElementById('setting-show-testnets').checked = currentState.settings.showTestNetworks;
   document.getElementById('setting-max-gas-price').value = currentState.settings.maxGasPriceGwei || 1000;
+  document.getElementById('setting-allow-eth-sign').checked = currentState.settings.allowEthSign || false;
+
+  // Fetch and display current network gas price
+  fetchCurrentGasPrice();
+}
+
+/**
+ * Fetches current gas price from the network and displays it
+ */
+async function fetchCurrentGasPrice() {
+  const labelEl = document.getElementById('current-gas-price-label');
+  if (!labelEl) return;
+
+  try {
+    labelEl.textContent = 'Loading current price...';
+
+    // Get gas price from RPC
+    const gasPrice = await rpc.getGasPrice(currentState.network);
+
+    // Convert from Wei to Gwei (1 Gwei = 1e9 Wei)
+    const gasPriceGwei = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
+
+    // Format nicely
+    let displayPrice;
+    if (gasPriceGwei < 0.001) {
+      displayPrice = gasPriceGwei.toFixed(6); // Very low (PulseChain)
+    } else if (gasPriceGwei < 1) {
+      displayPrice = gasPriceGwei.toFixed(3);
+    } else if (gasPriceGwei < 10) {
+      displayPrice = gasPriceGwei.toFixed(2);
+    } else {
+      displayPrice = gasPriceGwei.toFixed(1);
+    }
+
+    const networkName = NETWORK_NAMES[currentState.network] || currentState.network;
+    labelEl.textContent = `Current ${networkName} price: ${displayPrice} Gwei`;
+    labelEl.style.color = 'var(--terminal-success)';
+  } catch (error) {
+    console.error('Error fetching gas price:', error);
+    labelEl.textContent = 'Unable to fetch current price';
+    labelEl.style.color = 'var(--terminal-error)';
+  }
+}
+
+/**
+ * Handles "USE CURRENT NETWORK PRICE" button click
+ */
+async function handleUseCurrentGasPrice() {
+  const inputEl = document.getElementById('setting-max-gas-price');
+  const labelEl = document.getElementById('current-gas-price-label');
+
+  if (!inputEl) return;
+
+  try {
+    // Get current gas price
+    const gasPrice = await rpc.getGasPrice(currentState.network);
+    const gasPriceGwei = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
+
+    // Add 20% buffer for safety (gas prices can spike)
+    const bufferedPrice = gasPriceGwei * 1.2;
+
+    // Round to reasonable precision
+    let roundedPrice;
+    if (bufferedPrice < 1) {
+      roundedPrice = Math.ceil(bufferedPrice * 1000) / 1000; // Round to 3 decimals
+    } else if (bufferedPrice < 10) {
+      roundedPrice = Math.ceil(bufferedPrice * 100) / 100; // Round to 2 decimals
+    } else {
+      roundedPrice = Math.ceil(bufferedPrice * 10) / 10; // Round to 1 decimal
+    }
+
+    // Ensure minimum of 0.1 Gwei
+    const finalPrice = Math.max(0.1, roundedPrice);
+
+    // Update input and settings
+    inputEl.value = finalPrice;
+    currentState.settings.maxGasPriceGwei = finalPrice;
+    saveSettings();
+
+    // Update label to show what was set
+    labelEl.textContent = `Set to ${finalPrice} Gwei (current + 20% buffer)`;
+    labelEl.style.color = 'var(--terminal-success)';
+
+    // Refresh display after 2 seconds
+    setTimeout(() => fetchCurrentGasPrice(), 2000);
+  } catch (error) {
+    console.error('Error setting gas price:', error);
+    alert('Failed to fetch current gas price. Please try again.');
+  }
 }
 
 // Network Settings
@@ -3205,15 +3343,16 @@ async function populateGasPrices(network, txRequest, symbol) {
   gasPriceRefreshState.approval = { network, txRequest, symbol };
 
   try {
-    // Fetch current gas price from RPC
-    const gasPriceHex = await rpc.getGasPrice(network);
+    // Fetch SAFE gas price from RPC (uses base fee * 2 to prevent stuck transactions)
+    const gasPriceHex = await rpc.getSafeGasPrice(network);
     const gasPriceWei = BigInt(gasPriceHex);
     const gasPriceGwei = Number(gasPriceWei) / 1e9;
 
-    // Calculate slow (80%), normal (100%), fast (150%)
-    const slowGwei = (gasPriceGwei * 0.8).toFixed(2);
+    // Calculate slow (90%), normal (100%), fast (120%)
+    // Note: slow is 90% instead of 80% to ensure it's still above base fee
+    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
     const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.5).toFixed(2);
+    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
 
     // Update UI
     document.getElementById('gas-slow-price').textContent = `${slowGwei} Gwei`;
@@ -3368,13 +3507,14 @@ async function populateSendGasPrices(network, txRequest, symbol) {
   gasPriceRefreshState.send = { network, txRequest, symbol };
 
   try {
-    const gasPriceHex = await rpc.getGasPrice(network);
+    // Use safe gas price to prevent stuck transactions
+    const gasPriceHex = await rpc.getSafeGasPrice(network);
     const gasPriceWei = BigInt(gasPriceHex);
     const gasPriceGwei = Number(gasPriceWei) / 1e9;
 
-    const slowGwei = (gasPriceGwei * 0.8).toFixed(2);
+    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
     const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.5).toFixed(2);
+    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
 
     document.getElementById('send-gas-slow-price').textContent = `${slowGwei} Gwei`;
     document.getElementById('send-gas-normal-price').textContent = `${normalGwei} Gwei`;
@@ -3501,13 +3641,14 @@ async function populateTokenGasPrices(network, txRequest, symbol) {
   gasPriceRefreshState.token = { network, txRequest, symbol };
 
   try {
-    const gasPriceHex = await rpc.getGasPrice(network);
+    // Use safe gas price to prevent stuck transactions
+    const gasPriceHex = await rpc.getSafeGasPrice(network);
     const gasPriceWei = BigInt(gasPriceHex);
     const gasPriceGwei = Number(gasPriceWei) / 1e9;
 
-    const slowGwei = (gasPriceGwei * 0.8).toFixed(2);
+    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
     const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.5).toFixed(2);
+    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
 
     document.getElementById('token-gas-slow-price').textContent = `${slowGwei} Gwei`;
     document.getElementById('token-gas-normal-price').textContent = `${normalGwei} Gwei`;
@@ -3726,8 +3867,34 @@ async function showSendTransactionStatus(txHash, network, amount, symbol) {
 
   // Setup Cancel button
   document.getElementById('btn-send-status-cancel').onclick = async () => {
-    // TODO: Implement cancel transaction functionality
-    alert('Cancel functionality will be implemented in a future update');
+    try {
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
+        return;
+      }
+
+      const tx = txResponse.transaction;
+
+      // Store state for modal
+      cancelModalState.txHash = txHash;
+      cancelModalState.address = address;
+      cancelModalState.network = tx.network;
+      cancelModalState.originalGasPrice = tx.gasPrice;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-cancel-tx').classList.remove('hidden');
+      await refreshCancelGasPrices();
+    } catch (error) {
+      console.error('Error opening cancel modal:', error);
+      alert('Error loading gas prices');
+    }
   };
 }
 
@@ -3829,8 +3996,34 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
 
   // Setup Cancel button
   document.getElementById('btn-token-send-status-cancel').onclick = async () => {
-    // TODO: Implement cancel transaction functionality
-    alert('Cancel functionality will be implemented in a future update');
+    try {
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
+        return;
+      }
+
+      const tx = txResponse.transaction;
+
+      // Store state for modal
+      cancelModalState.txHash = txHash;
+      cancelModalState.address = address;
+      cancelModalState.network = tx.network;
+      cancelModalState.originalGasPrice = tx.gasPrice;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-cancel-tx').classList.remove('hidden');
+      await refreshCancelGasPrices();
+    } catch (error) {
+      console.error('Error opening cancel modal:', error);
+      alert('Error loading gas prices');
+    }
   };
 }
 
@@ -4313,6 +4506,15 @@ async function handleMessageSignApprovalScreen(requestId) {
     // Populate sign details
     document.getElementById('sign-site-origin').textContent = origin;
     document.getElementById('sign-address').textContent = address;
+
+    // Show DANGER warning if this is eth_sign
+    const ethSignWarning = document.getElementById('eth-sign-danger-warning');
+    if (method === 'eth_sign') {
+      ethSignWarning.classList.remove('hidden');
+      console.warn('⚠️ DANGER: eth_sign request from', origin);
+    } else {
+      ethSignWarning.classList.add('hidden');
+    }
 
     // Format message for display
     const messageEl = document.getElementById('sign-message-content');
@@ -4874,6 +5076,16 @@ let speedUpModalState = {
   recommendedGasPrice: null
 };
 
+// State for cancel transaction modal
+let cancelModalState = {
+  txHash: null,
+  address: null,
+  network: null,
+  originalGasPrice: null,
+  currentGasPrice: null,
+  recommendedGasPrice: null
+};
+
 async function handleSpeedUpTransaction() {
   if (!currentState.address || !currentState.currentTxHash) return;
 
@@ -5024,6 +5236,124 @@ async function confirmSpeedUp() {
   }
 }
 
+// Refresh gas prices for cancel transaction modal
+async function refreshCancelGasPrices() {
+  const loadingEl = document.getElementById('cancel-loading');
+  const refreshBtn = document.getElementById('btn-refresh-cancel-gas-price');
+
+  try {
+    // Show loading state
+    loadingEl.classList.remove('hidden');
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '⏳ Loading...';
+
+    // Fetch current network gas price
+    const gasResponse = await chrome.runtime.sendMessage({
+      type: 'GET_CURRENT_GAS_PRICE',
+      network: cancelModalState.network
+    });
+
+    if (!gasResponse.success) {
+      throw new Error(gasResponse.error || 'Failed to fetch gas price');
+    }
+
+    // Store current and calculate recommended (current + 10%)
+    cancelModalState.currentGasPrice = gasResponse.gasPrice;
+    const currentGwei = parseFloat(gasResponse.gasPriceGwei);
+    const recommendedGwei = (currentGwei * 1.1).toFixed(2);
+    cancelModalState.recommendedGasPrice = (BigInt(gasResponse.gasPrice) * BigInt(110) / BigInt(100)).toString();
+
+    // Update UI
+    const originalGwei = (Number(cancelModalState.originalGasPrice) / 1e9).toFixed(2);
+    document.getElementById('cancel-original-gas').textContent = `${originalGwei} Gwei`;
+    document.getElementById('cancel-current-gas').textContent = `${currentGwei} Gwei`;
+    document.getElementById('cancel-recommended-gas').textContent = `${recommendedGwei} Gwei`;
+
+    // Calculate and show comparison
+    const comparison = currentGwei / parseFloat(originalGwei);
+    const messageEl = document.getElementById('cancel-comparison-message');
+    if (comparison > 2) {
+      messageEl.textContent = `⚠️ Network gas is ${comparison.toFixed(0)}x higher than your transaction!`;
+      messageEl.style.color = 'var(--terminal-danger)';
+    } else if (comparison > 1.2) {
+      messageEl.textContent = `Network gas is ${comparison.toFixed(1)}x higher than your transaction`;
+      messageEl.style.color = 'var(--terminal-warning)';
+    } else {
+      messageEl.textContent = 'Network gas is close to your transaction price';
+      messageEl.style.color = 'var(--terminal-success)';
+    }
+
+  } catch (error) {
+    console.error('Error refreshing cancel gas prices:', error);
+    document.getElementById('cancel-comparison-message').textContent = `Error: ${error.message}`;
+    document.getElementById('cancel-comparison-message').style.color = 'var(--terminal-danger)';
+  } finally {
+    loadingEl.classList.add('hidden');
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = '🔄 REFRESH GAS PRICE';
+  }
+}
+
+// Confirm cancel transaction
+async function confirmCancelTransaction() {
+  try {
+    // Get custom gas price if provided
+    const customGasInput = document.getElementById('cancel-custom-gas').value;
+    let gasPriceToUse = cancelModalState.recommendedGasPrice;
+
+    if (customGasInput && customGasInput.trim() !== '') {
+      const customGwei = parseFloat(customGasInput);
+      if (isNaN(customGwei) || customGwei <= 0) {
+        alert('Invalid gas price. Please enter a positive number.');
+        return;
+      }
+      // Convert Gwei to Wei
+      gasPriceToUse = (BigInt(Math.floor(customGwei * 1e9))).toString();
+    }
+
+    // Close modal
+    document.getElementById('modal-cancel-tx').classList.add('hidden');
+
+    // Get password
+    const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to confirm cancellation');
+    if (!password) return;
+
+    // Create temporary session
+    const activeWallet = await getActiveWallet();
+    const sessionResponse = await chrome.runtime.sendMessage({
+      type: 'CREATE_SESSION',
+      password: password,
+      walletId: activeWallet.id,
+      durationMs: 60000
+    });
+
+    if (!sessionResponse.success) {
+      alert('Invalid password');
+      return;
+    }
+
+    // Cancel transaction with custom gas price
+    const response = await chrome.runtime.sendMessage({
+      type: 'CANCEL_TX',
+      address: cancelModalState.address,
+      txHash: cancelModalState.txHash,
+      sessionToken: sessionResponse.sessionToken,
+      customGasPrice: gasPriceToUse
+    });
+
+    if (response.success) {
+      alert(`Transaction cancelled!\nCancellation TX: ${response.txHash.slice(0, 20)}...`);
+      showTransactionDetails(response.txHash);
+    } else {
+      alert('Error cancelling transaction: ' + response.error);
+    }
+
+  } catch (error) {
+    console.error('Error cancelling transaction:', error);
+    alert('Error cancelling transaction');
+  }
+}
+
 // Refresh gas prices for transaction approval screen
 async function refreshApprovalGasPrice() {
   const btn = document.getElementById('btn-refresh-approval-gas');
@@ -5087,47 +5417,34 @@ async function refreshTokenGasPrice() {
 async function handleCancelTransaction() {
   if (!currentState.address || !currentState.currentTxHash) return;
 
-  if (!confirm('Cancel this transaction? A cancellation transaction will be sent.')) {
-    return;
-  }
-
-  const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to cancel this transaction by sending a 0-value replacement');
-  if (!password) return;
-
   try {
-    // Create temporary session
-    const activeWallet = await getActiveWallet();
-    const sessionResponse = await chrome.runtime.sendMessage({
-      type: 'CREATE_SESSION',
-      password: password,
-      walletId: activeWallet.id,
-      durationMs: 60000 // 1 minute temp session
+    // Get transaction details
+    const txResponse = await chrome.runtime.sendMessage({
+      type: 'GET_TX_BY_HASH',
+      address: currentState.address,
+      txHash: currentState.currentTxHash
     });
 
-    if (!sessionResponse.success) {
-      alert('Invalid password');
+    if (!txResponse.success || !txResponse.transaction) {
+      alert('Could not load transaction details');
       return;
     }
 
-    // Cancel transaction
-    const response = await chrome.runtime.sendMessage({
-      type: 'CANCEL_TX',
-      address: currentState.address,
-      txHash: currentState.currentTxHash,
-      sessionToken: sessionResponse.sessionToken
-    });
+    const tx = txResponse.transaction;
 
-    if (response.success) {
-      alert(`Transaction cancelled!\nCancellation TX: ${response.txHash.slice(0, 20)}...`);
-      // Refresh to show cancellation transaction
-      showTransactionDetails(response.txHash);
-    } else {
-      alert('Error cancelling transaction: ' + response.error);
-    }
+    // Store state for modal
+    cancelModalState.txHash = currentState.currentTxHash;
+    cancelModalState.address = currentState.address;
+    cancelModalState.network = tx.network;
+    cancelModalState.originalGasPrice = tx.gasPrice;
+
+    // Show modal and load gas prices
+    document.getElementById('modal-cancel-tx').classList.remove('hidden');
+    await refreshCancelGasPrices();
 
   } catch (error) {
-    console.error('Error cancelling transaction:', error);
-    alert('Error cancelling transaction');
+    console.error('Error opening cancel modal:', error);
+    alert('Error loading gas prices');
   }
 }
 

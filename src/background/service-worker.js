@@ -1045,22 +1045,24 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       // Using provided gas limit
     }
 
-    // Apply user-selected gas price if provided, or use network gas price with multiplier
+    // Apply user-selected gas price if provided, or use safe network gas price
     if (gasPrice) {
-      // Use legacy gasPrice (works on all networks including PulseChain)
+      // Use user-selected gas price from UI
       txToSend.gasPrice = gasPrice;
       // Using custom gas price
     } else {
-      // Fetch current network gas price and apply 1.2x multiplier for faster confirmation
+      // Fallback: Fetch safe gas price (base fee * 2) to prevent stuck transactions
       try {
+        const safeGasPriceHex = await rpc.getSafeGasPrice(network);
+        txToSend.gasPrice = BigInt(safeGasPriceHex);
+        // Using safe gas price from base fee
+      } catch (error) {
+        console.warn('Error getting safe gas price, using provider fallback:', error);
+        // Last resort fallback to provider
         const networkGasPrice = await provider.getFeeData();
         if (networkGasPrice.gasPrice) {
-          const multipliedGasPrice = (networkGasPrice.gasPrice * BigInt(120)) / BigInt(100);
-          txToSend.gasPrice = multipliedGasPrice;
-          // Using network gas price with multiplier
+          txToSend.gasPrice = networkGasPrice.gasPrice;
         }
-      } catch (error) {
-        // Auto-calculating gas price
       }
     }
 
@@ -1304,7 +1306,7 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
 }
 
 // Cancel a pending transaction by replacing it with a zero-value tx to self
-async function handleCancelTransaction(address, originalTxHash, sessionToken) {
+async function handleCancelTransaction(address, originalTxHash, sessionToken, customGasPrice = null) {
   try {
     // Validate session (now async)
     const password = await validateSession(sessionToken);
@@ -1331,9 +1333,16 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
     const provider = await rpc.getProvider(network);
     const wallet = signer.connect(provider);
 
-    // Calculate new gas price (1.2x of original to ensure it gets mined first)
-    const originalGasPrice = BigInt(originalTx.gasPrice);
-    const newGasPrice = (originalGasPrice * BigInt(120)) / BigInt(100);
+    // Calculate new gas price
+    let newGasPrice;
+    if (customGasPrice) {
+      // Use custom gas price provided by user
+      newGasPrice = BigInt(customGasPrice);
+    } else {
+      // Calculate from original (1.2x of original to ensure it gets mined first)
+      const originalGasPrice = BigInt(originalTx.gasPrice);
+      newGasPrice = (originalGasPrice * BigInt(120)) / BigInt(100);
+    }
 
     // Create cancellation transaction (send 0 to self with same nonce)
     const cancelTx = {
@@ -1392,17 +1401,14 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken) {
 // Get current network gas price (for speed-up UI)
 async function getCurrentNetworkGasPrice(network) {
   try {
-    const provider = await rpc.getProvider(network);
-    const feeData = await provider.getFeeData();
-
-    if (!feeData.gasPrice) {
-      return { success: false, error: 'Could not fetch gas price' };
-    }
+    // Use safe gas price to prevent stuck transactions
+    const safeGasPriceHex = await rpc.getSafeGasPrice(network);
+    const safeGasPrice = BigInt(safeGasPriceHex);
 
     return {
       success: true,
-      gasPrice: feeData.gasPrice.toString(),
-      gasPriceGwei: (Number(feeData.gasPrice) / 1e9).toFixed(2)
+      gasPrice: safeGasPrice.toString(),
+      gasPriceGwei: (Number(safeGasPrice) / 1e9).toFixed(2)
     };
   } catch (error) {
     console.error('🫀 Error fetching current gas price:', error);
@@ -1532,6 +1538,25 @@ async function handlePersonalSign(params, origin, method) {
   }
 
   const { message, address } = validation.sanitized;
+
+  // SECURITY: Check if eth_sign is allowed (disabled by default)
+  if (method === 'eth_sign') {
+    const settings = await load('settings');
+    const allowEthSign = settings?.allowEthSign || false;
+
+    if (!allowEthSign) {
+      console.warn('🫀 eth_sign request blocked (disabled in settings):', origin);
+      return {
+        error: {
+          code: 4100,
+          message: 'eth_sign is disabled for security. Use personal_sign instead, or enable eth_sign in wallet settings.'
+        }
+      };
+    }
+
+    // Log warning when eth_sign is used (even when enabled)
+    console.warn('⚠️ eth_sign request approved by settings from:', origin);
+  }
 
   // Verify the address matches the connected account
   const wallet = await getActiveWallet();
@@ -1889,7 +1914,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const cancelResult = await handleCancelTransaction(
             message.address,
             message.txHash,
-            message.sessionToken
+            message.sessionToken,
+            message.customGasPrice || null
           );
           sendResponse(cancelResult);
           break;

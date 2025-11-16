@@ -8,10 +8,16 @@ class HeartWalletProvider {
   constructor() {
     this.isHeartWallet = true;
     this.isMetaMask = true; // For compatibility with dApps that check for MetaMask
+    this.isRabby = false; // Set to true if you want to appear as Rabby instead
     this._selectedAddress = null;
     this._chainId = null;
     this._isConnected = false;
     this._networkVersion = null;
+
+    // MetaMask-specific properties for better compatibility
+    this._metamask = {
+      isUnlocked: () => Promise.resolve(true)
+    };
 
     // Event emitter
     this._events = {};
@@ -41,13 +47,14 @@ class HeartWalletProvider {
       this._pendingRequests.set(requestId, { resolve, reject });
 
       // Send message to content script
+      // SECURITY: Use specific origin to prevent message interception by malicious scripts
       window.postMessage({
         target: 'heartwallet-contentscript',
         type: 'WALLET_REQUEST',
         requestId,
         method,
         params
-      }, '*');
+      }, window.location.origin);
 
       // Timeout after 60 seconds
       setTimeout(() => {
@@ -210,10 +217,55 @@ if (!window.ethereum) {
     currentProvider: window.ethereum
   };
 
-  // Provider injected
+  // EIP-6963: Announce provider for modern wallet detection (Web3Modal, WalletConnect, etc.)
+  const announceProvider = () => {
+    const info = {
+      uuid: 'heartwallet-' + Math.random().toString(36).substring(7),
+      name: 'HeartWallet',
+      icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIxNiIgZmlsbD0iI0UwMDAzNyIvPgogIDxwYXRoIGQ9Ik0xNiA5QzEyLjY4NiA5IDEwIDExLjY4NiAxMCAxNUMxMCAyMC41MjMgMTYgMjYgMTYgMjZDMTYgMjYgMjIgMjAuNTIzIDIyIDE1QzIyIDExLjY4NiAxOS4zMTQgOSAxNiA5WiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
+      rdns: 'com.heartwallet'
+    };
 
-  // Announce to the page that the provider is ready
+    window.dispatchEvent(
+      new CustomEvent('eip6963:announceProvider', {
+        detail: Object.freeze({ info, provider: window.ethereum })
+      })
+    );
+  };
+
+  // Announce immediately
+  announceProvider();
+
+  // Listen for discovery requests from dApps
+  window.addEventListener('eip6963:requestProvider', (event) => {
+    announceProvider();
+  });
+
+  // Legacy announcement events
   window.dispatchEvent(new Event('ethereum#initialized'));
 } else {
   console.warn('⚠️ window.ethereum already exists, HeartWallet not injected');
+
+  // Even if window.ethereum exists, try to announce via EIP-6963 as an alternative provider
+  const announceAlternativeProvider = () => {
+    const heartWalletProvider = new HeartWalletProvider();
+    const info = {
+      uuid: 'heartwallet-alt-' + Math.random().toString(36).substring(7),
+      name: 'HeartWallet',
+      icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIxNiIgZmlsbD0iI0UwMDAzNyIvPgogIDxwYXRoIGQ9Ik0xNiA5QzEyLjY4NiA5IDEwIDExLjY4NiAxMCAxNUMxMCAyMC41MjMgMTYgMjYgMTYgMjZDMTYgMjYgMjIgMjAuNTIzIDIyIDE1QzIyIDExLjY4NiAxOS4zMTQgOSAxNiA5WiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
+      rdns: 'com.heartwallet'
+    };
+
+    window.dispatchEvent(
+      new CustomEvent('eip6963:announceProvider', {
+        detail: Object.freeze({ info, provider: heartWalletProvider })
+      })
+    );
+  };
+
+  announceAlternativeProvider();
+
+  window.addEventListener('eip6963:requestProvider', () => {
+    announceAlternativeProvider();
+  });
 }

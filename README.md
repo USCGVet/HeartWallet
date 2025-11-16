@@ -1,5 +1,4 @@
-# HeartWallet v2.0
-
+# HeartWallet v2.0.1
 
 **Developer:** USCG_Vet
 **Contact:** uscg_vet@protonmail.com
@@ -25,36 +24,46 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 - **Multi-wallet support** - Manage up to 10 wallets with custom nicknames
 - **Create new wallet** with 12-word seed phrase
 - **Import wallet** from seed phrase or private key
-- **Password-protected encryption** using Web3 Secret Storage V3 (Scrypt + AES-128-CTR)
-- **Secure Chrome local storage** - encrypted at rest
+- **Future-proof encryption** - PBKDF2 with automatic security upgrades (1.094M iterations in 2025)
+- **Secure Chrome local storage** - AES-256-GCM double-encrypted at rest
 - **Lock/unlock functionality** with password
 - **5 visual themes** (High Contrast, Professional, Amber, CGA, Classic Green)
 - **Configurable decimal display** (2, 4, 6, 8, 18)
 - **Export seed phrase and private key** (password protected)
 
 ### 🔐 Security Features
-- **Strong password requirements** - 12+ chars, uppercase, lowercase, number, special character
+- **Future-proof PBKDF2** - Auto-upgrades to current security standards (prevents future GPU attacks)
+- **Strong password requirements** - 20+ chars recommended, mixed case, numbers, special chars
 - **Auto-lock timer** - Automatically locks after configured inactivity period (15 min default)
 - **Rate limiting** - 5 failed password attempts = 30 minute lockout
 - **Seed phrase verification** - Must verify 3 random words during wallet creation
 - **Password prompts** for all sensitive operations
+- **eth_sign protection** - Disabled by default (prevents blind signing attacks)
+- **Gas limit protection** - Maximum 10M gas (prevents fee scam attacks)
+- **Transaction validation** - All parameters checked before signing
+- **Origin validation** - Secure postMessage with specific origins
 
 ### 🌐 Web3 & DApp Features
 - **Full EIP-1193 provider** - Compatible with all Web3 DApps
-- **Transaction signing** with gas price control (Slow/Normal/Fast/Custom)
+- **EIP-6963 wallet detection** - Works with Web3Modal, WalletConnect, and modern dApps
+- **Transaction signing** with live gas price control (Slow/Normal/Fast/Custom)
+- **Transaction management** - Speed up or cancel pending transactions
 - **Message signing (EIP-191)** - personal_sign and eth_sign support
 - **Typed data signing (EIP-712)** - signTypedData v3/v4 for permits and meta-transactions
-- **Contract interaction** - Call contract functions and send transactions
+- **Contract interaction** - Decode contract calls and send transactions
 - **Network switching** - PulseChain, Ethereum, Sepolia, PulseChain Testnet
-- **Connection management** - Approve/reject site connections
-- **Event support** - accountsChanged, chainChanged
-- **Gas estimation** - Automatic gas limit calculation
+- **Connection management** - Approve/reject site connections, manage connected sites
+- **Event support** - accountsChanged, chainChanged, connect, disconnect
+- **Gas estimation** - Automatic gas limit calculation with RPC fallback
 
-### 💰 Token Support
+### 💰 Token & Transaction Features
 - **Native tokens** - PLS, ETH with full send/receive
-- **Default tokens** - HEX, PLSX, INC pre-configured for PulseChain
+- **Default tokens** - HEX, PLSX, INC, TKR, JDAI pre-configured for PulseChain
 - **Custom tokens** - Add any ERC-20/PRC-20 token by address
 - **Token management** - Enable/disable, view balances
+- **Transaction history** - View all past transactions with status tracking
+- **Transaction details** - See decoded contract interactions
+- **Explorer integration** - View transactions on block explorers
 
 ## Installation
 
@@ -62,7 +71,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 
 1. **Clone or navigate to the project**
    ```bash
-   cd D:/HeartWallet/
+   cd /path/to/HeartWallet
    ```
 
 2. **Install dependencies**
@@ -79,28 +88,32 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
    - Open Chrome and go to `chrome://extensions/`
    - Enable "Developer mode" (top right)
    - Click "Load unpacked"
-   - Select the `.../HeartWallet/dist/` folder
+   - Select the `dist/` folder
 
 ## Development
 
 ### Project Structure
 
 ```
-HeartWallet-v2/
+HeartWallet-v3/
 ├── src/
 │   ├── popup/
 │   │   ├── popup.html          # Main UI
 │   │   ├── popup.js            # UI controller
 │   │   └── terminal.css        # Terminal theme styles
 │   ├── core/
-│   │   ├── wallet.js           # Wallet operations
+│   │   ├── wallet.js           # Wallet operations & PBKDF2 auto-upgrade
 │   │   ├── storage.js          # Encrypted storage
-│   │   └── validation.js       # Input validation
+│   │   ├── txValidation.js     # Transaction validation
+│   │   └── signing.js          # Message signing
 │   ├── background/
-│   │   └── service-worker.js   # Background script
+│   │   ├── service-worker.js   # Background script
+│   │   ├── rpc.js              # RPC provider with failover
+│   │   └── txHistory.js        # Transaction tracking
 │   └── content/
-│       ├── content-script.js   # Content script
-│       └── inpage-provider.js  # window.ethereum provider
+│       ├── content-script.js   # Content script bridge
+│       └── inpage-provider.js  # window.ethereum provider (EIP-1193 + EIP-6963)
+├── tests/                      # Unit tests (Vitest)
 ├── dist/                       # Built extension (generated)
 ├── manifest.json               # Chrome extension manifest
 ├── package.json                # Dependencies
@@ -116,8 +129,11 @@ npm run dev
 # Production build
 npm run build
 
-# Preview build
-npm run preview
+# Run tests
+npm test
+
+# Build and test
+npm run build && npm test
 ```
 
 ### Tech Stack
@@ -125,8 +141,9 @@ npm run preview
 - **Language**: Vanilla JavaScript (ES6+)
 - **Crypto Library**: ethers.js v6
 - **Build Tool**: Vite
+- **Testing**: Vitest
 - **Extension**: Chrome Manifest V3
-- **Storage**: Chrome Storage API (encrypted)
+- **Storage**: Chrome Storage API (AES-256-GCM encrypted)
 
 ## Usage
 
@@ -135,8 +152,9 @@ npm run preview
 1. Click the HeartWallet icon in your browser
 2. Choose "CREATE NEW WALLET" or "IMPORT EXISTING WALLET"
 3. If creating:
-   - Write down your 12-word seed phrase
-   - Create a strong password
+   - Write down your 12-word seed phrase (NEVER share this!)
+   - Create a strong password (20+ characters recommended)
+   - Verify 3 random words from your seed phrase
    - Check the confirmation box
    - Click "CREATE WALLET"
 4. If importing:
@@ -148,6 +166,24 @@ npm run preview
 
 - Enter your password
 - Click "UNLOCK"
+- Wallet auto-locks after configured inactivity period
+
+### Sending Transactions
+
+1. Click "Send" on the dashboard
+2. Enter recipient address
+3. Enter amount
+4. Choose gas speed (Slow/Normal/Fast/Custom)
+5. Review transaction details
+6. Confirm with password
+
+### Managing Transactions
+
+**Pending transactions can be:**
+- **Sped Up** - Increase gas price to confirm faster
+- **Cancelled** - Replace with 0-value transaction to yourself
+
+Both options show live network gas prices to help you make informed decisions.
 
 ### Settings
 
@@ -155,7 +191,9 @@ Access settings from the dashboard (⚙ icon):
 - **Auto-lock**: Set timeout (5, 15, 30, or 60 minutes)
 - **Decimal places**: Choose display precision (2, 4, 6, 8, or 18)
 - **Theme**: Select visual theme
+- **Max Gas Price**: Set maximum allowed gas price (protects from fee scams)
 - **Show test networks**: Toggle testnet visibility
+- **Allow eth_sign**: Enable dangerous blind signing (disabled by default)
 - **Export seed/key**: View your seed phrase or private key
 
 ## Themes
@@ -174,11 +212,15 @@ HeartWallet includes 5 unique visual themes:
 
 HeartWallet implements multiple layers of security:
 
-- ✅ **Strong encryption** - Web3 Secret Storage V3 (Scrypt + AES-128-CTR)
-- ✅ **Password requirements** - 12+ chars, mixed case, numbers, special chars
+- ✅ **Future-proof encryption** - PBKDF2 with auto-upgrade (1.094M iterations)
+- ✅ **AES-256-GCM double encryption** - Session + storage encryption
+- ✅ **Strong password requirements** - 12+ chars minimum, 20+ recommended
 - ✅ **Auto-lock timer** - Locks after inactivity (configurable)
 - ✅ **Rate limiting** - 5 attempts max, 30 min lockout
 - ✅ **Seed verification** - Must confirm 3 random words on creation
+- ✅ **Gas limit protection** - Maximum 10M gas per transaction
+- ✅ **eth_sign protection** - Disabled by default with warnings
+- ✅ **Transaction validation** - All parameters sanitized
 - ✅ **Never transmits private keys** - All operations local
 - ✅ **Open source** - Fully auditable code
 
@@ -188,6 +230,7 @@ HeartWallet implements multiple layers of security:
 
 👉 **[SECURITY.md](SECURITY.md)** - Comprehensive security guide including:
 - Detailed security features explanation
+- PBKDF2 auto-upgrade system
 - Best practices (what to do and NOT do)
 - Recommended use cases
 - What to do if compromised
@@ -200,12 +243,14 @@ HeartWallet implements multiple layers of security:
 - Write seed phrase on paper, store safely
 - Verify all addresses before sending
 - Start with testnet/small amounts
+- Keep wallet software updated
 
 ❌ **DON'T:**
 - Store seed phrases digitally
 - Use weak passwords
 - Share seed phrase with anyone (NO ONE!)
-- Store significant holdings or life savings - use hardware wallet
+- Store significant holdings - use hardware wallet
+- Enable eth_sign unless absolutely necessary
 
 ## Networks Supported
 
@@ -223,38 +268,14 @@ HeartWallet implements multiple layers of security:
 - HEX
 - PLSX (PulseX)
 - INC (Incentive)
+- TKR (Trickle)
+- JDAI (Just DAI)
 
 ### Ethereum
 - USDT
 - USDC
 
 *Token list curated by trusted community member*
-
-## Roadmap
-
-### Phase 2: Transactions (Next)
-- Send native tokens (PLS/ETH)
-- Gas estimation
-- Transaction confirmation UI
-- Balance display
-
-### Phase 3: Token Support
-- ERC-20/PRC-20 token support
-- Add custom tokens
-- Token balance display
-- Send tokens
-
-### Phase 4: Web3 Integration
-- dApp connection
-- Transaction requests from dApps
-- Message signing (EIP-191, EIP-712)
-- Account/chain change events
-
-### Phase 5: Polish
-- Transaction history
-- Connected sites management
-- Enhanced error handling
-- Comprehensive testing
 
 ## Philosophy
 
@@ -280,7 +301,6 @@ MIT License - See LICENSE file
 
 **Email**: uscg_vet@protonmail.com
 
-
 ## Contributing
 
 This is a community project. Contributions welcome!
@@ -290,6 +310,8 @@ This is a community project. Contributions welcome!
 3. Make your changes
 4. Test thoroughly
 5. Submit a pull request
+
+See [ADDING_DEFAULT_TOKENS.md](ADDING_DEFAULT_TOKENS.md) for adding new default tokens.
 
 ## Disclaimer
 

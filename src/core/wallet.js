@@ -45,39 +45,60 @@ const ITERATION_MILESTONES = [
  * Gets recommended PBKDF2 iteration count for current year
  * Uses historical OWASP data and exponential growth model
  *
+ * SECURITY: Includes minimum floor to prevent clock manipulation attacks
+ *
  * @param {number} year - Year to get recommendation for (defaults to current year)
  * @returns {number} Recommended iteration count
  */
 export function getCurrentRecommendedIterations(year = new Date().getFullYear()) {
+  // SECURITY: Prevent backdating clock to get lower iterations
+  // If system year is before build year, use build year instead
+  const safeYear = Math.max(year, BUILD_YEAR);
+
   // Find exact match first
-  const exactMatch = ITERATION_MILESTONES.find(m => m.year === year);
-  if (exactMatch) return exactMatch.iterations;
+  const exactMatch = ITERATION_MILESTONES.find(m => m.year === safeYear);
+  if (exactMatch) {
+    return Math.max(exactMatch.iterations, MINIMUM_ITERATIONS);
+  }
 
   // Find surrounding milestones for interpolation
   const before = ITERATION_MILESTONES
-    .filter(m => m.year < year)
+    .filter(m => m.year < safeYear)
     .sort((a, b) => b.year - a.year)[0];
 
   const after = ITERATION_MILESTONES
-    .filter(m => m.year > year)
+    .filter(m => m.year > safeYear)
     .sort((a, b) => a.year - b.year)[0];
 
-  // Before all milestones: use earliest
-  if (!before) return ITERATION_MILESTONES[0].iterations;
+  // Before all milestones: use earliest (but at least minimum)
+  if (!before) {
+    return Math.max(ITERATION_MILESTONES[0].iterations, MINIMUM_ITERATIONS);
+  }
 
   // After all milestones: use latest (capped)
-  if (!after) return ITERATION_MILESTONES[ITERATION_MILESTONES.length - 1].iterations;
+  if (!after) {
+    return Math.max(ITERATION_MILESTONES[ITERATION_MILESTONES.length - 1].iterations, MINIMUM_ITERATIONS);
+  }
 
   // Exponential interpolation (accurate for CAGR-based growth)
   const yearRange = after.year - before.year;
   const iterationRatio = after.iterations / before.iterations;
-  const yearProgress = (year - before.year) / yearRange;
+  const yearProgress = (safeYear - before.year) / yearRange;
 
-  return Math.floor(before.iterations * Math.pow(iterationRatio, yearProgress));
+  const calculated = Math.floor(before.iterations * Math.pow(iterationRatio, yearProgress));
+
+  // SECURITY: Always enforce minimum iteration floor
+  return Math.max(calculated, MINIMUM_ITERATIONS);
 }
 
 // Legacy iteration count for backward compatibility
 const LEGACY_ITERATIONS = 100000;
+
+// Security: Minimum iteration floor to prevent clock manipulation attacks
+// An attacker with local system access could backdate the clock to force lower iterations.
+// This floor ensures wallets created with this build always meet minimum security standards.
+const BUILD_YEAR = 2025;
+const MINIMUM_ITERATIONS = 1094000; // 2025 baseline from OWASP projections
 
 // ===== SELF-DESCRIBING ENCRYPTION FORMAT =====
 // Format: [4 bytes: iteration count][16 bytes: salt][12 bytes: IV][variable: ciphertext]

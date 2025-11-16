@@ -46,11 +46,14 @@ const { getCurrentRecommendedIterations } = walletModule;
 
 describe('PBKDF2 Iteration Recommendations', () => {
   describe('getCurrentRecommendedIterations()', () => {
-    it('should return exact milestone values', () => {
-      expect(getCurrentRecommendedIterations(2016)).toBe(10000);
-      expect(getCurrentRecommendedIterations(2021)).toBe(310000);
-      expect(getCurrentRecommendedIterations(2023)).toBe(600000);
-      expect(getCurrentRecommendedIterations(2024)).toBe(810000);
+    it('should return exact milestone values for current/future years', () => {
+      // SECURITY: Years before 2025 return the minimum floor (1,094,000) to prevent clock manipulation
+      expect(getCurrentRecommendedIterations(2016)).toBe(1094000); // Floor enforced
+      expect(getCurrentRecommendedIterations(2021)).toBe(1094000); // Floor enforced
+      expect(getCurrentRecommendedIterations(2023)).toBe(1094000); // Floor enforced
+      expect(getCurrentRecommendedIterations(2024)).toBe(1094000); // Floor enforced
+
+      // At and after 2025, normal milestones apply
       expect(getCurrentRecommendedIterations(2025)).toBe(1094000);
       expect(getCurrentRecommendedIterations(2026)).toBe(1477000);
       expect(getCurrentRecommendedIterations(2030)).toBe(4907000);
@@ -62,26 +65,32 @@ describe('PBKDF2 Iteration Recommendations', () => {
       expect(getCurrentRecommendedIterations(2050)).toBe(5000000);
     });
 
-    it('should interpolate between milestones', () => {
-      // Between 2023 (600k) and 2024 (810k)
-      const mid2023_2024 = getCurrentRecommendedIterations(2023.5);
-      expect(mid2023_2024).toBeGreaterThan(600000);
-      expect(mid2023_2024).toBeLessThan(810000);
+    it('should interpolate between milestones (after minimum floor)', () => {
+      // SECURITY: Interpolation only works for years >= BUILD_YEAR (2025)
+      // Years before 2025 return the minimum floor
 
       // Between 2025 (1.094M) and 2026 (1.477M)
       const mid2025_2026 = getCurrentRecommendedIterations(2025.5);
       expect(mid2025_2026).toBeGreaterThan(1094000);
       expect(mid2025_2026).toBeLessThan(1477000);
+
+      // Between 2026 (1.477M) and 2027 (1.995M)
+      const mid2026_2027 = getCurrentRecommendedIterations(2026.5);
+      expect(mid2026_2027).toBeGreaterThan(1477000);
+      expect(mid2026_2027).toBeLessThan(1995000);
     });
 
-    it('should handle years before first milestone', () => {
-      expect(getCurrentRecommendedIterations(2010)).toBe(10000);
-      expect(getCurrentRecommendedIterations(2000)).toBe(10000);
+    it('should enforce minimum iteration floor for old years (prevents clock manipulation)', () => {
+      // SECURITY: Even if system clock is set to 2010, we enforce 2025 minimum
+      expect(getCurrentRecommendedIterations(2010)).toBe(1094000);
+      expect(getCurrentRecommendedIterations(2000)).toBe(1094000);
+      expect(getCurrentRecommendedIterations(2020)).toBe(1094000);
+      expect(getCurrentRecommendedIterations(2024)).toBe(1094000);
     });
 
     it('should default to current year', () => {
       const result = getCurrentRecommendedIterations();
-      expect(result).toBeGreaterThanOrEqual(600000); // At least 2023 recommendation
+      expect(result).toBeGreaterThanOrEqual(1094000); // At least 2025 minimum floor
       expect(result).toBeLessThanOrEqual(5000000); // Cap
     });
   });

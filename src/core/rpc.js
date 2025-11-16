@@ -247,6 +247,54 @@ export async function getGasPrice(network) {
 }
 
 /**
+ * Gets the current base fee from the latest block (EIP-1559)
+ * This is more accurate than eth_gasPrice for determining minimum required gas
+ * @param {string} network - Network key
+ * @returns {Promise<string>} Base fee per gas in wei (hex string)
+ */
+export async function getBaseFee(network) {
+  try {
+    const latestBlock = await rpcCall(network, 'eth_getBlockByNumber', ['latest', false]);
+    if (latestBlock && latestBlock.baseFeePerGas) {
+      return latestBlock.baseFeePerGas;
+    }
+    // Fallback to eth_gasPrice if block doesn't have baseFeePerGas (pre-EIP-1559)
+    return await rpcCall(network, 'eth_gasPrice', []);
+  } catch (error) {
+    console.warn('Error getting base fee, falling back to eth_gasPrice:', error);
+    return await rpcCall(network, 'eth_gasPrice', []);
+  }
+}
+
+/**
+ * Gets a safe gas price for transactions that accounts for base fee volatility
+ * Returns max(eth_gasPrice, baseFee * 2) to ensure transactions get mined
+ * @param {string} network - Network key
+ * @returns {Promise<string>} Safe gas price in wei (hex string)
+ */
+export async function getSafeGasPrice(network) {
+  try {
+    const [gasPrice, baseFee] = await Promise.all([
+      rpcCall(network, 'eth_gasPrice', []),
+      getBaseFee(network)
+    ]);
+
+    const gasPriceWei = BigInt(gasPrice);
+    const baseFeeWei = BigInt(baseFee);
+
+    // Use the higher of:
+    // 1. eth_gasPrice from RPC
+    // 2. baseFee * 2 (to account for volatility)
+    const safeGasPrice = gasPriceWei > (baseFeeWei * 2n) ? gasPriceWei : (baseFeeWei * 2n);
+
+    return '0x' + safeGasPrice.toString(16);
+  } catch (error) {
+    console.warn('Error getting safe gas price, falling back to eth_gasPrice:', error);
+    return await rpcCall(network, 'eth_gasPrice', []);
+  }
+}
+
+/**
  * Gets current block number
  * @param {string} network - Network key
  * @returns {Promise<string>} Block number (hex string)

@@ -712,15 +712,25 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="setting-max-gas-price">Max gas price (Gwei)</label>
-          <select id="setting-max-gas-price">
-            <option value="100">100 Gwei</option>
-            <option value="500">500 Gwei</option>
-            <option value="1000" selected>1000 Gwei</option>
-            <option value="2000">2000 Gwei</option>
-            <option value="5000">5000 Gwei</option>
-            <option value="10000">10000 Gwei (extreme)</option>
-          </select>
-          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">Protects against excessive gas fees</p>
+          <input type="number" id="setting-max-gas-price" class="form-control"
+                 min="0.1" step="0.1" value="1000"
+                 placeholder="1000" style="width: 100%;" />
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">
+            Protects against excessive gas fees.
+            <span id="current-gas-price-label" class="text-dim">Loading current price...</span>
+          </p>
+          <button id="btn-use-current-gas-price" class="btn btn-small" style="margin-top: 4px; font-size: 10px;">
+            USE CURRENT NETWORK PRICE
+          </button>
+        </div>
+        <div class="form-group" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
+          <input type="checkbox" id="setting-allow-eth-sign" />
+          <label for="setting-allow-eth-sign" style="color: var(--error-color);">Allow eth_sign (⚠️ DANGEROUS)</label>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">
+            <strong style="color: var(--error-color);">WARNING:</strong> eth_sign is a legacy method that can sign arbitrary data,
+            including transactions. Malicious sites can use it to steal your funds.
+            Only enable if you fully understand the risks.
+          </p>
         </div>
         <button id="btn-view-seed" class="btn btn-small">VIEW SEED PHRASE</button>
         <button id="btn-export-key" class="btn btn-small">EXPORT PRIVATE KEY</button>
@@ -1161,6 +1171,25 @@
         </p>
       </div>
 
+      <!-- DANGER WARNING for eth_sign (hidden by default) -->
+      <div id="eth-sign-danger-warning" class="panel hidden" style="border: 2px solid var(--terminal-error); background: rgba(255, 0, 0, 0.1);">
+        <p style="font-size: 13px; color: var(--terminal-error); margin-bottom: 8px; font-weight: bold;">
+          🚨 EXTREME DANGER: eth_sign Request
+        </p>
+        <p style="font-size: 11px; color: var(--terminal-error); margin-bottom: 8px;">
+          This site is using the <strong>DEPRECATED eth_sign</strong> method!
+        </p>
+        <p style="font-size: 10px; color: var(--terminal-fg); line-height: 1.4;">
+          • eth_sign can sign RAW DATA including transactions<br>
+          • Malicious sites can DRAIN YOUR ENTIRE WALLET<br>
+          • This can authorize unlimited token approvals<br>
+          • Modern sites should use personal_sign instead
+        </p>
+        <p style="font-size: 11px; color: var(--terminal-error); margin-top: 8px; font-weight: bold;">
+          ⛔ ONLY PROCEED IF YOU FULLY TRUST THIS SITE
+        </p>
+      </div>
+
       <div class="panel">
         <p class="text-dim mb-1" style="font-size: 11px;">Account:</p>
         <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="sign-address">
@@ -1499,6 +1528,66 @@
 
         <!-- Loading State -->
         <div id="speed-up-loading" class="hidden mt-2" style="text-align: center;">
+          <p style="font-size: 10px; color: var(--terminal-dim);">⏳ Loading gas prices...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cancel Transaction Modal -->
+  <div id="modal-cancel-tx" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Cancel Transaction</div>
+        <button class="modal-close" id="btn-close-cancel-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-dim mb-2" style="font-size: 11px;">Cancel this transaction by sending a 0-value transaction to yourself with the same nonce. Review current network conditions:</p>
+
+        <!-- Gas Price Comparison Panel -->
+        <div class="panel" style="background: var(--terminal-bg); border: 1px solid var(--terminal-danger);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">ORIGINAL GAS:</span>
+            <span id="cancel-original-gas" style="font-size: 11px; color: var(--terminal-danger);">-- Gwei</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">CURRENT NETWORK:</span>
+            <span id="cancel-current-gas" style="font-size: 11px; font-weight: bold;">-- Gwei</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; border-top: 1px solid var(--terminal-dim); padding-top: 8px; margin-top: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">RECOMMENDED:</span>
+            <span id="cancel-recommended-gas" style="font-size: 11px; color: var(--terminal-success); font-weight: bold;">-- Gwei</span>
+          </div>
+          <div id="cancel-comparison-message" class="mt-2" style="font-size: 9px; color: var(--terminal-warning); text-align: center;">
+            <!-- Comparison message will appear here -->
+          </div>
+        </div>
+
+        <!-- Refresh Button -->
+        <button id="btn-refresh-cancel-gas-price" class="btn-primary btn-small mt-2" style="width: 100%;">
+          🔄 REFRESH GAS PRICE
+        </button>
+
+        <!-- Custom Gas Price Input (Advanced) -->
+        <div class="mt-3">
+          <details>
+            <summary style="cursor: pointer; font-size: 10px; color: var(--terminal-dim); user-select: none;">Advanced: Set Custom Gas Price</summary>
+            <div class="form-group mt-2">
+              <label style="font-size: 10px;">Custom Gas Price (Gwei):</label>
+              <input type="number" id="cancel-custom-gas" placeholder="e.g., 150" step="0.1" min="0" />
+              <p style="font-size: 9px; color: var(--terminal-dim); margin-top: 4px;">Leave empty to use recommended price</p>
+            </div>
+          </details>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="button-group mt-3">
+          <button id="btn-confirm-cancel" class="btn-danger">CONFIRM CANCEL</button>
+          <button id="btn-close-cancel">CLOSE</button>
+        </div>
+
+        <!-- Loading State -->
+        <div id="cancel-loading" class="hidden mt-2" style="text-align: center;">
           <p style="font-size: 10px; color: var(--terminal-dim);">⏳ Loading gas prices...</p>
         </div>
       </div>

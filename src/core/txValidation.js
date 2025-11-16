@@ -82,6 +82,9 @@ export function validateTransactionRequest(txRequest, maxGasPriceGwei = 1000) {
   }
 
   // Validate 'gas' or 'gasLimit' field
+  // SECURITY: Reasonable maximum is 10M gas to prevent fee scams
+  // Most transactions: 21k-200k gas. Complex DeFi: 200k-1M gas.
+  // Ethereum/PulseChain block limit is ~30M, but single TX rarely needs >10M
   if (txRequest.gas !== undefined && txRequest.gas !== null) {
     if (!isValidHexValue(txRequest.gas)) {
       errors.push('Invalid transaction: "gas" field must be a valid hex string');
@@ -90,8 +93,8 @@ export function validateTransactionRequest(txRequest, maxGasPriceGwei = 1000) {
         const gasLimit = BigInt(txRequest.gas);
         if (gasLimit < 21000n) {
           errors.push('Invalid transaction: "gas" limit too low (minimum 21000)');
-        } else if (gasLimit > 30000000n) {
-          errors.push('Invalid transaction: "gas" limit too high (maximum 30000000)');
+        } else if (gasLimit > 10000000n) {
+          errors.push('Invalid transaction: "gas" limit too high (maximum 10000000). Most transactions need <1M gas.');
         } else {
           sanitized.gas = txRequest.gas;
         }
@@ -109,8 +112,8 @@ export function validateTransactionRequest(txRequest, maxGasPriceGwei = 1000) {
         const gasLimit = BigInt(txRequest.gasLimit);
         if (gasLimit < 21000n) {
           errors.push('Invalid transaction: "gasLimit" too low (minimum 21000)');
-        } else if (gasLimit > 30000000n) {
-          errors.push('Invalid transaction: "gasLimit" too high (maximum 30000000)');
+        } else if (gasLimit > 10000000n) {
+          errors.push('Invalid transaction: "gasLimit" too high (maximum 10000000). Most transactions need <1M gas.');
         } else {
           sanitized.gasLimit = txRequest.gasLimit;
         }
