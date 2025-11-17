@@ -4,6 +4,9 @@
  * UI controller for HeartWallet popup
  */
 
+// Import polyfills first (required for Ledger libraries)
+import '../polyfills.js';
+
 import {
   createWallet,
   importFromMnemonic,
@@ -20,7 +23,8 @@ import {
   addWallet,
   renameWallet,
   exportPrivateKeyForWallet,
-  exportMnemonicForWallet
+  exportMnemonicForWallet,
+  addLedgerWallet
 } from '../core/wallet.js';
 import { save, load } from '../core/storage.js';
 import { shortenAddress } from '../core/validation.js';
@@ -31,6 +35,7 @@ import * as tokens from '../core/tokens.js';
 import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
+import * as ledger from '../core/ledger.js';
 
 // ============================================================================
 // SECURITY UTILITIES
@@ -92,12 +97,21 @@ let currentState = {
     decimalPlaces: 8,
     theme: 'high-contrast',
     maxGasPriceGwei: 1000, // Maximum gas price in Gwei (default 1000)
-    allowEthSign: false // Allow dangerous eth_sign method (disabled by default for security)
+    allowEthSign: false, // Allow dangerous eth_sign method (disabled by default for security)
+    enableLedger: false, // Enable Ledger hardware wallet support (opt-in)
+    enableTrezor: false // Enable Trezor hardware wallet support (opt-in, not yet implemented)
   },
   networkSettings: null, // Will be loaded from storage or use defaults
   lastActivityTime: null, // Track last activity for auto-lock
   tokenPrices: null, // Token prices in USD (cached from PulseX)
-  currentTokenDetails: null // Currently viewing token details
+  currentTokenDetails: null, // Currently viewing token details
+  ledger: {
+    addresses: [], // List of addresses fetched from Ledger
+    selectedIndex: null, // Selected account index
+    selectedAddress: null, // Selected address
+    selectedPath: null, // Selected derivation path
+    currentPage: 0 // Current page for address pagination (5 addresses per page)
+  }
 };
 
 // Auto-lock timer
@@ -199,6 +213,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  if (action === 'ledger') {
+    // Show Ledger connection screen in dedicated window
+    await loadSettings();
+    await loadNetwork();
+    applyTheme();
+    setupEventListeners();
+    updateNetworkDisplays();
+    updateHardwareWalletButtons();
+    initLedgerScreen();
+    showScreen('screen-ledger');
+    return;
+  }
+
+  if (action === 'reconnectLedger') {
+    // Reconnect to Ledger device (re-grant WebHID permissions)
+    const walletId = urlParams.get('walletId');
+    await loadSettings();
+    await loadNetwork();
+    applyTheme();
+    await handleReconnectLedgerScreen(walletId);
+    return;
+  }
+
   // Normal popup flow
   // Run migration first (converts old single-wallet to multi-wallet format)
   await migrateToMultiWallet();
@@ -209,6 +246,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkWalletStatus();
   setupEventListeners();
   updateNetworkDisplays();
+  updateHardwareWalletButtons(); // Show/hide hardware wallet buttons based on settings
+
+  // Listen for wallet changes (e.g., when Ledger wallet added from another window)
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.wallets) {
+      // If we're on the manage wallets screen, refresh the list
+      const manageWalletsScreen = document.getElementById('screen-manage-wallets');
+      if (manageWalletsScreen && !manageWalletsScreen.classList.contains('hidden')) {
+        renderWalletList();
+      }
+    }
+  });
 });
 
 // ===== SCREEN NAVIGATION =====
@@ -233,8 +282,20 @@ async function checkWalletStatus() {
     // No wallet - show setup screen
     showScreen('screen-setup');
   } else {
-    // Wallet exists - show unlock screen
-    showScreen('screen-unlock');
+    // Check if active wallet is a hardware wallet
+    const activeWallet = await getActiveWallet();
+
+    if (activeWallet && activeWallet.isHardwareWallet) {
+      // Hardware wallets don't need password unlocking - go straight to dashboard
+      currentState.address = activeWallet.address;
+      currentState.isUnlocked = true;
+      currentState.isHardwareWallet = true;
+      showScreen('screen-dashboard');
+      updateDashboard();
+    } else {
+      // Software wallet - show unlock screen
+      showScreen('screen-unlock');
+    }
   }
 }
 
@@ -339,6 +400,31 @@ function setupEventListeners() {
   document.getElementById('btn-import-submit')?.addEventListener('click', handleImportWallet);
   document.getElementById('btn-cancel-import')?.addEventListener('click', () => showScreen('screen-setup'));
   document.getElementById('btn-back-from-import')?.addEventListener('click', () => showScreen('screen-setup'));
+
+  // Ledger wallet screen - open in new TAB (WebHID requires full page, not popup)
+  document.getElementById('btn-connect-ledger')?.addEventListener('click', () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('src/popup/popup.html?action=ledger')
+    });
+  });
+  document.getElementById('btn-connect-ledger-multi')?.addEventListener('click', () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('src/popup/popup.html?action=ledger')
+    });
+  });
+  document.getElementById('btn-back-from-ledger')?.addEventListener('click', handleBackFromLedger);
+  document.getElementById('btn-ledger-connect')?.addEventListener('click', handleLedgerConnect);
+  document.getElementById('btn-ledger-load-more')?.addEventListener('click', handleLedgerLoadMore);
+  document.getElementById('btn-ledger-add')?.addEventListener('click', handleLedgerAdd);
+  document.getElementById('btn-ledger-cancel')?.addEventListener('click', () => {
+    // Check if opened in dedicated window
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('action') === 'ledger') {
+      window.close();
+    } else {
+      showScreen('screen-setup');
+    }
+  });
 
   // Unlock screen
   document.getElementById('btn-unlock')?.addEventListener('click', handleUnlock);
@@ -601,6 +687,16 @@ function setupEventListeners() {
 
     currentState.settings.allowEthSign = e.target.checked;
     saveSettings();
+  });
+  document.getElementById('setting-enable-ledger')?.addEventListener('change', (e) => {
+    currentState.settings.enableLedger = e.target.checked;
+    saveSettings();
+    updateHardwareWalletButtons(); // Show/hide Ledger buttons
+  });
+  document.getElementById('setting-enable-trezor')?.addEventListener('change', (e) => {
+    currentState.settings.enableTrezor = e.target.checked;
+    saveSettings();
+    updateHardwareWalletButtons(); // Show/hide Trezor buttons
   });
   document.getElementById('btn-view-seed')?.addEventListener('click', handleViewSeed);
   document.getElementById('btn-export-key')?.addEventListener('click', handleExportKey);
@@ -997,6 +1093,413 @@ async function handleImportWallet() {
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
   }
+}
+
+// ===== LEDGER WALLET =====
+/**
+ * Initialize Ledger connection screen
+ */
+function initLedgerScreen() {
+  // Reset Ledger state
+  currentState.ledger = {
+    addresses: [],
+    selectedIndex: null,
+    selectedAddress: null,
+    selectedPath: null,
+    currentPage: 0
+  };
+
+  // Check if WebHID is supported
+  if (!ledger.isLedgerSupported()) {
+    const errorDiv = document.getElementById('ledger-support-error');
+    errorDiv.textContent = 'Your browser does not support hardware wallets. Please use a Chromium-based browser (Chrome, Edge, Brave).';
+    errorDiv.classList.remove('hidden');
+    document.getElementById('btn-ledger-connect').disabled = true;
+    return;
+  }
+
+  // Reset UI state
+  document.getElementById('ledger-support-error').classList.add('hidden');
+  document.getElementById('ledger-step-connect').classList.remove('hidden');
+  document.getElementById('ledger-step-loading').classList.add('hidden');
+  document.getElementById('ledger-step-addresses').classList.add('hidden');
+  document.getElementById('ledger-step-confirm').classList.add('hidden');
+  document.getElementById('ledger-buttons').classList.add('hidden');
+  document.getElementById('ledger-error').classList.add('hidden');
+  document.getElementById('btn-ledger-connect').disabled = false;
+}
+
+/**
+ * Handle Ledger device connection and fetch addresses
+ */
+async function handleLedgerConnect() {
+  const errorDiv = document.getElementById('ledger-error');
+
+  try {
+    errorDiv.classList.add('hidden');
+
+    // Show loading state
+    document.getElementById('ledger-step-connect').classList.add('hidden');
+    document.getElementById('ledger-step-loading').classList.remove('hidden');
+
+    // Fetch first 5 addresses from Ledger
+    const addresses = await ledger.getAddresses(5, 0);
+
+    currentState.ledger.addresses = addresses;
+    currentState.ledger.currentPage = 0;
+
+    // Hide loading, show address list
+    document.getElementById('ledger-step-loading').classList.add('hidden');
+    document.getElementById('ledger-step-addresses').classList.remove('hidden');
+
+    // Render address list
+    renderLedgerAddresses();
+
+  } catch (error) {
+    console.error('Ledger connection error:', error);
+
+    // Hide loading
+    document.getElementById('ledger-step-loading').classList.add('hidden');
+    document.getElementById('ledger-step-connect').classList.remove('hidden');
+
+    // Show error
+    errorDiv.textContent = error.message || 'Failed to connect to Ledger device';
+    errorDiv.classList.remove('hidden');
+  }
+}
+
+/**
+ * Load more addresses from Ledger (pagination)
+ */
+async function handleLedgerLoadMore() {
+  const errorDiv = document.getElementById('ledger-error');
+  const loadMoreBtn = document.getElementById('btn-ledger-load-more');
+
+  try {
+    errorDiv.classList.add('hidden');
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.textContent = 'LOADING...';
+
+    // Fetch next 5 addresses
+    const nextPage = currentState.ledger.currentPage + 1;
+    const startIndex = nextPage * 5;
+    const moreAddresses = await ledger.getAddresses(5, startIndex);
+
+    // Add to address list
+    currentState.ledger.addresses = [...currentState.ledger.addresses, ...moreAddresses];
+    currentState.ledger.currentPage = nextPage;
+
+    // Re-render address list
+    renderLedgerAddresses();
+
+    loadMoreBtn.disabled = false;
+    loadMoreBtn.textContent = 'LOAD MORE ADDRESSES';
+
+  } catch (error) {
+    console.error('Ledger load more error:', error);
+
+    errorDiv.textContent = error.message || 'Failed to load more addresses';
+    errorDiv.classList.remove('hidden');
+
+    loadMoreBtn.disabled = false;
+    loadMoreBtn.textContent = 'LOAD MORE ADDRESSES';
+  }
+}
+
+/**
+ * Render Ledger address list with radio buttons
+ */
+function renderLedgerAddresses() {
+  const listContainer = document.getElementById('ledger-address-list');
+  listContainer.innerHTML = '';
+
+  currentState.ledger.addresses.forEach((addr) => {
+    const item = document.createElement('div');
+    item.className = 'panel';
+    item.style.cssText = 'margin-bottom: 8px; cursor: pointer; padding: 8px;';
+
+    item.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <input type="radio" name="ledger-address" value="${addr.index}"
+               id="ledger-addr-${addr.index}" style="cursor: pointer; flex-shrink: 0; width: 16px; height: 16px; margin: 0;">
+        <label for="ledger-addr-${addr.index}" style="flex: 1; cursor: pointer; font-size: 11px; margin: 0;">
+          <div style="color: var(--terminal-text); margin-bottom: 4px;">
+            <strong>Account ${addr.index}</strong>
+          </div>
+          <div style="color: var(--terminal-dim); font-size: 10px; word-break: break-all;">
+            ${escapeHtml(addr.address)}
+          </div>
+          <div style="color: var(--terminal-dim); font-size: 9px; margin-top: 2px;">
+            ${escapeHtml(addr.path)}
+          </div>
+        </label>
+      </div>
+    `;
+
+    // Make entire panel clickable
+    item.addEventListener('click', () => {
+      document.getElementById(`ledger-addr-${addr.index}`).checked = true;
+      handleLedgerAddressSelect(addr);
+    });
+
+    listContainer.appendChild(item);
+  });
+}
+
+/**
+ * Handle address selection
+ */
+function handleLedgerAddressSelect(addr) {
+  currentState.ledger.selectedIndex = addr.index;
+  currentState.ledger.selectedAddress = addr.address;
+  currentState.ledger.selectedPath = addr.path;
+
+  // Show confirmation step
+  document.getElementById('ledger-step-confirm').classList.remove('hidden');
+  document.getElementById('ledger-buttons').classList.remove('hidden');
+
+  // Update selected address display
+  document.getElementById('ledger-selected-address').textContent = addr.address;
+  document.getElementById('ledger-selected-index').textContent = addr.index;
+  document.getElementById('ledger-selected-path').textContent = addr.path;
+
+  // Set default nickname
+  document.getElementById('ledger-nickname').value = `Ledger ${addr.index + 1}`;
+}
+
+/**
+ * Add selected Ledger wallet
+ */
+async function handleLedgerAdd() {
+  const errorDiv = document.getElementById('ledger-error');
+  const addBtn = document.getElementById('btn-ledger-add');
+
+  if (!currentState.ledger.selectedAddress) {
+    errorDiv.textContent = 'Please select an address first';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
+  // Get password for authentication
+  const password = document.getElementById('ledger-password').value;
+
+  try {
+    errorDiv.classList.add('hidden');
+    addBtn.disabled = true;
+    addBtn.textContent = 'ADDING...';
+
+    // Check if this is the first wallet or additional wallet
+    const wallets = await getAllWallets();
+    const hasExistingWallets = wallets.walletList && wallets.walletList.length > 0;
+
+    if (hasExistingWallets) {
+      // Verify password by attempting to unlock existing wallet
+      if (!password) {
+        throw new Error('Password required to add wallet');
+      }
+
+      // Verify password is correct
+      try {
+        await unlockWallet(password);
+      } catch (unlockError) {
+        throw new Error('Invalid password');
+      }
+    } else {
+      // First wallet - require password to be set
+      if (!password) {
+        throw new Error('Please create a password for HeartWallet');
+      }
+
+      // Validate password strength
+      if (password.length < 12) {
+        throw new Error('Password must be at least 12 characters');
+      }
+      if (!/[A-Z]/.test(password)) {
+        throw new Error('Password must contain at least one uppercase letter');
+      }
+      if (!/[a-z]/.test(password)) {
+        throw new Error('Password must contain at least one lowercase letter');
+      }
+      if (!/[0-9]/.test(password)) {
+        throw new Error('Password must contain at least one number');
+      }
+      if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+        throw new Error('Password must contain at least one special character');
+      }
+    }
+
+    const nickname = document.getElementById('ledger-nickname').value.trim() ||
+                     `Ledger ${currentState.ledger.selectedIndex + 1}`;
+
+    // Add Ledger wallet (password verified)
+    await addLedgerWallet(
+      currentState.ledger.selectedAddress,
+      currentState.ledger.selectedIndex,
+      currentState.ledger.selectedPath,
+      nickname
+    );
+
+    // Success!
+    alert('Ledger wallet added successfully!');
+
+    // Check if opened in dedicated window (has action=ledger parameter)
+    const urlParams = new URLSearchParams(window.location.search);
+    const isStandaloneWindow = urlParams.get('action') === 'ledger';
+
+    if (isStandaloneWindow) {
+      // Opened as dedicated tab/window - close it
+      chrome.tabs.getCurrent((tab) => {
+        if (tab) {
+          chrome.tabs.remove(tab.id);
+        } else {
+          window.close();
+        }
+      });
+    } else {
+      // Opened in normal popup - navigate based on wallet count
+      const wallets = await getAllWallets();
+      if (wallets.walletList.length === 1) {
+        // First wallet - go to dashboard
+        currentState.address = currentState.ledger.selectedAddress;
+        currentState.isUnlocked = true; // Hardware wallets don't need unlock
+        showScreen('screen-dashboard');
+        updateDashboard();
+      } else {
+        // Additional wallet - go back to manage wallets
+        showScreen('screen-manage-wallets');
+        await handleManageWallets();
+      }
+    }
+
+    addBtn.disabled = false;
+    addBtn.textContent = 'ADD LEDGER WALLET';
+
+  } catch (error) {
+    console.error('Error adding Ledger wallet:', error);
+    errorDiv.textContent = error.message || 'Failed to add Ledger wallet';
+    errorDiv.classList.remove('hidden');
+
+    addBtn.disabled = false;
+    addBtn.textContent = 'ADD LEDGER WALLET';
+  }
+}
+
+/**
+ * Handle Ledger reconnection screen
+ */
+async function handleReconnectLedgerScreen(walletId) {
+  // Create simple reconnection UI with button (user gesture required for WebHID)
+  document.body.innerHTML = `
+    <div style="padding: 24px; font-family: var(--font-mono); text-align: center;">
+      <h2 style="margin-bottom: 24px;">Reconnect Ledger Device</h2>
+      <div id="reconnect-status" style="margin-bottom: 24px;">
+        <p style="font-size: 14px; margin-bottom: 16px;">Ready to reconnect your Ledger</p>
+        <p style="font-size: 12px; color: var(--terminal-dim); margin-bottom: 24px;">
+          Make sure your Ledger is:<br>
+          1. Connected via USB<br>
+          2. Unlocked (PIN entered)<br>
+          3. Ethereum app is open
+        </p>
+        <button id="btn-connect-ledger-now" class="btn-primary" style="padding: 12px 24px; font-size: 14px;">
+          CONNECT TO LEDGER
+        </button>
+      </div>
+      <div id="reconnect-error" class="hidden" style="color: var(--terminal-danger); margin-top: 16px;"></div>
+    </div>
+  `;
+
+  // Add click handler (user gesture triggers WebHID permission)
+  document.getElementById('btn-connect-ledger-now').addEventListener('click', async () => {
+    const statusDiv = document.getElementById('reconnect-status');
+    const errorDiv = document.getElementById('reconnect-error');
+
+    statusDiv.innerHTML = `
+      <p style="font-size: 14px; margin-bottom: 16px;">Connecting to your Ledger device...</p>
+      <p style="font-size: 12px; color: var(--terminal-dim);">Select your Ledger from the browser popup</p>
+    `;
+    errorDiv.classList.add('hidden');
+
+    try {
+      // Attempt to connect to Ledger (this will trigger WebHID permission prompt)
+      const transport = await ledger.connectLedger();
+
+      // Connection successful - close transport and show success
+      await transport.close();
+
+      statusDiv.innerHTML = `
+        <p style="font-size: 16px; color: var(--terminal-success); margin-bottom: 16px;">✅ Ledger Connected Successfully!</p>
+        <p style="font-size: 12px; color: var(--terminal-dim);">You can now use your Ledger with HeartWallet</p>
+        <p style="font-size: 12px; color: var(--terminal-dim); margin-top: 12px;">This tab will close in 2 seconds...</p>
+      `;
+
+      // Close tab after 2 seconds
+      setTimeout(() => {
+        chrome.tabs.getCurrent((tab) => {
+          if (tab) {
+            chrome.tabs.remove(tab.id);
+          }
+        });
+      }, 2000);
+
+    } catch (error) {
+      console.error('Error reconnecting to Ledger:', error);
+      statusDiv.innerHTML = `
+        <button id="btn-retry-connect" class="btn-primary" style="padding: 12px 24px; font-size: 14px; margin-top: 16px;">
+          TRY AGAIN
+        </button>
+        <button id="btn-close-tab" class="btn-secondary" style="padding: 12px 24px; font-size: 14px; margin-top: 16px; margin-left: 8px;">
+          CLOSE
+        </button>
+      `;
+      errorDiv.textContent = `Failed to connect: ${error.message}`;
+      errorDiv.classList.remove('hidden');
+
+      // Add retry handler
+      document.getElementById('btn-retry-connect')?.addEventListener('click', () => {
+        location.reload();
+      });
+
+      // Add close handler
+      document.getElementById('btn-close-tab')?.addEventListener('click', () => {
+        chrome.tabs.getCurrent((tab) => {
+          if (tab) {
+            chrome.tabs.remove(tab.id);
+          }
+        });
+      });
+    }
+  });
+}
+
+/**
+ * Handle back button from Ledger screen
+ */
+function handleBackFromLedger() {
+  // Check if opened in dedicated tab/window
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('action') === 'ledger') {
+    // Close tab if possible, otherwise close window
+    chrome.tabs.getCurrent((tab) => {
+      if (tab) {
+        chrome.tabs.remove(tab.id);
+      } else {
+        window.close();
+      }
+    });
+    return;
+  }
+
+  // Determine where to go back to in normal popup
+  const wallets = getAllWallets();
+  wallets.then(w => {
+    if (w.walletList && w.walletList.length > 0) {
+      // Has existing wallets - go to manage wallets
+      showScreen('screen-manage-wallets');
+    } else {
+      // No wallets yet - go to setup
+      showScreen('screen-setup');
+    }
+  });
 }
 
 // ===== UNLOCK =====
@@ -1539,6 +2042,22 @@ async function showSendScreen() {
   document.getElementById('send-password').value = '';
   document.getElementById('send-error').classList.add('hidden');
 
+  // Reset send button state (in case it was disabled from previous transaction)
+  const sendBtn = document.getElementById('btn-confirm-send');
+  sendBtn.disabled = false;
+  sendBtn.style.opacity = '1';
+  sendBtn.style.cursor = 'pointer';
+  sendBtn.textContent = 'SEND';
+
+  // Hide password field for hardware wallets
+  const activeWallet = await getActiveWallet();
+  const passwordPanel = document.getElementById('send-password-panel');
+  if (activeWallet && activeWallet.isHardwareWallet) {
+    passwordPanel.classList.add('hidden');
+  } else {
+    passwordPanel.classList.remove('hidden');
+  }
+
   // Show form and hide status section (reset state)
   document.getElementById('send-form').classList.remove('hidden');
   document.getElementById('send-status-section').classList.add('hidden');
@@ -1625,14 +2144,56 @@ async function handleAssetChange() {
   }
 }
 
-function handleSendMax() {
-  // Set amount to available balance (minus estimated gas)
-  // For simplicity, we'll just set to current balance
-  // User should leave some for gas
+async function handleSendMax() {
+  // Set amount to available balance (minus estimated gas fee)
   const balance = parseFloat(currentState.balance);
-  if (balance > 0) {
-    // Leave a bit for gas (rough estimate: 0.001 for simple transfer)
-    const maxSend = Math.max(0, balance - 0.001);
+  if (balance <= 0) return;
+
+  try {
+    // Get current gas price selection from SEND screen
+    const selectedSpeed = document.querySelector('input[name="send-gas-speed"]:checked')?.value;
+
+    let gweiText;
+    if (selectedSpeed === 'slow') {
+      gweiText = document.getElementById('send-gas-slow-price').textContent;
+    } else if (selectedSpeed === 'fast') {
+      gweiText = document.getElementById('send-gas-fast-price').textContent;
+    } else {
+      gweiText = document.getElementById('send-gas-normal-price').textContent;
+    }
+
+    const gwei = parseFloat(gweiText);
+    let gasPrice = null;
+    if (gwei && gwei > 0) {
+      gasPrice = ethers.parseUnits(gwei.toString(), 'gwei');
+    }
+
+    // Get estimated gas from SEND screen (default to 21000 for simple transfer)
+    const estimatedGasEl = document.getElementById('send-estimated-gas');
+    const estimatedGas = estimatedGasEl && estimatedGasEl.textContent && estimatedGasEl.textContent !== '--'
+      ? BigInt(estimatedGasEl.textContent.replace(/[^\d]/g, ''))  // Remove any non-digit characters like "(default)"
+      : 21000n;
+
+    // Calculate gas fee in PLS
+    let gasFeeInPLS = 0;
+    if (gasPrice) {
+      // gasPrice is in wei, convert to PLS (wei / 10^18)
+      const gasFeeWei = gasPrice * estimatedGas;
+      gasFeeInPLS = parseFloat(ethers.formatEther(gasFeeWei));
+    } else {
+      // Fallback: use rough estimate if no gas price selected yet
+      gasFeeInPLS = 0.05; // More conservative estimate
+    }
+
+    // Calculate max sendable amount
+    const maxSend = Math.max(0, balance - gasFeeInPLS);
+
+    // Set the amount with proper precision
+    document.getElementById('send-amount').value = maxSend.toFixed(18).replace(/\.?0+$/, '');
+  } catch (error) {
+    console.error('Error calculating max send amount:', error);
+    // Fallback to simple estimate
+    const maxSend = Math.max(0, balance - 0.05);
     document.getElementById('send-amount').value = maxSend.toString();
   }
 }
@@ -1652,9 +2213,19 @@ async function handleSendTransaction() {
     'sepolia': 'SEP'
   };
 
-  // Validate inputs
-  if (!toAddress || !amount || !password) {
+  // Check if active wallet is hardware wallet
+  const activeWallet = await getActiveWallet();
+  const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
+
+  // Validate inputs (password not required for hardware wallets)
+  if (!toAddress || !amount) {
     errorEl.textContent = 'Please fill in all fields';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  if (!isHardwareWallet && !password) {
+    errorEl.textContent = 'Please enter your password';
     errorEl.classList.remove('hidden');
     return;
   }
@@ -1683,22 +2254,6 @@ async function handleSendTransaction() {
     sendBtn.style.opacity = '0.5';
     sendBtn.style.cursor = 'not-allowed';
 
-    // Unlock wallet with password and auto-upgrade if needed
-    const { signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
-      onUpgradeStart: (info) => {
-        console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
-        const statusDiv = document.createElement('div');
-        statusDiv.className = 'status-message info';
-        statusDiv.textContent = '🔐 Upgrading wallet security...';
-        errorEl.parentElement.insertBefore(statusDiv, errorEl);
-        setTimeout(() => statusDiv.remove(), 3000);
-      }
-    });
-
-    if (upgraded) {
-      console.log(`✅ Wallet upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()}`);
-    }
-
     // Get selected gas price
     const gasPrice = getSelectedSendGasPrice();
 
@@ -1713,9 +2268,35 @@ async function handleSendTransaction() {
       }
     }
 
-    // Get provider with automatic failover and connect signer
+    // Get provider
     const provider = await rpc.getProvider(currentState.network);
-    const connectedSigner = signer.connect(provider);
+
+    let signer, connectedSigner;
+
+    if (isHardwareWallet) {
+      // Hardware wallet - no password unlock needed
+      // Signer will be created differently for Ledger
+      errorEl.textContent = 'Please confirm transaction on your Ledger device...';
+      errorEl.classList.remove('hidden');
+    } else {
+      // Software wallet - unlock with password and auto-upgrade if needed
+      const unlockResult = await unlockWallet(password, {
+        onUpgradeStart: (info) => {
+          console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+          const statusDiv = document.createElement('div');
+          statusDiv.className = 'status-message info';
+          statusDiv.textContent = '🔐 Upgrading wallet security...';
+          errorEl.parentElement.insertBefore(statusDiv, errorEl);
+          setTimeout(() => statusDiv.remove(), 3000);
+        }
+      });
+
+      signer = unlockResult.signer;
+      if (unlockResult.upgraded) {
+        console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
+      }
+      connectedSigner = signer.connect(provider);
+    }
 
     let txResponse, symbol;
 
@@ -1736,7 +2317,47 @@ async function handleSendTransaction() {
         tx.nonce = customNonce;
       }
 
-      txResponse = await connectedSigner.sendTransaction(tx);
+      if (isHardwareWallet) {
+        // Ledger wallet - need to populate full transaction details
+        const chainIdMap = {
+          'pulsechain': 369,
+          'pulsechainTestnet': 943,
+          'ethereum': 1,
+          'sepolia': 11155111
+        };
+
+        // Add chain ID
+        tx.chainId = chainIdMap[currentState.network] || 943;
+
+        // Add from address for gas estimation
+        tx.from = currentState.address;
+
+        // Get nonce if not custom
+        if (tx.nonce === undefined) {
+          const nonceHex = await rpc.getTransactionCount(currentState.network, currentState.address, 'pending');
+          tx.nonce = parseInt(nonceHex, 16);
+        }
+
+        // Use pre-estimated gas if available (important for "Send Max" to avoid circular dependency)
+        const estimatedGasEl = document.getElementById('send-estimated-gas');
+        if (estimatedGasEl && estimatedGasEl.textContent && estimatedGasEl.textContent !== '--') {
+          // Use the gas we already estimated when the user entered the recipient address
+          tx.gasLimit = BigInt(estimatedGasEl.textContent.replace(/[^\d]/g, ''));
+        } else {
+          // Fallback: estimate gas limit
+          tx.gasLimit = await provider.estimateGas(tx);
+        }
+
+        // Remove 'from' field before signing
+        delete tx.from;
+
+        // Sign and broadcast
+        const signedTx = await ledger.signTransaction(activeWallet.accountIndex, tx);
+        txResponse = await provider.broadcastTransaction(signedTx);
+      } else {
+        // Software wallet - use signer
+        txResponse = await connectedSigner.sendTransaction(tx);
+      }
       symbol = symbols[currentState.network] || 'tokens';
     } else {
       // Send token
@@ -1758,15 +2379,63 @@ async function handleSendTransaction() {
         txOptions.nonce = customNonce;
       }
 
-      // Note: This requires updating erc20.transferToken to accept options
-      // For now, we'll send the transaction manually
-      const tokenContract = new ethers.Contract(
-        token.address,
-        ['function transfer(address to, uint256 amount) returns (bool)'],
-        connectedSigner
-      );
+      if (isHardwareWallet) {
+        // Ledger wallet - build contract call transaction
+        const tokenContract = new ethers.Contract(
+          token.address,
+          ['function transfer(address to, uint256 amount) returns (bool)'],
+          provider
+        );
 
-      txResponse = await tokenContract.transfer(toAddress, amountWei, txOptions);
+        // Build the transaction
+        const unsignedTx = await tokenContract.transfer.populateTransaction(toAddress, amountWei);
+        const tx = {
+          ...unsignedTx,
+          ...txOptions,
+          from: currentState.address  // Required for gas estimation
+        };
+
+        // Add chain ID
+        const chainIdMap = {
+          'pulsechain': 369,
+          'pulsechainTestnet': 943,
+          'ethereum': 1,
+          'sepolia': 11155111
+        };
+        tx.chainId = chainIdMap[currentState.network] || 943;
+
+        // Get nonce if not custom
+        if (tx.nonce === undefined) {
+          const nonceHex = await rpc.getTransactionCount(currentState.network, currentState.address, 'pending');
+          tx.nonce = parseInt(nonceHex, 16);
+        }
+
+        // Estimate gas limit if not set
+        if (!tx.gasLimit) {
+          // Use pre-estimated gas if available (important for "Send Max" to avoid circular dependency)
+          const estimatedGasEl = document.getElementById('send-estimated-gas');
+          if (estimatedGasEl && estimatedGasEl.textContent && estimatedGasEl.textContent !== '--') {
+            tx.gasLimit = BigInt(estimatedGasEl.textContent.replace(/[^\d]/g, ''));
+          } else {
+            tx.gasLimit = await provider.estimateGas(tx);
+          }
+        }
+
+        // Remove 'from' field before signing (Ledger will add it)
+        delete tx.from;
+
+        // Sign with Ledger and broadcast
+        const signedTx = await ledger.signTransaction(activeWallet.accountIndex, tx);
+        txResponse = await provider.broadcastTransaction(signedTx);
+      } else {
+        // Software wallet - use signer
+        const tokenContract = new ethers.Contract(
+          token.address,
+          ['function transfer(address to, uint256 amount) returns (bool)'],
+          connectedSigner
+        );
+        txResponse = await tokenContract.transfer(toAddress, amountWei, txOptions);
+      }
       symbol = token.symbol;
     }
 
@@ -1805,9 +2474,27 @@ async function handleSendTransaction() {
 
   } catch (error) {
     console.error('Send transaction error:', error);
-    errorEl.textContent = error.message.includes('incorrect password')
-      ? 'Incorrect password'
-      : 'Transaction failed: ' + error.message;
+
+    // Provide user-friendly error messages
+    let errorMessage;
+    if (error.message.includes('incorrect password')) {
+      errorMessage = 'Incorrect password';
+    } else if (error.message.includes('Blind signing') || error.message.includes('Contract data')) {
+      // Ledger requires enabling contract data for token/contract interactions
+      errorMessage = `Ledger Setting Required:
+
+1. On your Ledger device, open the Ethereum app
+2. Press both buttons on "Settings"
+3. Find "Contract data" or "Blind signing"
+4. Enable it (press both buttons to toggle ON)
+5. Exit settings and try again
+
+This allows your Ledger to sign smart contract transactions (token transfers, swaps, etc.)`;
+    } else {
+      errorMessage = 'Transaction failed: ' + error.message;
+    }
+
+    errorEl.textContent = errorMessage;
     errorEl.classList.remove('hidden');
 
     // Re-enable send button on error
@@ -2300,6 +2987,15 @@ async function showTokenDetails(symbol, isDefault, customAddress = null) {
   document.getElementById('token-details-password').value = '';
   document.getElementById('token-details-send-error').classList.add('hidden');
 
+  // Hide password panel for hardware wallets
+  const activeWallet = await getActiveWallet();
+  const passwordPanel = document.querySelector('#token-send-form .panel:has(#token-details-password)');
+  if (activeWallet && activeWallet.isHardwareWallet) {
+    passwordPanel.style.display = 'none';
+  } else {
+    passwordPanel.style.display = 'block';
+  }
+
   // Show form and hide status section (reset state)
   document.getElementById('token-send-form').classList.remove('hidden');
   document.getElementById('token-send-status-section').classList.add('hidden');
@@ -2404,9 +3100,20 @@ async function handleTokenSend() {
   // Clear previous errors
   errorEl.classList.add('hidden');
 
+  // Check if this is a hardware wallet
+  const activeWallet = await getActiveWallet();
+  const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
+
   // Validate inputs
-  if (!recipient || !amount || !password) {
+  if (!recipient || !amount) {
     errorEl.textContent = 'Please fill all fields';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  // Validate password for software wallets only
+  if (!isHardwareWallet && !password) {
+    errorEl.textContent = 'Please enter your password';
     errorEl.classList.remove('hidden');
     return;
   }
@@ -2438,29 +3145,6 @@ async function handleTokenSend() {
       return;
     }
 
-    // Unlock wallet with password and auto-upgrade if needed
-    let signer;
-    try {
-      const unlockResult = await unlockWallet(password, {
-        onUpgradeStart: (info) => {
-          console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
-        }
-      });
-      signer = unlockResult.signer;
-
-      if (unlockResult.upgraded) {
-        console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
-      }
-    } catch (err) {
-      errorEl.textContent = err.message || 'Incorrect password';
-      errorEl.classList.remove('hidden');
-      // Re-enable button on password error
-      sendBtn.disabled = false;
-      sendBtn.style.opacity = '1';
-      sendBtn.style.cursor = 'pointer';
-      return;
-    }
-
     // Get selected gas price
     const gasPrice = getSelectedTokenGasPrice();
 
@@ -2475,39 +3159,116 @@ async function handleTokenSend() {
       }
     }
 
-    // Get provider with automatic failover and connect signer
+    // Get provider with automatic failover
     const provider = await rpc.getProvider(currentState.network);
-    const connectedSigner = signer.connect(provider);
 
-    // Send token with gas options
-    const tokenContract = new ethers.Contract(
-      tokenData.address,
-      ['function transfer(address to, uint256 amount) returns (bool)'],
-      connectedSigner
-    );
+    let txResponse;
 
-    const txOptions = {};
-    if (gasPrice) {
-      txOptions.gasPrice = gasPrice;
+    if (isHardwareWallet) {
+      // Hardware wallet (Ledger) flow
+      const tokenContract = new ethers.Contract(
+        tokenData.address,
+        ['function transfer(address to, uint256 amount) returns (bool)'],
+        provider
+      );
+
+      // Build the transaction
+      const unsignedTx = await tokenContract.transfer.populateTransaction(recipient, amountBN);
+      const tx = {
+        ...unsignedTx,
+        from: currentState.address  // Required for gas estimation
+      };
+
+      // Add chain ID
+      const chainIdMap = {
+        'pulsechain': 369,
+        'pulsechainTestnet': 943,
+        'ethereum': 1,
+        'sepolia': 11155111
+      };
+      tx.chainId = chainIdMap[currentState.network] || 943;
+
+      // Add gas price
+      if (gasPrice) {
+        tx.gasPrice = gasPrice;
+      }
+
+      // Get nonce if not custom
+      if (customNonce !== null) {
+        tx.nonce = customNonce;
+      } else {
+        const nonceHex = await rpc.getTransactionCount(currentState.network, currentState.address, 'pending');
+        tx.nonce = parseInt(nonceHex, 16);
+      }
+
+      // Estimate gas limit if not set
+      if (!tx.gasLimit) {
+        tx.gasLimit = await provider.estimateGas(tx);
+      }
+
+      // Remove 'from' field before signing (Ledger will add it)
+      delete tx.from;
+
+      // Sign with Ledger and broadcast
+      const signedTx = await ledger.signTransaction(activeWallet.accountIndex, tx);
+      txResponse = await provider.broadcastTransaction(signedTx);
+
+    } else {
+      // Software wallet flow
+      let signer;
+      try {
+        const unlockResult = await unlockWallet(password, {
+          onUpgradeStart: (info) => {
+            console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+          }
+        });
+        signer = unlockResult.signer;
+
+        if (unlockResult.upgraded) {
+          console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
+        }
+      } catch (err) {
+        errorEl.textContent = err.message || 'Incorrect password';
+        errorEl.classList.remove('hidden');
+        // Re-enable button on password error
+        sendBtn.disabled = false;
+        sendBtn.style.opacity = '1';
+        sendBtn.style.cursor = 'pointer';
+        return;
+      }
+
+      const connectedSigner = signer.connect(provider);
+
+      // Send token with gas options
+      const tokenContract = new ethers.Contract(
+        tokenData.address,
+        ['function transfer(address to, uint256 amount) returns (bool)'],
+        connectedSigner
+      );
+
+      const txOptions = {};
+      if (gasPrice) {
+        txOptions.gasPrice = gasPrice;
+      }
+      if (customNonce !== null) {
+        txOptions.nonce = customNonce;
+      }
+
+      txResponse = await tokenContract.transfer(recipient, amountBN, txOptions);
     }
-    if (customNonce !== null) {
-      txOptions.nonce = customNonce;
-    }
-
-    const tx = await tokenContract.transfer(recipient, amountBN, txOptions);
 
     // Save transaction to history and start monitoring
     await chrome.runtime.sendMessage({
       type: 'SAVE_AND_MONITOR_TX',
       address: currentState.address,
       transaction: {
-        hash: tx.hash,
+        hash: txResponse.hash,
         timestamp: Date.now(),
         from: currentState.address,
         to: recipient,
         value: '0',
-        gasPrice: gasPrice || (await tx.provider.getFeeData()).gasPrice.toString(),
-        nonce: tx.nonce,
+        gasPrice: gasPrice ? gasPrice.toString() : (await txResponse.provider.getFeeData()).gasPrice.toString(),
+        nonce: txResponse.nonce,
         network: currentState.network,
         status: 'pending',
         blockNumber: null,
@@ -2527,11 +3288,31 @@ async function handleTokenSend() {
     }
 
     // Show transaction status screen
-    await showTokenSendTransactionStatus(tx.hash, currentState.network, amount, tokenData.symbol);
+    await showTokenSendTransactionStatus(txResponse.hash, currentState.network, amount, tokenData.symbol);
 
   } catch (error) {
     console.error('Error sending token:', error);
-    errorEl.textContent = error.message || 'Transaction failed';
+
+    // Provide user-friendly error messages
+    let errorMessage;
+    if (error.message.includes('incorrect password')) {
+      errorMessage = 'Incorrect password';
+    } else if (error.message.includes('Blind signing') || error.message.includes('Contract data')) {
+      // Ledger requires enabling contract data for token/contract interactions
+      errorMessage = `Ledger Setting Required:
+
+1. On your Ledger device, open the Ethereum app
+2. Press both buttons on "Settings"
+3. Find "Contract data" or "Blind signing"
+4. Enable it (press both buttons to toggle ON)
+5. Exit settings and try again
+
+This allows your Ledger to sign smart contract transactions (token transfers, swaps, etc.)`;
+    } else {
+      errorMessage = 'Transaction failed: ' + error.message;
+    }
+
+    errorEl.textContent = errorMessage;
     errorEl.classList.remove('hidden');
 
     // Re-enable send button on error
@@ -2635,9 +3416,40 @@ function loadSettingsToUI() {
   document.getElementById('setting-show-testnets').checked = currentState.settings.showTestNetworks;
   document.getElementById('setting-max-gas-price').value = currentState.settings.maxGasPriceGwei || 1000;
   document.getElementById('setting-allow-eth-sign').checked = currentState.settings.allowEthSign || false;
+  document.getElementById('setting-enable-ledger').checked = currentState.settings.enableLedger || false;
+  document.getElementById('setting-enable-trezor').checked = currentState.settings.enableTrezor || false;
 
   // Fetch and display current network gas price
   fetchCurrentGasPrice();
+}
+
+/**
+ * Show/hide hardware wallet buttons based on settings
+ */
+function updateHardwareWalletButtons() {
+  const enableLedger = currentState.settings.enableLedger || false;
+  const enableTrezor = currentState.settings.enableTrezor || false;
+
+  // Ledger buttons
+  const ledgerButtonSetup = document.getElementById('btn-connect-ledger');
+  const ledgerButtonMulti = document.getElementById('btn-connect-ledger-multi');
+
+  if (ledgerButtonSetup) {
+    ledgerButtonSetup.style.display = enableLedger ? 'block' : 'none';
+  }
+  if (ledgerButtonMulti) {
+    ledgerButtonMulti.style.display = enableLedger ? 'inline-block' : 'none';
+  }
+
+  // Trezor buttons (for future implementation)
+  // const trezorButtonSetup = document.getElementById('btn-connect-trezor');
+  // const trezorButtonMulti = document.getElementById('btn-connect-trezor-multi');
+  // if (trezorButtonSetup) {
+  //   trezorButtonSetup.style.display = enableTrezor ? 'block' : 'none';
+  // }
+  // if (trezorButtonMulti) {
+  //   trezorButtonMulti.style.display = enableTrezor ? 'inline-block' : 'none';
+  // }
 }
 
 /**
@@ -2941,14 +3753,15 @@ async function renderWalletList() {
             ${escapeHtml(wallet.address || 'Address not loaded')}
           </div>
           <div class="text-dim" style="font-size: 10px; margin-top: 4px;">
-            ${wallet.importMethod === 'create' ? 'Created' : 'Imported'} • ${new Date(wallet.createdAt).toLocaleDateString()}
+            ${wallet.isHardwareWallet ? `🔐 ${wallet.hardwareType.toUpperCase()} Hardware Wallet` : (wallet.importMethod === 'create' ? 'Created' : 'Imported')} • ${new Date(wallet.createdAt).toLocaleDateString()}
           </div>
         </div>
       </div>
       <div class="button-group" style="gap: 6px;">
         ${!isActive ? `<button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="switch">SWITCH</button>` : ''}
+        ${wallet.isHardwareWallet ? `<button class="btn btn-small" style="border-color: var(--terminal-info); color: var(--terminal-info); white-space: nowrap;" data-wallet-id="${wallet.id}" data-action="reconnect">CONNECT</button>` : ''}
         <button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="rename">RENAME</button>
-        <button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="export">EXPORT</button>
+        ${!wallet.isHardwareWallet ? `<button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="export">EXPORT</button>` : ''}
         <button class="btn btn-danger btn-small" data-wallet-id="${wallet.id}" data-action="delete">DELETE</button>
       </div>
     `;
@@ -2963,6 +3776,9 @@ async function renderWalletList() {
         switch (action) {
           case 'switch':
             await handleSwitchWallet(walletId);
+            break;
+          case 'reconnect':
+            handleReconnectLedger(walletId, wallet);
             break;
           case 'rename':
             handleRenameWalletPrompt(walletId, wallet.nickname);
@@ -2985,6 +3801,14 @@ async function renderWalletList() {
 async function handleManageWallets() {
   await renderWalletList();
   showScreen('screen-manage-wallets');
+}
+
+// Handle reconnecting to a Ledger device
+function handleReconnectLedger(walletId, wallet) {
+  // Open in NEW TAB (WebHID requires full page context, not popup)
+  chrome.tabs.create({
+    url: chrome.runtime.getURL(`src/popup/popup.html?action=reconnectLedger&walletId=${walletId}`)
+  });
 }
 
 // Show add wallet modal (with 3 options)
@@ -3223,19 +4047,40 @@ async function handleRenameWalletConfirm() {
 
 // Delete a specific wallet
 async function handleDeleteWalletMulti(walletId) {
+  // Check if this is a hardware wallet
+  const walletsData = await getAllWallets();
+  const walletToDelete = walletsData.walletList.find(w => w.id === walletId);
+
+  if (!walletToDelete) {
+    alert('Wallet not found');
+    return;
+  }
+
+  const isHardwareWallet = walletToDelete.isHardwareWallet;
+
   const confirmed = confirm(
     '⚠️ WARNING ⚠️\n\n' +
     'You are about to DELETE this wallet!\n\n' +
     'This action is PERMANENT and CANNOT be undone.\n\n' +
-    'Make sure you have written down your seed phrase or private key.\n\n' +
+    (isHardwareWallet
+      ? 'You can always re-add your Ledger device later.\n\n'
+      : 'Make sure you have written down your seed phrase or private key.\n\n') +
     'Do you want to continue?'
   );
 
   if (!confirmed) return;
 
-  const password = await showPasswordPrompt('Delete Wallet', 'Enter your password to delete this wallet');
+  // Only ask for password if there are software wallets
+  let password = '';
+  if (!isHardwareWallet) {
+    const hasSoftwareWallets = walletsData.walletList.some(w => !w.isHardwareWallet);
 
-  if (!password) return;
+    if (hasSoftwareWallets) {
+      password = await showPasswordPrompt('Delete Wallet', 'Enter your password to delete this wallet');
+
+      if (!password) return;
+    }
+  }
 
   try {
     await deleteWallet(walletId, password);
@@ -3245,8 +4090,8 @@ async function handleDeleteWalletMulti(walletId) {
     await renderWalletList();
 
     // If we deleted all wallets, go back to setup
-    const walletsData = await getAllWallets();
-    if (walletsData.walletList.length === 0) {
+    const updatedWalletsData = await getAllWallets();
+    if (updatedWalletsData.walletList.length === 0) {
       currentState.isUnlocked = false;
       currentState.address = null;
       showScreen('screen-setup');
@@ -4252,6 +5097,21 @@ async function handleTransactionApprovalScreen(requestId) {
     // Show the transaction approval screen
     showScreen('screen-transaction-approval');
 
+    // Hide password field for hardware wallets
+    const isHardwareWallet = wallet && wallet.isHardwareWallet;
+    const passwordGroup = document.getElementById('tx-password-group');
+    if (isHardwareWallet) {
+      passwordGroup.classList.add('hidden');
+      // Show Ledger instruction message
+      const ledgerMsg = document.createElement('div');
+      ledgerMsg.className = 'panel';
+      ledgerMsg.style.cssText = 'border-color: var(--terminal-info); margin-bottom: 12px;';
+      ledgerMsg.innerHTML = '<p style="font-size: 11px; color: var(--terminal-info);">📱 Please confirm this transaction on your Ledger device</p>';
+      passwordGroup.parentElement.insertBefore(ledgerMsg, passwordGroup);
+    } else {
+      passwordGroup.classList.remove('hidden');
+    }
+
     // Fetch and populate gas price options
     await populateGasPrices(network, txRequest, symbol);
 
@@ -4279,7 +5139,8 @@ async function handleTransactionApprovalScreen(requestId) {
       const password = document.getElementById('tx-password').value;
       const errorEl = document.getElementById('tx-error');
 
-      if (!password) {
+      // Check if password required (software wallet only)
+      if (!isHardwareWallet && !password) {
         errorEl.textContent = 'Please enter your password';
         errorEl.classList.remove('hidden');
         return;
@@ -4292,20 +5153,6 @@ async function handleTransactionApprovalScreen(requestId) {
 
       try {
         errorEl.classList.add('hidden');
-
-        // Create a temporary session for this transaction using the entered password
-        // This validates the password without passing it for the actual transaction
-        const activeWallet = await getActiveWallet();
-        const tempSessionResponse = await chrome.runtime.sendMessage({
-          type: 'CREATE_SESSION',
-          password,
-          walletId: activeWallet.id,
-          durationMs: 60000 // 1 minute temporary session
-        });
-
-        if (!tempSessionResponse.success) {
-          throw new Error('Invalid password');
-        }
 
         // Get selected gas price
         const gasPrice = getSelectedGasPrice();
@@ -4321,33 +5168,164 @@ async function handleTransactionApprovalScreen(requestId) {
           }
         }
 
-        const response = await chrome.runtime.sendMessage({
-          type: 'TRANSACTION_APPROVAL',
-          requestId,
-          approved: true,
-          sessionToken: tempSessionResponse.sessionToken,
-          gasPrice,
-          customNonce
-        });
-
-        if (response.success) {
-          // Hide approval form and show status section
-          showTransactionStatus(response.txHash, activeWallet.address, requestId);
-        } else {
-          errorEl.textContent = response.error || 'Transaction failed';
+        if (isHardwareWallet) {
+          // Hardware wallet - sign with Ledger device
+          approveBtn.textContent = 'WAITING FOR LEDGER...';
+          errorEl.textContent = 'Please confirm transaction on your Ledger device...';
           errorEl.classList.remove('hidden');
-          // Re-enable button on error so user can try again
-          approveBtn.disabled = false;
-          approveBtn.style.opacity = '1';
-          approveBtn.style.cursor = 'pointer';
+
+          // Build transaction with gas options
+          const tx = { ...txRequest };
+
+          // Add chain ID
+          const chainIdMap = {
+            'pulsechain': 369,
+            'pulsechainTestnet': 943,
+            'ethereum': 1,
+            'sepolia': 11155111
+          };
+          tx.chainId = chainIdMap[network] || 943;
+
+          // Ensure from address is set for gas estimation
+          if (!tx.from) {
+            tx.from = wallet.address;
+          }
+
+          // Get provider (needed for gas price and estimation)
+          const provider = await rpc.getProvider(network);
+
+          // Set gas price - user-selected or fetch from network
+          if (gasPrice) {
+            tx.gasPrice = gasPrice;
+          } else if (!tx.gasPrice) {
+            // Fetch safe gas price if not provided
+            try {
+              const safeGasPriceHex = await rpc.getSafeGasPrice(network);
+              tx.gasPrice = BigInt(safeGasPriceHex);
+            } catch (error) {
+              console.warn('Error getting safe gas price:', error);
+              const feeData = await provider.getFeeData();
+              if (feeData.gasPrice) {
+                tx.gasPrice = feeData.gasPrice;
+              }
+            }
+          }
+
+          // Get nonce if not custom
+          if (customNonce !== null) {
+            tx.nonce = customNonce;
+          } else if (tx.nonce === undefined) {
+            const nonceHex = await rpc.getTransactionCount(network, wallet.address, 'pending');
+            tx.nonce = parseInt(nonceHex, 16);
+          }
+
+          // Normalize gas field (dApps may use 'gas' or 'gasLimit')
+          if (tx.gas && !tx.gasLimit) {
+            tx.gasLimit = tx.gas;
+          }
+
+          // Estimate gas limit if not set
+          if (!tx.gasLimit) {
+            tx.gasLimit = await provider.estimateGas(tx);
+          }
+
+          // Clean up transaction fields for Ledger (legacy transaction format)
+          delete tx.gas;  // Use gasLimit instead
+          delete tx.from;  // Ledger derives from account index
+          delete tx.maxFeePerGas;  // EIP-1559 field, not used in legacy
+          delete tx.maxPriorityFeePerGas;  // EIP-1559 field, not used in legacy
+          delete tx.type;  // Remove transaction type if present
+
+          console.log('🫀 Ledger transaction prepared:', {
+            to: tx.to,
+            value: tx.value?.toString(),
+            gasPrice: tx.gasPrice?.toString(),
+            gasLimit: tx.gasLimit?.toString(),
+            nonce: tx.nonce,
+            chainId: tx.chainId,
+            dataLength: tx.data?.length || 0
+          });
+
+          // Sign with Ledger
+          const signedTx = await ledger.signTransaction(wallet.accountIndex, tx);
+
+          // Broadcast
+          const txResponse = await provider.broadcastTransaction(signedTx);
+
+          // Show transaction status
+          showTransactionStatus(txResponse.hash, wallet.address, requestId);
+
+          // Notify service worker that transaction was approved
+          await chrome.runtime.sendMessage({
+            type: 'TRANSACTION_APPROVAL',
+            requestId,
+            approved: true,
+            txHash: txResponse.hash
+          });
+
+        } else {
+          // Software wallet - use password session
+          const activeWallet = await getActiveWallet();
+          const tempSessionResponse = await chrome.runtime.sendMessage({
+            type: 'CREATE_SESSION',
+            password,
+            walletId: activeWallet.id,
+            durationMs: 60000 // 1 minute temporary session
+          });
+
+          if (!tempSessionResponse.success) {
+            throw new Error('Invalid password');
+          }
+
+          const response = await chrome.runtime.sendMessage({
+            type: 'TRANSACTION_APPROVAL',
+            requestId,
+            approved: true,
+            sessionToken: tempSessionResponse.sessionToken,
+            gasPrice,
+            customNonce
+          });
+
+          if (response.success) {
+            // Hide approval form and show status section
+            showTransactionStatus(response.txHash, activeWallet.address, requestId);
+          } else {
+            errorEl.textContent = response.error || 'Transaction failed';
+            errorEl.classList.remove('hidden');
+            // Re-enable button on error so user can try again
+            approveBtn.disabled = false;
+            approveBtn.style.opacity = '1';
+            approveBtn.style.cursor = 'pointer';
+          }
         }
       } catch (error) {
-        errorEl.textContent = error.message;
+        console.error('Transaction approval error:', error);
+
+        // Provide user-friendly error messages
+        let errorMessage;
+        if (error.message.includes('Blind signing') || error.message.includes('Contract data')) {
+          errorMessage = `Ledger Setting Required:
+
+1. On your Ledger device, open the Ethereum app
+2. Press both buttons on "Settings"
+3. Find "Contract data" or "Blind signing"
+4. Enable it (press both buttons to toggle ON)
+5. Exit settings and try again
+
+This allows your Ledger to sign smart contract transactions.`;
+        } else if (error.message.includes('IntrinsicGas')) {
+          errorMessage = 'Transaction failed: Gas limit too low. Please try again.';
+        } else {
+          errorMessage = error.message;
+        }
+
+        errorEl.textContent = errorMessage;
         errorEl.classList.remove('hidden');
         // Re-enable button on error so user can try again
         approveBtn.disabled = false;
         approveBtn.style.opacity = '1';
         approveBtn.style.cursor = 'pointer';
+        approveBtn.textContent = 'APPROVE';
       }
     });
 
@@ -4503,6 +5481,11 @@ async function handleMessageSignApprovalScreen(requestId) {
     const { origin, method, signRequest } = response;
     const { message, address } = signRequest;
 
+    // Check if this is a hardware wallet
+    const activeWallet = await getActiveWallet();
+    const isHardwareWallet = activeWallet.isHardwareWallet;
+    const isLedger = activeWallet.hardwareType === 'ledger';
+
     // Populate sign details
     document.getElementById('sign-site-origin').textContent = origin;
     document.getElementById('sign-address').textContent = address;
@@ -4542,17 +5525,24 @@ async function handleMessageSignApprovalScreen(requestId) {
     // Show the signing approval screen
     showScreen('screen-sign-message');
 
+    // Hide/show password field based on wallet type
+    const passwordGroup = document.getElementById('sign-password').closest('.form-group');
+    if (isHardwareWallet && isLedger) {
+      passwordGroup.classList.add('hidden');
+      // Show Ledger instruction message
+      const ledgerMsg = document.createElement('div');
+      ledgerMsg.className = 'panel';
+      ledgerMsg.style.cssText = 'border-color: var(--terminal-info); margin-bottom: 12px;';
+      ledgerMsg.innerHTML = '<p style="font-size: 11px; color: var(--terminal-info);">📱 Please confirm this signature on your Ledger device</p>';
+      passwordGroup.parentElement.insertBefore(ledgerMsg, passwordGroup);
+    } else {
+      passwordGroup.classList.remove('hidden');
+    }
+
     // Setup approve button
     document.getElementById('btn-approve-sign').addEventListener('click', async () => {
       const approveBtn = document.getElementById('btn-approve-sign');
-      const password = document.getElementById('sign-password').value;
       const errorEl = document.getElementById('sign-error');
-
-      if (!password) {
-        errorEl.textContent = 'Please enter your password';
-        errorEl.classList.remove('hidden');
-        return;
-      }
 
       // Disable button immediately to prevent double-clicking
       approveBtn.disabled = true;
@@ -4562,36 +5552,75 @@ async function handleMessageSignApprovalScreen(requestId) {
       try {
         errorEl.classList.add('hidden');
 
-        // Create a temporary session for this signing using the entered password
-        const activeWallet = await getActiveWallet();
-        const tempSessionResponse = await chrome.runtime.sendMessage({
-          type: 'CREATE_SESSION',
-          password,
-          walletId: activeWallet.id,
-          durationMs: 60000 // 1 minute temporary session
-        });
+        let signature;
 
-        if (!tempSessionResponse.success) {
-          throw new Error('Invalid password');
-        }
+        if (isHardwareWallet && isLedger) {
+          // Ledger signing - sign directly in popup
+          approveBtn.textContent = 'WAITING FOR LEDGER...';
 
-        const response = await chrome.runtime.sendMessage({
-          type: 'SIGN_APPROVAL',
-          requestId,
-          approved: true,
-          sessionToken: tempSessionResponse.sessionToken
-        });
+          try {
+            signature = await ledger.signMessage(activeWallet.accountIndex, message);
+          } catch (ledgerError) {
+            throw new Error(`Ledger signing failed: ${ledgerError.message}`);
+          }
 
-        if (response.success) {
-          // Close the popup window
-          window.close();
+          // Send pre-signed signature to service worker
+          const response = await chrome.runtime.sendMessage({
+            type: 'SIGN_APPROVAL_LEDGER',
+            requestId,
+            approved: true,
+            signature // Pre-signed signature
+          });
+
+          if (response.success) {
+            window.close();
+          } else {
+            throw new Error(response.error || 'Signing failed');
+          }
+
         } else {
-          errorEl.textContent = response.error || 'Signing failed';
-          errorEl.classList.remove('hidden');
-          // Re-enable button on error so user can try again
-          approveBtn.disabled = false;
-          approveBtn.style.opacity = '1';
-          approveBtn.style.cursor = 'pointer';
+          // Software wallet signing - use password
+          const password = document.getElementById('sign-password').value;
+
+          if (!password) {
+            errorEl.textContent = 'Please enter your password';
+            errorEl.classList.remove('hidden');
+            approveBtn.disabled = false;
+            approveBtn.style.opacity = '1';
+            approveBtn.style.cursor = 'pointer';
+            return;
+          }
+
+          // Create a temporary session for this signing using the entered password
+          const tempSessionResponse = await chrome.runtime.sendMessage({
+            type: 'CREATE_SESSION',
+            password,
+            walletId: activeWallet.id,
+            durationMs: 60000 // 1 minute temporary session
+          });
+
+          if (!tempSessionResponse.success) {
+            throw new Error('Invalid password');
+          }
+
+          const response = await chrome.runtime.sendMessage({
+            type: 'SIGN_APPROVAL',
+            requestId,
+            approved: true,
+            sessionToken: tempSessionResponse.sessionToken
+          });
+
+          if (response.success) {
+            // Close the popup window
+            window.close();
+          } else {
+            errorEl.textContent = response.error || 'Signing failed';
+            errorEl.classList.remove('hidden');
+            // Re-enable button on error so user can try again
+            approveBtn.disabled = false;
+            approveBtn.style.opacity = '1';
+            approveBtn.style.cursor = 'pointer';
+          }
         }
       } catch (error) {
         errorEl.textContent = error.message;
@@ -4600,6 +5629,7 @@ async function handleMessageSignApprovalScreen(requestId) {
         approveBtn.disabled = false;
         approveBtn.style.opacity = '1';
         approveBtn.style.cursor = 'pointer';
+        approveBtn.textContent = 'APPROVE';
       }
     });
 
@@ -5475,6 +6505,7 @@ async function handleClearTransactionHistory() {
 let txStatusPollInterval = null;
 let txStatusCurrentHash = null;
 let txStatusCurrentAddress = null;
+let txStatusStartTime = null;
 
 async function showTransactionStatus(txHash, address, requestId) {
   // Showing transaction status
@@ -5482,6 +6513,7 @@ async function showTransactionStatus(txHash, address, requestId) {
   // Store current transaction hash and address
   txStatusCurrentHash = txHash;
   txStatusCurrentAddress = address;
+  txStatusStartTime = Date.now();
 
   // Hide approval form
   document.getElementById('tx-approval-form').classList.add('hidden');
@@ -5554,7 +6586,11 @@ async function showTransactionStatus(txHash, address, requestId) {
           pendingActions.classList.remove('hidden');
         }
       } else {
-        console.warn('🫀 Transaction not found in storage:', txHash);
+        // Transaction may not be in storage yet if recently broadcast
+        // Only log if polling has been running for a while
+        if (txStatusPollInterval && Date.now() - txStatusStartTime > 5000) {
+          console.warn('🫀 Transaction not found in storage:', txHash);
+        }
       }
     } catch (error) {
       console.error('🫀 Error checking transaction status:', error);

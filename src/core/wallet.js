@@ -413,10 +413,12 @@ async function generateDefaultNickname() {
  * @throws {Error} If validation fails or wallet creation fails
  */
 export async function addWallet(type, data, password, nickname = null) {
-  // Validate password strength
-  const passwordCheck = validatePasswordStrength(password);
-  if (!passwordCheck.valid) {
-    throw new Error(passwordCheck.errors.join(', '));
+  // Validate password strength (skip for hardware wallets - they don't need encryption)
+  if (type !== 'ledger') {
+    const passwordCheck = validatePasswordStrength(password);
+    if (!passwordCheck.valid) {
+      throw new Error(passwordCheck.errors.join(', '));
+    }
   }
 
   let wallet;
@@ -446,6 +448,25 @@ export async function addWallet(type, data, password, nickname = null) {
         wallet = new ethers.Wallet(key);
         break;
 
+      case 'ledger':
+        // Ledger hardware wallet - no private key stored
+        if (!data.address || !ethers.isAddress(data.address)) {
+          throw new Error('Invalid Ledger address');
+        }
+        if (data.accountIndex === undefined || data.accountIndex < 0) {
+          throw new Error('Invalid account index');
+        }
+        // Create a minimal wallet object for consistency
+        wallet = {
+          address: ethers.getAddress(data.address), // Checksummed
+          // Hardware wallet metadata
+          isHardwareWallet: true,
+          hardwareType: 'ledger',
+          accountIndex: data.accountIndex,
+          derivationPath: data.derivationPath || `44'/60'/0'/0/${data.accountIndex}`
+        };
+        break;
+
       default:
         throw new Error('Invalid wallet type: ' + type);
     }
@@ -458,27 +479,40 @@ export async function addWallet(type, data, password, nickname = null) {
     // Get current recommended iterations
     const currentIterations = getCurrentRecommendedIterations();
 
-    // Double encryption:
-    // 1. Encrypt wallet with ethers.js (creates encrypted JSON keystore)
-    const encryptedJson = await wallet.encrypt(password);
-
-    // 2. Encrypt the keystore again with AES-GCM using current iteration recommendations
-    const doubleEncrypted = await encryptWithAES(encryptedJson, password, currentIterations);
-
     // Generate nickname if not provided
     const finalNickname = nickname || await generateDefaultNickname();
 
-    // Create wallet entry with double-encrypted keystore
+    // Create wallet entry
     const walletEntry = {
       id: generateWalletId(),
       nickname: finalNickname,
       address: wallet.address,
-      encryptedKeystore: doubleEncrypted,
       createdAt: Date.now(),
-      importMethod: type,
-      lastSecurityUpgrade: Date.now(), // Track when encryption was last upgraded
-      currentIterations: currentIterations // Store for UI display
+      importMethod: type
     };
+
+    // Handle encryption differently for hardware vs software wallets
+    if (wallet.isHardwareWallet) {
+      // Hardware wallet - store metadata only (no private keys)
+      walletEntry.isHardwareWallet = true;
+      walletEntry.hardwareType = wallet.hardwareType;
+      walletEntry.accountIndex = wallet.accountIndex;
+      walletEntry.derivationPath = wallet.derivationPath;
+      // No encryption needed - no sensitive data
+      console.log(`🔐 Ledger wallet added: ${wallet.address} (account ${wallet.accountIndex})`);
+    } else {
+      // Software wallet - double encryption
+      // 1. Encrypt wallet with ethers.js (creates encrypted JSON keystore)
+      const encryptedJson = await wallet.encrypt(password);
+
+      // 2. Encrypt the keystore again with AES-GCM using current iteration recommendations
+      const doubleEncrypted = await encryptWithAES(encryptedJson, password, currentIterations);
+
+      walletEntry.encryptedKeystore = doubleEncrypted;
+      walletEntry.lastSecurityUpgrade = Date.now(); // Track when encryption was last upgraded
+      walletEntry.currentIterations = currentIterations; // Store for UI display
+      console.log(`🔐 Wallet created with ${currentIterations.toLocaleString()} PBKDF2 iterations`);
+    }
 
     // Get current wallets data
     const walletsData = await getAllWallets();
@@ -570,14 +604,26 @@ export async function renameWallet(walletId, newNickname) {
  * @throws {Error} If password is incorrect or wallet not found
  */
 export async function deleteWallet(walletId, password) {
-  // Verify password first by trying to unlock active wallet
-  await unlockWallet(password);
-
   const walletsData = await getAllWallets();
   const walletIndex = walletsData.walletList.findIndex(w => w.id === walletId);
 
   if (walletIndex === -1) {
     throw new Error('Wallet not found');
+  }
+
+  const walletToDelete = walletsData.walletList[walletIndex];
+
+  // Only verify password for software wallets
+  // Hardware wallets don't have encrypted keystores, so no password verification needed
+  if (!walletToDelete.isHardwareWallet) {
+    // Find a software wallet to verify password with
+    const softwareWallet = walletsData.walletList.find(w => !w.isHardwareWallet);
+
+    if (softwareWallet) {
+      // Verify password by trying to unlock a software wallet
+      await unlockSpecificWallet(softwareWallet.id, password);
+    }
+    // If there are no software wallets (only hardware), skip password verification
   }
 
   // Remove wallet from list
@@ -632,6 +678,11 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
 
     if (!wallet) {
       throw new Error('Wallet not found');
+    }
+
+    // Hardware wallets don't need password unlocking
+    if (wallet.isHardwareWallet) {
+      throw new Error('Hardware wallets cannot be unlocked with a password. Please select a software wallet.');
     }
 
     // Decrypt the AES-GCM layer (automatically detects iteration count)
@@ -873,6 +924,28 @@ export async function importFromMnemonic(mnemonic, password) {
 export async function importFromPrivateKey(privateKey, password) {
   const result = await addWallet('privatekey', { privateKey }, password, 'Main Wallet');
   return {
+    address: result.address
+  };
+}
+
+/**
+ * Adds a Ledger hardware wallet
+ * @param {string} address - Ethereum address from Ledger
+ * @param {number} accountIndex - Account index (0, 1, 2, ...)
+ * @param {string} derivationPath - Full derivation path
+ * @param {string} nickname - Optional wallet nickname
+ * @returns {Promise<{id: string, address: string}>}
+ */
+export async function addLedgerWallet(address, accountIndex, derivationPath, nickname = null) {
+  // No password needed for hardware wallets - keys stay on device
+  const result = await addWallet('ledger', {
+    address,
+    accountIndex,
+    derivationPath
+  }, '', nickname || `Ledger ${accountIndex + 1}`);
+
+  return {
+    id: result.id,
     address: result.address
   };
 }

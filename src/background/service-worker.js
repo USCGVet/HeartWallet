@@ -937,13 +937,13 @@ async function handleSendTransaction(params, origin) {
 }
 
 // Handle transaction approval from popup
-async function handleTransactionApproval(requestId, approved, sessionToken, gasPrice, customNonce) {
+async function handleTransactionApproval(requestId, approved, sessionToken, gasPrice, customNonce, txHash) {
   if (!pendingTransactions.has(requestId)) {
     return { success: false, error: 'Request not found or expired' };
   }
 
   const { resolve, reject, origin, txRequest, approvalToken } = pendingTransactions.get(requestId);
-  
+
   // SECURITY: Validate one-time approval token to prevent replay attacks
   if (!validateAndUseApprovalToken(approvalToken)) {
     pendingTransactions.delete(requestId);
@@ -951,7 +951,7 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
     reject(new Error('Invalid or already used approval token - possible replay attack'));
     return { success: false, error: 'Invalid approval token' };
   }
-  
+
   pendingTransactions.delete(requestId);
 
   // Decrement pending counter (request completed)
@@ -963,7 +963,51 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
   }
 
   try {
-    // Validate session and get password (now async)
+    // If txHash is provided, it means transaction was already signed and broadcast
+    // by a hardware wallet in the popup. Just resolve with the hash.
+    if (txHash) {
+      console.log('Hardware wallet transaction already broadcast:', txHash);
+
+      // Get active wallet for saving to history
+      const activeWallet = await getActiveWallet();
+      const network = await getCurrentNetwork();
+
+      // Save transaction to history
+      await txHistory.addTxToHistory(activeWallet.address, {
+        hash: txHash,
+        timestamp: Date.now(),
+        from: activeWallet.address,
+        to: txRequest.to || null,
+        value: txRequest.value || '0',
+        data: txRequest.data || '0x',
+        gasPrice: '0', // Will be updated by transaction monitoring
+        gasLimit: txRequest.gasLimit || txRequest.gas || null,
+        nonce: null, // Will be updated by transaction monitoring
+        network: network,
+        status: txHistory.TX_STATUS.PENDING,
+        blockNumber: null,
+        type: txHistory.TX_TYPES.CONTRACT
+      });
+
+      // Send desktop notification
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+        title: 'Transaction Sent',
+        message: `Transaction sent: ${txHash.slice(0, 20)}...`,
+        priority: 2
+      });
+
+      // Start monitoring transaction for confirmation
+      const provider = await rpc.getProvider(network);
+      waitForConfirmation({ hash: txHash }, provider, activeWallet.address);
+
+      // Resolve with transaction hash
+      resolve({ result: txHash });
+      return { success: true, txHash };
+    }
+
+    // Software wallet flow - validate session and get password (now async)
     const password = await validateSession(sessionToken);
 
     // Unlock wallet with auto-upgrade notification
@@ -1735,6 +1779,42 @@ async function handleSignApproval(requestId, approved, sessionToken) {
   }
 }
 
+/**
+ * Handle Ledger signature approval (pre-signed in popup)
+ */
+async function handleLedgerSignApproval(requestId, approved, signature) {
+  if (!pendingSignRequests.has(requestId)) {
+    return { success: false, error: 'Request not found or expired' };
+  }
+
+  const { resolve, reject, origin, approvalToken } = pendingSignRequests.get(requestId);
+
+  // Validate one-time approval token
+  if (!validateAndUseApprovalToken(approvalToken)) {
+    pendingSignRequests.delete(requestId);
+    reject(new Error('Invalid or already used approval token'));
+    return { success: false, error: 'Invalid approval token' };
+  }
+
+  pendingSignRequests.delete(requestId);
+
+  if (!approved) {
+    reject(new Error('User rejected the request'));
+    return { success: false, error: 'User rejected' };
+  }
+
+  try {
+    // Signature already created by Ledger in popup - just pass it through
+    console.log('🫀 Ledger message signed for origin:', origin);
+    resolve({ result: signature });
+    return { success: true, signature };
+  } catch (error) {
+    console.error('🫀 Error processing Ledger signature:', error);
+    reject(error);
+    return { success: false, error: error.message };
+  }
+}
+
 // Get sign request details (for popup)
 function getSignRequest(requestId) {
   return pendingSignRequests.get(requestId);
@@ -1778,7 +1858,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
 
         case 'TRANSACTION_APPROVAL':
-          const txApprovalResult = await handleTransactionApproval(message.requestId, message.approved, message.sessionToken, message.gasPrice, message.customNonce);
+          const txApprovalResult = await handleTransactionApproval(message.requestId, message.approved, message.sessionToken, message.gasPrice, message.customNonce, message.txHash);
           // Sending transaction approval response
           sendResponse(txApprovalResult);
           break;
@@ -1822,6 +1902,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           );
           console.log('🫀 Sending sign approval response:', signApprovalResult);
           sendResponse(signApprovalResult);
+          break;
+
+        case 'SIGN_APPROVAL_LEDGER':
+          const ledgerSignResult = await handleLedgerSignApproval(
+            message.requestId,
+            message.approved,
+            message.signature
+          );
+          console.log('🫀 Sending Ledger sign approval response:', ledgerSignResult);
+          sendResponse(ledgerSignResult);
           break;
 
         case 'GET_SIGN_REQUEST':

@@ -13,7 +13,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 
 - ❌ This wallet has NOT been professionally audited
 - ⚠️ DO NOT store large amounts or life savings
-- 🔐 For significant holdings, use a hardware wallet
+- 🔐 For significant holdings, use a Ledger hardware wallet (now supported!)
 - 📚 Read [SECURITY.md](SECURITY.md) before using
 
 **By using this software, you accept all risks. The authors are not liable for any losses.**
@@ -22,6 +22,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 
 ### ✅ Core Wallet Features
 - **Multi-wallet support** - Manage up to 10 wallets with custom nicknames
+- **Ledger hardware wallet support** - Connect Ledger Nano S/X/S Plus via WebHID for maximum security
 - **Create new wallet** with 12-word seed phrase
 - **Import wallet** from seed phrase or private key
 - **Future-proof encryption** - PBKDF2 with automatic security upgrades (1.094M iterations in 2025)
@@ -103,6 +104,7 @@ HeartWallet-v3/
 │   │   └── terminal.css        # Terminal theme styles
 │   ├── core/
 │   │   ├── wallet.js           # Wallet operations & PBKDF2 auto-upgrade
+│   │   ├── ledger.js           # Ledger hardware wallet integration
 │   │   ├── storage.js          # Encrypted storage
 │   │   ├── txValidation.js     # Transaction validation
 │   │   └── signing.js          # Message signing
@@ -150,7 +152,7 @@ npm run build && npm test
 ### First Time Setup
 
 1. Click the HeartWallet icon in your browser
-2. Choose "CREATE NEW WALLET" or "IMPORT EXISTING WALLET"
+2. Choose "CREATE NEW WALLET", "IMPORT EXISTING WALLET", or "ADD LEDGER"
 3. If creating:
    - Write down your 12-word seed phrase (NEVER share this!)
    - Create a strong password (20+ characters recommended)
@@ -161,6 +163,12 @@ npm run build && npm test
    - Enter your 12-word seed phrase or private key
    - Create a password to encrypt the wallet
    - Click "IMPORT WALLET"
+5. If adding Ledger:
+   - Make sure your Ledger device is connected and unlocked
+   - Open the Ethereum app on your Ledger
+   - Select your Ledger from the browser's device picker
+   - Choose which address(es) to import
+   - No password needed - your Ledger handles all signing!
 
 ### Unlocking Your Wallet
 
@@ -172,10 +180,10 @@ npm run build && npm test
 
 1. Click "Send" on the dashboard
 2. Enter recipient address
-3. Enter amount
+3. Enter amount (or click "Send Max" to send all available balance minus gas)
 4. Choose gas speed (Slow/Normal/Fast/Custom)
 5. Review transaction details
-6. Confirm with password
+6. Confirm with password (or approve on Ledger device for hardware wallets)
 
 ### Managing Transactions
 
@@ -184,6 +192,25 @@ npm run build && npm test
 - **Cancelled** - Replace with 0-value transaction to yourself
 
 Both options show live network gas prices to help you make informed decisions.
+
+### Hardware Wallet Support
+
+HeartWallet supports **Ledger Nano S, Ledger Nano X, and Ledger Nano S Plus** via WebHID.
+
+**Features:**
+- 🔐 **Maximum security** - Private keys never leave your Ledger device
+- 📱 **Full dApp support** - Use your Ledger with any Web3 dApp
+- 💸 **Send & receive** - Both native tokens (PLS, ETH) and ERC-20/PRC-20 tokens
+- 🔄 **Multiple accounts** - Import multiple addresses from the same Ledger
+- 🚫 **No passwords** - All signing happens on your device
+
+**Requirements:**
+- Chrome/Brave browser (WebHID support required)
+- Ledger device with latest firmware
+- Ethereum app installed on your Ledger
+- **Enable "Contract Data"** in Ethereum app settings for token transfers and dApp interactions
+
+**Note:** When using dApps with Ledger, you'll need to approve each transaction on your device. This is a security feature to prevent unauthorized transactions.
 
 ### Settings
 

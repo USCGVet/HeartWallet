@@ -3,6 +3,10 @@ import { resolve } from 'path';
 import { copyFileSync, mkdirSync } from 'fs';
 
 export default defineConfig({
+  define: {
+    // Polyfill Buffer for Ledger libraries
+    'global': 'globalThis',
+  },
   build: {
     rollupOptions: {
       input: {
@@ -28,7 +32,16 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src')
+      '@': resolve(__dirname, 'src'),
+      'buffer': 'buffer/'
+    }
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      // Node.js global to browser globalThis
+      define: {
+        global: 'globalThis'
+      }
     }
   },
   plugins: [

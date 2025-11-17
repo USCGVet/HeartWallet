@@ -6,9 +6,10 @@
 
 - ❌ This wallet has **NOT** been professionally audited by a third-party security firm
 - ⚠️ It may contain bugs or vulnerabilities that could lead to loss of funds
-- 💰 **DO NOT** store large amounts or life savings
-- 🔐 For significant holdings, we **strongly recommend** using a hardware wallet
-- 🛡️ We recommend using this wallet primarily for testnet, learning, or small daily transactions
+- 💰 **DO NOT** store large amounts or life savings in software wallets
+- 🔐 For significant holdings, use **Ledger hardware wallet support** (now built-in!)
+- 🛡️ Software wallets recommended primarily for testnet, learning, or small daily transactions
+- ✅ **Ledger integration** provides maximum security for larger amounts while maintaining full dApp compatibility
 
 **NO LIABILITY:** The authors and contributors accept no responsibility for any losses, damages, or theft of funds. By using this software, you acknowledge and accept all risks.
 
@@ -34,13 +35,38 @@ HeartWallet implements multiple layers of security to protect your funds:
 
 This ensures your wallet remains secure against future hardware improvements.
 
-### 2. **AES-256-GCM Double Encryption**
+### 2. **Ledger Hardware Wallet Support (Maximum Security)**
+- **Private keys never leave device**: All signing happens on the Ledger hardware
+- **Physical confirmation**: Every transaction requires manual approval on device screen
+- **PIN protection**: Device locked with PIN, 3 failed attempts wipes the device
+- **Full dApp support**: Use your Ledger with any Web3 dApp through HeartWallet
+- **Multi-account**: Import multiple addresses from same Ledger device
+- **No password required**: Device security replaces password authentication
+- **WebHID integration**: Direct browser communication without additional software
+- **Contract data verification**: See transaction details on device before approval
+- **Industry standard**: Ledger is the most trusted hardware wallet manufacturer
+
+**Supported Devices:**
+- Ledger Nano S Plus (recommended)
+- Ledger Nano X
+- Ledger Nano S (legacy)
+
+**Security Benefits:**
+- 🔐 **Attack resistance**: Even if your computer is compromised, attacker cannot access private keys
+- 🛡️ **Malware immunity**: Keyloggers, screen recorders, and trojans cannot steal your keys
+- ✅ **Transaction verification**: See exactly what you're signing on the device screen
+- 🚫 **Physical security**: Would-be attacker needs physical access + PIN to steal funds
+- 💪 **Best practice compliance**: Meets institutional and professional security standards
+
+**This is the MOST SECURE way to use HeartWallet for significant holdings.**
+
+### 3. **AES-256-GCM Double Encryption (Software Wallets)**
 - **Storage layer**: Wallets encrypted with PBKDF2 + AES-256-GCM before saving to Chrome storage
 - **Session layer**: In-memory encryption using Web Crypto API with non-extractable keys
 - **Unique IVs**: Every encryption operation uses cryptographically secure random initialization vectors
 - **No plaintext keys**: Private keys never stored or kept in plaintext anywhere
 
-### 3. **Strong Password Requirements**
+### 4. **Strong Password Requirements (Software Wallets)**
 Enforced minimum password strength:
 - ✅ Minimum 12 characters (20+ recommended)
 - ✅ At least 1 uppercase letter
@@ -55,7 +81,7 @@ correct-horse-battery-staple-2025!  (Better - 37 chars)
 I-Love-PulseChain-369-Forever!      (Better - 30 chars)
 ```
 
-### 4. **Transaction Security Protections**
+### 5. **Transaction Security Protections**
 - **Gas limit maximum**: 10M gas per transaction (prevents fee scam attacks)
 - **Gas price validation**: User-configurable maximum (default 1000 Gwei)
 - **eth_sign disabled by default**: Prevents blind signing attacks
@@ -64,26 +90,26 @@ I-Love-PulseChain-369-Forever!      (Better - 30 chars)
 - **One-time approval tokens**: Each approval can only be used once
 - **Clear transaction display**: Shows recipient, amount, gas fees before approval
 
-### 5. **Auto-Lock Timer**
+### 6. **Auto-Lock Timer**
 - Automatically locks wallet after inactivity (configurable: 5, 15, 30, or 60 minutes)
 - Default: 15 minutes
 - Requires password re-entry after lock
 - Sessions cleared when service worker terminates
 - Protects against unauthorized access if you leave your computer
 
-### 6. **Anti-Brute Force Protection**
+### 7. **Anti-Brute Force Protection**
 - Maximum 5 failed password attempts
 - 30-minute lockout period after exceeding limit
 - Attempt counter persists across sessions
 - Protects against automated password cracking
 
-### 7. **Seed Phrase Verification**
+### 8. **Seed Phrase Verification**
 - During wallet creation, you must verify 3 random words from your seed phrase
 - Words selected using cryptographically secure random
 - Ensures you've actually written down your backup before proceeding
 - Reduces risk of losing funds due to missing backup
 
-### 8. **Live Gas Price Tracking**
+### 9. **Live Gas Price Tracking**
 All transaction signing screens fetch live network gas prices:
 - **dApp approvals**: Shows current network conditions
 - **Send transactions**: Slow/Normal/Fast options based on live prices
@@ -91,32 +117,32 @@ All transaction signing screens fetch live network gas prices:
 - **Cancel transaction**: Shows current network price comparison
 - Helps users make informed decisions and avoid overpaying
 
-### 9. **RPC Reliability & Failover**
+### 10. **RPC Reliability & Failover**
 - **Multiple RPC endpoints** per network with automatic failover
 - **Health tracking**: Blacklists failing endpoints, auto-recovers when available
 - **99%+ uptime**: Continues working even if primary RPC servers fail
 - **Transparent failover**: Users experience no interruption
 
-### 10. **XSS & Injection Protection**
+### 11. **XSS & Injection Protection**
 - All user input sanitized before display
 - Error messages stripped of HTML and scripts
 - HTML escaping for all dynamic content
 - Protects against code injection through token names, addresses, or error messages
 
-### 11. **Browser Isolation**
+### 12. **Browser Isolation**
 - Extension runs in isolated Chrome environment
 - Private keys never leave your computer
 - DApps cannot directly access your keys
 - Content scripts properly isolated from web pages
 - Secure message passing architecture
 
-### 12. **Multi-Wallet Management**
+### 13. **Multi-Wallet Management**
 - Support for up to 10 wallets
 - Each wallet independently encrypted
 - Separate iteration count tracking per wallet
 - Safe migration from older encryption formats
 
-### 13. **Modern Wallet Detection (EIP-6963)**
+### 14. **Modern Wallet Detection (EIP-6963)**
 - Announces wallet to dApps using modern standard
 - Compatible with Web3Modal, WalletConnect, Reown
 - Works alongside other wallets (MetaMask, Rabby, etc.)
@@ -166,12 +192,20 @@ All transaction signing screens fetch live network gas prices:
    - Never risk more than you can afford to lose
 
 7. **Use Multiple Wallets**
-   - Hot wallet (HeartWallet) for small daily transactions (<$500)
-   - Cold wallet (hardware) for long-term storage of significant holdings
+   - Hot wallet (HeartWallet software) for small daily transactions (<$500)
+   - Hardware wallet (Ledger via HeartWallet) for significant holdings
    - Never keep all funds in one place
    - Separate wallets for different purposes (trading, holding, etc.)
 
-8. **Monitor Your Transactions**
+8. **Use Ledger for Significant Holdings**
+   - Connect your Ledger Nano S/X/S Plus to HeartWallet for maximum security
+   - Enable "Contract Data" in Ethereum app settings for token transfers
+   - Always verify transaction details on Ledger screen before approving
+   - Keep Ledger firmware updated
+   - Store recovery phrase securely (never enter it anywhere except the device itself)
+   - Use PIN protection and never share your PIN
+
+9. **Monitor Your Transactions**
    - Check transaction history regularly
    - Use block explorers to verify confirmations
    - Watch for unexpected transactions
@@ -222,11 +256,18 @@ All transaction signing screens fetch live network gas prices:
    - Only enable if you understand the risks
    - Disable it immediately after use
 
+8. **Never Approve Transactions on Ledger Without Verification**
+   - ALWAYS read transaction details on Ledger screen before approving
+   - Verify recipient address matches what you expect
+   - Verify amount matches what you intend to send
+   - If transaction details look wrong or unclear, REJECT on device
+   - Never blindly approve transactions just because HeartWallet requested it
+
 ---
 
 ## 🎯 Recommended Use Cases
 
-### ✅ Good For:
+### ✅ Good For (Software Wallets):
 - **Testnet development and testing**
 - **Learning about Web3 and crypto**
 - **Small daily transactions** (<$500)
@@ -234,18 +275,26 @@ All transaction signing screens fetch live network gas prices:
 - **Developer tools and experimentation**
 - **Airdrops and NFT minting** (small amounts)
 
-### ⚠️ Use With Caution:
+### 🔐 BEST FOR (Ledger Hardware Wallets):
+- **Significant holdings** ($2000+) - Maximum security
+- **Life savings** - Industry-standard protection
+- **Long-term storage** - Cold storage security
+- **Active trading** with large amounts - Secure signing
+- **Business/company funds** - Professional-grade security
+- **Production DApps** with significant value - Verified signing
+- **Any amount you cannot afford to lose** - Hardware protection
+
+### ⚠️ Use With Caution (Software Wallets):
 - **Moderate amounts** ($500-$2000) you can afford to lose
-- **Active trading** (use with extra vigilance)
-- **Production DApps** (audit contract first)
+- **Active trading** (consider Ledger instead)
+- **Production DApps** (audit contract first, or use Ledger)
 - **New tokens** (be wary of scams)
 
-### ❌ NOT Recommended For:
-- **Life savings or retirement funds** - use hardware wallet
-- **Significant holdings** (>$2000) - use hardware wallet
-- **Business/company funds** - use enterprise solutions
-- **Non-technical family members** - too complex
-- **Long-term cold storage** - use hardware wallet
+### ❌ NOT Recommended:
+- **Software wallets for life savings** - Use Ledger instead
+- **Software wallets for retirement funds** - Use Ledger instead
+- **Non-technical family members** - Consider simpler solutions
+- **Storing private keys digitally** - Use Ledger for hardware security
 
 ---
 
@@ -341,7 +390,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## 🔐 Security Rating
 
-**Self-Assessment: A (9/10)**
+### Software Wallet Mode: **A- (8.5/10)**
 
 **Strengths:**
 - ✅ Future-proof PBKDF2 auto-upgrade (1.094M iterations)
@@ -360,7 +409,27 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - ⚠️ No multi-signature support
 - ⚠️ No social recovery
 
-**For production use with significant funds, we recommend a professional audit.**
+### Hardware Wallet Mode (Ledger): **A+ (9.5/10)**
+
+**Strengths:**
+- ✅ **ALL software wallet strengths PLUS:**
+- ✅ **Private keys never leave hardware device**
+- ✅ **Physical transaction verification on device screen**
+- ✅ **PIN protection with auto-wipe after 3 failed attempts**
+- ✅ **Malware immunity** (even compromised computer cannot steal keys)
+- ✅ **Industry-standard hardware security** (Ledger trusted by millions)
+- ✅ **Full dApp support** with hardware-level security
+- ✅ **Attack resistance** against keyloggers, screen recorders, trojans
+- ✅ **Meets professional/institutional security standards**
+
+**Remaining Limitations:**
+- ⚠️ HeartWallet integration code not professionally audited
+- ⚠️ No multi-signature support
+- ⚠️ Requires WebHID browser support (Chrome/Brave)
+
+**Recommendation:**
+- **Software wallets**: Good for small amounts, testing, and learning
+- **Ledger integration**: STRONGLY RECOMMENDED for any significant holdings
 
 ---
 

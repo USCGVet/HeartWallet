@@ -20,6 +20,9 @@
       <div class="button-group">
         <button id="btn-import-wallet">IMPORT EXISTING WALLET</button>
       </div>
+      <div class="button-group">
+        <button id="btn-connect-ledger">CONNECT LEDGER</button>
+      </div>
 
       <!-- Network Selector -->
       <div class="network-selector mt-3">
@@ -157,6 +160,116 @@
       <div class="button-group">
         <button id="btn-import-submit" class="btn-primary">IMPORT WALLET</button>
         <button id="btn-cancel-import">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connect Ledger Screen -->
+  <div id="screen-ledger" class="hidden">
+    <div class="header">
+      <div class="header-title">CONNECT LEDGER</div>
+      <button id="btn-back-from-ledger" class="header-btn">←</button>
+    </div>
+
+    <!-- Network Display -->
+    <div class="container" style="padding-bottom: 8px; padding-top: 8px; border-bottom: 1px solid var(--terminal-border-dim);">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="text-dim" style="font-size: 11px;">NETWORK:</span>
+        <span id="network-display-ledger" class="text-bright" style="font-size: 12px;">PulseChain Testnet V4</span>
+      </div>
+    </div>
+
+    <div class="container">
+      <!-- Step 1: WebHID Support Check -->
+      <div id="ledger-step-check" class="form-group">
+        <div class="panel" style="border-color: var(--terminal-info);">
+          <p style="font-size: 11px; line-height: 1.4; margin-bottom: 12px;">
+            ✨ Connect your Ledger hardware wallet to use HeartWallet as your interface.
+            Your private keys stay secure on the device.
+          </p>
+          <p class="text-dim" style="font-size: 10px; line-height: 1.4;">
+            <strong>Before connecting:</strong><br>
+            1. Plug in your Ledger device<br>
+            2. Unlock it with your PIN<br>
+            3. Open the Ethereum app on the device
+          </p>
+        </div>
+        <div id="ledger-support-error" class="form-error hidden"></div>
+      </div>
+
+      <!-- Step 2: Connect Device -->
+      <div id="ledger-step-connect" class="form-group">
+        <button id="btn-ledger-connect" class="btn-primary" style="width: 100%;">CONNECT DEVICE</button>
+        <p class="text-dim" style="font-size: 10px; margin-top: 8px; text-align: center;">
+          This will open a browser dialog to select your Ledger
+        </p>
+      </div>
+
+      <!-- Step 3: Loading State -->
+      <div id="ledger-step-loading" class="form-group hidden">
+        <div class="panel" style="text-align: center;">
+          <p style="font-size: 11px;">⏳ Connecting to Ledger...</p>
+          <p class="text-dim" style="font-size: 10px; margin-top: 8px;">
+            Please select your device from the browser dialog
+          </p>
+        </div>
+      </div>
+
+      <!-- Step 4: Address Selection -->
+      <div id="ledger-step-addresses" class="form-group hidden">
+        <label class="form-label">Select Address</label>
+        <p class="text-dim" style="font-size: 10px; margin-bottom: 12px;">
+          Choose which Ledger account to add to HeartWallet:
+        </p>
+
+        <div id="ledger-address-list" class="mt-2">
+          <!-- Address list will be populated by JavaScript -->
+        </div>
+
+        <div class="button-group mt-2">
+          <button id="btn-ledger-load-more" class="btn-small">LOAD MORE ADDRESSES</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Nickname and Confirm -->
+      <div id="ledger-step-confirm" class="form-group hidden">
+        <div class="panel" style="background: var(--terminal-bg); border: 1px solid var(--terminal-border);">
+          <p class="text-dim" style="font-size: 10px; margin-bottom: 8px;">Selected Address:</p>
+          <p id="ledger-selected-address" style="font-size: 11px; word-break: break-all; color: var(--terminal-success);">
+            <!-- Address will be shown here -->
+          </p>
+          <p class="text-dim" style="font-size: 10px; margin-top: 8px;">
+            Account: <span id="ledger-selected-index">0</span> |
+            Path: <span id="ledger-selected-path">m/44'/60'/0'/0/0</span>
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ledger-nickname">Wallet Nickname (Optional)</label>
+          <input type="text" id="ledger-nickname" placeholder="e.g., Ledger 1" maxlength="20" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ledger-password">HeartWallet Password</label>
+          <input type="password" id="ledger-password" placeholder="Enter your password" />
+          <p class="form-hint">Required to verify your identity</p>
+        </div>
+
+        <div class="panel" style="border-color: var(--terminal-info); background: var(--terminal-bg);">
+          <p class="text-dim" style="font-size: 10px; line-height: 1.4;">
+            ℹ️ <strong>Hardware Wallet Notice:</strong><br>
+            Your password is only for authentication - your Ledger's private keys stay on the device.
+            You'll need to confirm transactions on your Ledger.
+          </p>
+        </div>
+      </div>
+
+      <div id="ledger-error" class="form-error hidden"></div>
+
+      <!-- Action Buttons -->
+      <div id="ledger-buttons" class="button-group hidden">
+        <button id="btn-ledger-add" class="btn-primary">ADD LEDGER WALLET</button>
+        <button id="btn-ledger-cancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -391,7 +504,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="send-password-panel">
           <div class="form-group">
             <label class="form-label">Password</label>
             <input type="password" id="send-password" class="form-control" placeholder="Enter password" />
@@ -740,6 +853,27 @@
           Add, remove, or switch between wallets. All wallets use the same password.
         </p>
         <button id="btn-manage-wallets" class="btn btn-primary btn-small">MANAGE WALLETS</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Hardware Wallets</div>
+        <p class="text-dim mb-2" style="font-size: 11px;">
+          Enable support for hardware wallets. Your private keys stay on the device.
+        </p>
+        <div class="form-group">
+          <input type="checkbox" id="setting-enable-ledger" />
+          <label for="setting-enable-ledger">Enable Ledger support</label>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px; margin-left: 20px;">
+            Connect Ledger Nano S/X/S Plus via USB (requires Chrome/Edge/Brave)
+          </p>
+        </div>
+        <div class="form-group">
+          <input type="checkbox" id="setting-enable-trezor" />
+          <label for="setting-enable-trezor">Enable Trezor support</label>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px; margin-left: 20px;">
+            Connect Trezor One/Model T via USB (coming soon)
+          </p>
+        </div>
       </div>
 
       <div class="panel">
@@ -1100,7 +1234,7 @@
       </div>
 
       <div class="panel" style="border: 2px solid var(--terminal-warning); background: var(--terminal-bg-secondary);">
-        <div class="form-group">
+        <div class="form-group" id="tx-password-group">
           <label class="form-label" style="color: var(--terminal-warning); font-weight: bold;">⚠️ Password Required</label>
           <input type="password" id="tx-password" class="form-control" placeholder="Enter password to confirm transaction" style="border: 2px solid var(--terminal-warning); background: var(--terminal-bg);" />
           <p style="font-size: 10px; color: var(--terminal-warning); margin-top: 6px; margin-bottom: 0;">
@@ -1440,6 +1574,7 @@
       <div class="button-group">
         <button id="btn-create-new-wallet-multi" class="btn-primary">+ CREATE NEW</button>
         <button id="btn-import-wallet-multi" class="btn-primary">+ IMPORT</button>
+        <button id="btn-connect-ledger-multi" class="btn-primary">+ LEDGER</button>
       </div>
 
       <div class="mt-3">
