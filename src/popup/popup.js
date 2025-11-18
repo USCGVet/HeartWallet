@@ -1506,6 +1506,8 @@ function handleBackFromLedger() {
 async function handleUnlock() {
   const password = document.getElementById('password-unlock').value;
   const errorDiv = document.getElementById('unlock-error');
+  const unlockBtn = document.getElementById('btn-unlock');
+  const passwordInput = document.getElementById('password-unlock');
 
   // Check if locked out due to too many failed attempts
   const lockoutInfo = await checkRateLimitLockout();
@@ -1516,17 +1518,29 @@ async function handleUnlock() {
     return;
   }
 
+  // Disable UI during unlock
+  unlockBtn.disabled = true;
+  passwordInput.disabled = true;
+  const originalBtnText = unlockBtn.textContent;
+  unlockBtn.textContent = 'UNLOCKING...';
+
   try {
     errorDiv.classList.add('hidden');
 
     // Unlock wallet with auto-upgrade notification
-    const { address, signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
+    const { address, signer, upgraded, versionBefore, versionAfter, paramsBefore, paramsAfter } = await unlockWallet(password, {
       onUpgradeStart: (info) => {
-        console.log(`🔐 Auto-upgrading wallet encryption: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()} iterations`);
+        // Handle both version upgrades and parameter upgrades
+        const isVersionUpgrade = info.versionBefore < 3;
+        const upgradeType = isVersionUpgrade ? 'version' : 'parameters';
+        const targetLabel = info.paramsAfter?.label || `${info.paramsAfter?.iterations} iterations`;
+
+        console.log(`🔐 Auto-upgrading wallet ${upgradeType}: v${info.versionBefore} → v${info.versionAfter} (${targetLabel})`);
+
         // Show visual feedback in UI
         const statusDiv = document.createElement('div');
         statusDiv.className = 'status-message info';
-        statusDiv.textContent = `🔐 Upgrading wallet security to ${info.recommendedIterations.toLocaleString()} iterations...`;
+        statusDiv.textContent = `🔐 Upgrading wallet security to Argon2id (${targetLabel})...`;
         errorDiv.parentElement.insertBefore(statusDiv, errorDiv);
         setTimeout(() => statusDiv.remove(), 3000);
       }
@@ -1534,10 +1548,12 @@ async function handleUnlock() {
 
     // Show upgrade completion message if wallet was upgraded
     if (upgraded) {
-      console.log(`✅ Wallet upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()} iterations`);
+      const beforeLabel = paramsBefore ? `v${versionBefore} (${paramsBefore.label || 'Legacy'})` : `v${versionBefore} (Legacy)`;
+      const afterLabel = `v${versionAfter} (${paramsAfter.label})`;
+      console.log(`✅ Wallet upgraded: ${beforeLabel} → ${afterLabel}`);
       const statusDiv = document.createElement('div');
       statusDiv.className = 'status-message success';
-      statusDiv.textContent = `✅ Security upgraded: ${iterationsBefore.toLocaleString()} → ${iterationsAfter.toLocaleString()} iterations`;
+      statusDiv.textContent = `✅ Security upgraded to ${paramsAfter.label}`;
       errorDiv.parentElement.insertBefore(statusDiv, errorDiv);
       setTimeout(() => statusDiv.remove(), 5000);
     }
@@ -1583,6 +1599,11 @@ async function handleUnlock() {
       errorDiv.textContent = `${error.message} (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} remaining)`;
     }
     errorDiv.classList.remove('hidden');
+
+    // Re-enable UI
+    unlockBtn.disabled = false;
+    passwordInput.disabled = false;
+    unlockBtn.textContent = originalBtnText;
   }
 }
 
@@ -2282,10 +2303,14 @@ async function handleSendTransaction() {
       // Software wallet - unlock with password and auto-upgrade if needed
       const unlockResult = await unlockWallet(password, {
         onUpgradeStart: (info) => {
-          console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+          const isVersionUpgrade = info.versionBefore < 3;
+          const upgradeType = isVersionUpgrade ? 'version' : 'parameters';
+          const targetLabel = info.paramsAfter?.label || `${info.paramsAfter?.iterations} iterations`;
+
+          console.log(`🔐 Auto-upgrading wallet ${upgradeType}: v${info.versionBefore} → v${info.versionAfter} (${targetLabel})`);
           const statusDiv = document.createElement('div');
           statusDiv.className = 'status-message info';
-          statusDiv.textContent = '🔐 Upgrading wallet security...';
+          statusDiv.textContent = `🔐 Upgrading wallet security to Argon2id (${targetLabel})...`;
           errorEl.parentElement.insertBefore(statusDiv, errorEl);
           setTimeout(() => statusDiv.remove(), 3000);
         }
@@ -2293,7 +2318,11 @@ async function handleSendTransaction() {
 
       signer = unlockResult.signer;
       if (unlockResult.upgraded) {
-        console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
+        const beforeLabel = unlockResult.paramsBefore
+          ? `v${unlockResult.versionBefore} (${unlockResult.paramsBefore.label || 'Legacy'})`
+          : `v${unlockResult.versionBefore} (Legacy)`;
+        const afterLabel = `v${unlockResult.versionAfter} (${unlockResult.paramsAfter.label})`;
+        console.log(`✅ Wallet upgraded: ${beforeLabel} → ${afterLabel}`);
       }
       connectedSigner = signer.connect(provider);
     }

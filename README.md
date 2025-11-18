@@ -25,7 +25,7 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 - **Ledger hardware wallet support** - Connect Ledger Nano S/X/S Plus via WebHID for maximum security
 - **Create new wallet** with 12-word seed phrase
 - **Import wallet** from seed phrase or private key
-- **Future-proof encryption** - PBKDF2 with automatic security upgrades (1.094M iterations in 2025)
+- **Future-proof encryption** - Argon2id with HKDF-based independent key derivation and automatic parameter scaling through 2040
 - **Secure Chrome local storage** - AES-256-GCM double-encrypted at rest
 - **Lock/unlock functionality** with password
 - **5 visual themes** (High Contrast, Professional, Amber, CGA, Classic Green)
@@ -33,7 +33,9 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 - **Export seed phrase and private key** (password protected)
 
 ### 🔐 Security Features
-- **Future-proof PBKDF2** - Auto-upgrades to current security standards (prevents future GPU attacks)
+- **Memory-hard Argon2id encryption** - GPU/ASIC-resistant with automatic parameter scaling (256 MiB in 2025, scaling to 1 GiB by 2037)
+- **HKDF-based independent keys** - Cryptographically independent Layer 1 (ethers.js scrypt) and Layer 2 (AES-256-GCM) encryption
+- **Automatic security upgrades** - Parameters strengthen every 3 years through 2040 to stay ahead of hardware evolution
 - **Strong password requirements** - 20+ chars recommended, mixed case, numbers, special chars
 - **Auto-lock timer** - Automatically locks after configured inactivity period (15 min default)
 - **Rate limiting** - 5 failed password attempts = 30 minute lockout
@@ -103,7 +105,7 @@ HeartWallet-v3/
 │   │   ├── popup.js            # UI controller
 │   │   └── terminal.css        # Terminal theme styles
 │   ├── core/
-│   │   ├── wallet.js           # Wallet operations & PBKDF2 auto-upgrade
+│   │   ├── wallet.js           # Wallet operations & Argon2id auto-upgrade
 │   │   ├── ledger.js           # Ledger hardware wallet integration
 │   │   ├── storage.js          # Encrypted storage
 │   │   ├── txValidation.js     # Transaction validation
@@ -239,7 +241,8 @@ HeartWallet includes 5 unique visual themes:
 
 HeartWallet implements multiple layers of security:
 
-- ✅ **Future-proof encryption** - PBKDF2 with auto-upgrade (1.094M iterations)
+- ✅ **Memory-hard Argon2id encryption** - GPU/ASIC-resistant with automatic parameter scaling through 2040
+- ✅ **HKDF-based independent keys** - Two cryptographically independent encryption layers
 - ✅ **AES-256-GCM double encryption** - Session + storage encryption
 - ✅ **Strong password requirements** - 12+ chars minimum, 20+ recommended
 - ✅ **Auto-lock timer** - Locks after inactivity (configurable)
@@ -257,7 +260,8 @@ HeartWallet implements multiple layers of security:
 
 👉 **[SECURITY.md](SECURITY.md)** - Comprehensive security guide including:
 - Detailed security features explanation
-- PBKDF2 auto-upgrade system
+- Argon2id encryption architecture and parameter scaling roadmap
+- HKDF-based independent key derivation
 - Best practices (what to do and NOT do)
 - Recommended use cases
 - What to do if compromised

@@ -306,6 +306,13 @@ button:disabled:hover, .btn:disabled:hover {
   box-shadow: 0 0 15px var(--terminal-glow-bright);
 }
 
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--terminal-fg);
+  box-shadow: none;
+}
+
 .btn-danger {
   border-color: var(--terminal-error);
   color: var(--terminal-error);
@@ -351,6 +358,11 @@ input:focus, textarea:focus, select:focus {
 input::placeholder, textarea::placeholder {
   color: var(--terminal-fg-dim);
   opacity: 0.6;
+}
+
+input:disabled, textarea:disabled, select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Select dropdown options styling */
