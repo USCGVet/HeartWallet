@@ -12,7 +12,7 @@ import { save, load } from './storage.js';
 import { isValidMnemonic, isValidPrivateKey, validatePasswordStrength } from './validation.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { argon2id } from '@noble/hashes/argon2.js';
+import Argon2Worker from '../workers/argon2-worker.js?worker';
 
 // ===== PBKDF2 ITERATION RECOMMENDATIONS =====
 // Based on historical OWASP data and GPU cracking speed trends
@@ -299,27 +299,46 @@ async function deriveIndependentKeysPBKDF2(password, salt, iterations) {
  * @param {number} params.memory - Memory in KiB (default: year-based from roadmap)
  * @param {number} params.iterations - Time cost (default: year-based from roadmap)
  * @param {number} params.parallelism - Parallelism (default: 1)
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0)
  * @returns {Promise<{layer1Password: string, layer2Key: Uint8Array}>}
  */
-async function deriveIndependentKeys(password, salt, params = null) {
+async function deriveIndependentKeys(password, salt, params = null, onProgress = null) {
   const encoder = new TextEncoder();
-  const passwordBytes = encoder.encode(password);
 
   // Get parameters: use provided or get current year's recommendations
   const argonParams = params || getRecommendedArgon2Params();
 
-  // Step 1: Derive master key using Argon2id (memory-hard, GPU-resistant)
-  // Parameters from roadmap or explicitly provided for compatibility
-  const masterKeyBytes = argon2id(
-    passwordBytes,              // Password
-    salt,                       // Salt (32 bytes)
-    {
-      m: argonParams.memory,        // Memory in KiB (from roadmap)
-      t: argonParams.iterations,    // Time cost (passes over memory)
-      p: argonParams.parallelism || 1, // Parallelism (browser constraint)
-      dkLen: 32                     // Output 32 bytes (256 bits)
-    }
-  );
+  // Step 1: Derive master key using Argon2id in Web Worker (prevents UI blocking)
+  const masterKeyBytes = await new Promise((resolve, reject) => {
+    // Create worker instance
+    const worker = new Argon2Worker();
+
+    worker.onmessage = (e) => {
+      const { type, progress, result, error } = e.data;
+
+      if (type === 'progress' && onProgress) {
+        onProgress(progress);
+      } else if (type === 'complete') {
+        worker.terminate();
+        resolve(new Uint8Array(result));
+      } else if (type === 'error') {
+        worker.terminate();
+        reject(new Error(error));
+      }
+    };
+
+    worker.onerror = (error) => {
+      worker.terminate();
+      reject(error);
+    };
+
+    // Send computation request to worker
+    worker.postMessage({
+      password,
+      salt: Array.from(salt),
+      params: argonParams
+    });
+  });
 
   // Step 2: Use HKDF to derive two cryptographically independent keys
   // Context strings ensure keys are different even with same input
@@ -660,10 +679,11 @@ async function generateDefaultNickname() {
  * @param {Object} data - {mnemonic?, privateKey?}
  * @param {string} password - User password for encryption
  * @param {string} nickname - Optional custom nickname
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0) for Argon2id encryption
  * @returns {Promise<{id: string, address: string, mnemonic?: string}>}
  * @throws {Error} If validation fails or wallet creation fails
  */
-export async function addWallet(type, data, password, nickname = null) {
+export async function addWallet(type, data, password, nickname = null, onProgress = null) {
   // Validate password strength (skip for hardware wallets - they don't need encryption)
   if (type !== 'ledger') {
     const passwordCheck = validatePasswordStrength(password);
@@ -765,7 +785,7 @@ export async function addWallet(type, data, password, nickname = null) {
       const salt = crypto.getRandomValues(new Uint8Array(32));
 
       // Step 3: Derive two independent keys using Argon2id + HKDF with recommended params
-      const { layer1Password, layer2Key } = await deriveIndependentKeys(password, salt, argonParams);
+      const { layer1Password, layer2Key } = await deriveIndependentKeys(password, salt, argonParams, onProgress);
 
       // Step 4: Layer 1 encryption - ethers.js scrypt with derived password
       const encryptedJson = await wallet.encrypt(layer1Password);
@@ -879,7 +899,7 @@ export async function renameWallet(walletId, newNickname) {
  * @returns {Promise<void>}
  * @throws {Error} If password is incorrect or wallet not found
  */
-export async function deleteWallet(walletId, password) {
+export async function deleteWallet(walletId, password, options = {}) {
   const walletsData = await getAllWallets();
   const walletIndex = walletsData.walletList.findIndex(w => w.id === walletId);
 
@@ -897,7 +917,7 @@ export async function deleteWallet(walletId, password) {
 
     if (softwareWallet) {
       // Verify password by trying to unlock a software wallet
-      await unlockSpecificWallet(softwareWallet.id, password);
+      await unlockSpecificWallet(softwareWallet.id, password, options);
     }
     // If there are no software wallets (only hardware), skip password verification
   }
@@ -923,6 +943,7 @@ export async function deleteWallet(walletId, password) {
  * @param {Object} options - Optional settings
  * @param {boolean} options.skipUpgrade - Skip auto-upgrade (for testing)
  * @param {Function} options.onUpgradeStart - Callback when upgrade starts
+ * @param {Function} options.onProgress - Progress callback (0.0 to 1.0) for Argon2id decryption
  * @returns {Promise<{address: string, signer: ethers.Wallet, upgraded?: boolean}>}
  * @throws {Error} If password is incorrect or no active wallet
  */
@@ -944,6 +965,7 @@ export async function unlockWallet(password, options = {}) {
  * @param {Object} options - Optional settings
  * @param {boolean} options.skipUpgrade - Skip auto-upgrade (for testing/export)
  * @param {Function} options.onUpgradeStart - Callback when upgrade starts
+ * @param {Function} options.onProgress - Progress callback (0.0 to 1.0) for Argon2id decryption
  * @returns {Promise<{address: string, signer: ethers.Wallet, upgraded?: boolean, iterationsBefore?: number, iterationsAfter?: number}>}
  * @throws {Error} If password is incorrect or wallet not found
  */
@@ -977,7 +999,7 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
       };
 
       // Step 3: Derive both independent keys using Argon2id + HKDF with wallet's params
-      const { layer1Password, layer2Key } = await deriveIndependentKeys(password, salt, walletParams);
+      const { layer1Password, layer2Key } = await deriveIndependentKeys(password, salt, walletParams, options.onProgress);
 
       // Step 4: Decrypt Layer 2 (AES-GCM) with layer2Key
       const keystoreJson = await decryptWithAES(wallet.encryptedKeystore, layer2Key);
@@ -1209,8 +1231,8 @@ export async function exportMnemonic(password) {
  * @returns {Promise<string>} Hex private key
  * @throws {Error} If password is incorrect or wallet not found
  */
-export async function exportPrivateKeyForWallet(walletId, password) {
-  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true });
+export async function exportPrivateKeyForWallet(walletId, password, options = {}) {
+  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true, ...options });
   return signer.privateKey;
 }
 
@@ -1221,8 +1243,8 @@ export async function exportPrivateKeyForWallet(walletId, password) {
  * @returns {Promise<string|null>} 12-word mnemonic or null if not available
  * @throws {Error} If password is incorrect or wallet not found
  */
-export async function exportMnemonicForWallet(walletId, password) {
-  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true });
+export async function exportMnemonicForWallet(walletId, password, options = {}) {
+  const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true, ...options });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
 }
 
@@ -1268,10 +1290,11 @@ export async function createWallet(password) {
  * LEGACY: Imports from mnemonic (for initial setup compatibility)
  * @param {string} mnemonic - 12-word seed phrase
  * @param {string} password - User password
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0)
  * @returns {Promise<{address: string}>}
  */
-export async function importFromMnemonic(mnemonic, password) {
-  const result = await addWallet('mnemonic', { mnemonic }, password, 'Main Wallet');
+export async function importFromMnemonic(mnemonic, password, onProgress = null) {
+  const result = await addWallet('mnemonic', { mnemonic }, password, 'Main Wallet', onProgress);
   return {
     address: result.address
   };
@@ -1281,10 +1304,11 @@ export async function importFromMnemonic(mnemonic, password) {
  * LEGACY: Imports from private key (for initial setup compatibility)
  * @param {string} privateKey - Hex private key
  * @param {string} password - User password
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0)
  * @returns {Promise<{address: string}>}
  */
-export async function importFromPrivateKey(privateKey, password) {
-  const result = await addWallet('privatekey', { privateKey }, password, 'Main Wallet');
+export async function importFromPrivateKey(privateKey, password, onProgress = null) {
+  const result = await addWallet('privatekey', { privateKey }, password, 'Main Wallet', onProgress);
   return {
     address: result.address
   };

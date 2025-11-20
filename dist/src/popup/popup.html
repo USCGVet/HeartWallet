@@ -105,6 +105,14 @@
 
       <div id="create-error" class="form-error hidden"></div>
 
+      <div id="create-progress-container" class="progress-container hidden">
+        <div class="progress-label">Creating wallet...</div>
+        <div class="progress-bar-bg">
+          <div id="create-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="create-progress-text" class="progress-text">0%</div>
+      </div>
+
       <div class="button-group">
         <button id="btn-create-submit" class="btn-primary" disabled>CREATE WALLET</button>
         <button id="btn-cancel-create">CANCEL</button>
@@ -158,6 +166,14 @@
       </div>
 
       <div id="import-error" class="form-error hidden"></div>
+
+      <div id="import-progress-container" class="progress-container hidden">
+        <div class="progress-label">Importing wallet...</div>
+        <div class="progress-bar-bg">
+          <div id="import-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="import-progress-text" class="progress-text">0%</div>
+      </div>
 
       <div class="button-group">
         <button id="btn-import-submit" class="btn-primary">IMPORT WALLET</button>
@@ -288,6 +304,14 @@
       </div>
 
       <div id="unlock-error" class="form-error hidden"></div>
+
+      <div id="unlock-progress-container" class="progress-container hidden">
+        <div class="progress-label">Decrypting...</div>
+        <div class="progress-bar-bg">
+          <div id="unlock-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="unlock-progress-text" class="progress-text">0%</div>
+      </div>
 
       <div class="button-group">
         <button id="btn-unlock" class="btn-primary">UNLOCK</button>
@@ -511,6 +535,15 @@
             <label class="form-label">Password</label>
             <input type="password" id="send-password" class="form-control" placeholder="Enter password" />
           </div>
+        </div>
+
+        <!-- Progress bar for password validation -->
+        <div id="send-progress-container" class="progress-container hidden">
+          <div class="progress-label">Decrypting...</div>
+          <div class="progress-bar-bg">
+            <div id="send-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="send-progress-text" class="progress-text">0%</div>
         </div>
 
         <p id="send-error" class="text-danger text-center hidden"></p>
@@ -770,6 +803,15 @@
             <label class="form-label">Password</label>
             <input type="password" id="token-details-password" class="form-control" placeholder="Enter password" />
           </div>
+        </div>
+
+        <!-- Progress bar for password validation -->
+        <div id="token-send-progress-container" class="progress-container hidden">
+          <div class="progress-label">Decrypting...</div>
+          <div class="progress-bar-bg">
+            <div id="token-send-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="token-send-progress-text" class="progress-text">0%</div>
         </div>
 
         <p id="token-details-send-error" class="text-danger text-center hidden"></p>
@@ -1245,6 +1287,15 @@
         </div>
       </div>
 
+      <!-- Progress bar for password validation -->
+      <div id="tx-approval-progress-container" class="progress-container hidden">
+        <div class="progress-label">Decrypting...</div>
+        <div class="progress-bar-bg">
+          <div id="tx-approval-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="tx-approval-progress-text" class="progress-text">0%</div>
+      </div>
+
       <p id="tx-error" class="text-danger text-center hidden"></p>
 
       <div class="button-group mt-3" id="tx-approval-buttons">
@@ -1347,6 +1398,15 @@
         <p id="sign-error" class="error-message hidden"></p>
       </div>
 
+      <!-- Progress bar for password validation -->
+      <div id="sign-progress-container" class="progress-container hidden">
+        <div class="progress-label">Decrypting...</div>
+        <div class="progress-bar-bg">
+          <div id="sign-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="sign-progress-text" class="progress-text">0%</div>
+      </div>
+
       <div style="display: flex; gap: 12px;">
         <button id="btn-reject-sign" class="btn-small" style="flex: 1; background: var(--terminal-error);">
           REJECT
@@ -1410,6 +1470,15 @@
         <label class="form-label" for="sign-typed-password">Enter Password to Sign</label>
         <input type="password" id="sign-typed-password" class="form-control" placeholder="Password" />
         <p id="sign-typed-error" class="error-message hidden"></p>
+      </div>
+
+      <!-- Progress bar for password validation -->
+      <div id="sign-typed-progress-container" class="progress-container hidden">
+        <div class="progress-label">Decrypting...</div>
+        <div class="progress-bar-bg">
+          <div id="sign-typed-progress-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="sign-typed-progress-text" class="progress-text">0%</div>
       </div>
 
       <div style="display: flex; gap: 12px;">
@@ -1601,7 +1670,17 @@
           <input type="password" id="password-prompt-input" placeholder="Enter password" autofocus />
         </div>
         <div id="password-prompt-error" class="form-error hidden"></div>
-        <div class="button-group mt-2">
+
+        <!-- Progress bar for wallet creation/import -->
+        <div id="password-prompt-progress-container" class="progress-container hidden">
+          <div class="progress-label">Encrypting wallet...</div>
+          <div class="progress-bar-bg">
+            <div id="password-prompt-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="password-prompt-progress-text" class="progress-text">0%</div>
+        </div>
+
+        <div class="button-group mt-2" id="password-prompt-buttons">
           <button id="btn-password-prompt-confirm" class="btn-primary">CONFIRM</button>
           <button id="btn-password-prompt-cancel">CANCEL</button>
         </div>
@@ -1824,6 +1903,14 @@
             </div>
           </div>
           <p id="verification-error-multi" class="text-danger hidden" style="font-size: 11px; margin-top: 8px;"></p>
+
+          <div id="create-multi-progress-container" class="progress-container hidden">
+            <div class="progress-label">Creating wallet...</div>
+            <div class="progress-bar-bg">
+              <div id="create-multi-progress-bar" class="progress-bar-fill"></div>
+            </div>
+            <div id="create-multi-progress-text" class="progress-text">0%</div>
+          </div>
         </div>
 
         <div class="button-group mt-2">
@@ -1854,6 +1941,14 @@
 
         <div id="import-seed-error-multi" class="form-error hidden"></div>
 
+        <div id="import-seed-multi-progress-container" class="progress-container hidden">
+          <div class="progress-label">Importing wallet...</div>
+          <div class="progress-bar-bg">
+            <div id="import-seed-multi-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="import-seed-multi-progress-text" class="progress-text">0%</div>
+        </div>
+
         <div class="button-group mt-2">
           <button id="btn-confirm-import-seed-multi" class="btn-primary">IMPORT WALLET</button>
           <button id="btn-cancel-import-seed-multi">CANCEL</button>
@@ -1881,6 +1976,14 @@
         </div>
 
         <div id="import-key-error-multi" class="form-error hidden"></div>
+
+        <div id="import-key-multi-progress-container" class="progress-container hidden">
+          <div class="progress-label">Importing wallet...</div>
+          <div class="progress-bar-bg">
+            <div id="import-key-multi-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="import-key-multi-progress-text" class="progress-text">0%</div>
+        </div>
 
         <div class="button-group mt-2">
           <button id="btn-confirm-import-key-multi" class="btn-primary">IMPORT WALLET</button>

@@ -19,7 +19,9 @@
       "Bash(npm update:*)",
       "Bash(npm run test:unit:*)",
       "Bash(npm install:*)",
-      "Bash(npm run test:unit:run:*)"
+      "Bash(npm run test:unit:run:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": [],
     "ask": []

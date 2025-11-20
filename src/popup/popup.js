@@ -706,7 +706,11 @@ function setupEventListeners() {
   document.getElementById('btn-password-prompt-confirm')?.addEventListener('click', () => {
     const password = document.getElementById('password-prompt-input').value;
     if (password) {
-      closePasswordPrompt(password);
+      // Don't close modal here - let the calling code handle it after showing progress
+      if (passwordPromptResolve) {
+        passwordPromptResolve(password);
+        passwordPromptResolve = null;
+      }
     }
   });
 
@@ -1027,12 +1031,39 @@ async function handleCreateWallet() {
     return;
   }
 
+  const progressContainer = document.getElementById('create-progress-container');
+  const progressBar = document.getElementById('create-progress-bar');
+  const progressText = document.getElementById('create-progress-text');
+  const createBtn = document.getElementById('btn-create-submit');
+
   try {
     errorDiv.classList.add('hidden');
     verificationErrorDiv.classList.add('hidden');
 
+    // Disable button and show progress bar
+    createBtn.disabled = true;
+    if (progressContainer) {
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+    }
+
+    let lastDisplayedPercentage = 0;
+
     // Import wallet from the mnemonic we already generated
-    const { address } = await importFromMnemonic(generatedMnemonic, password);
+    const { address } = await importFromMnemonic(generatedMnemonic, password, (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    });
+
+    // Hide progress bar
+    if (progressContainer) {
+      progressContainer.classList.add('hidden');
+    }
 
     // Success! Navigate to dashboard
     alert('Wallet created successfully!');
@@ -1050,6 +1081,12 @@ async function handleCreateWallet() {
     showScreen('screen-dashboard');
     updateDashboard();
   } catch (error) {
+    // Hide progress bar and re-enable button
+    if (progressContainer) {
+      progressContainer.classList.add('hidden');
+    }
+    createBtn.disabled = false;
+
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
   }
@@ -1069,19 +1106,43 @@ async function handleImportWallet() {
     return;
   }
 
+  // Get progress bar elements
+  const progressContainer = document.getElementById('import-progress-container');
+  const progressBar = document.getElementById('import-progress-bar');
+  const progressText = document.getElementById('import-progress-text');
+
   try {
     errorDiv.classList.add('hidden');
+
+    // Show progress bar
+    progressContainer.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
 
     let address;
     if (method === 'mnemonic') {
       const mnemonic = document.getElementById('import-mnemonic').value;
-      const result = await importFromMnemonic(mnemonic, password);
+      const result = await importFromMnemonic(mnemonic, password, { onProgress });
       address = result.address;
     } else {
       const privateKey = document.getElementById('import-privatekey').value;
-      const result = await importFromPrivateKey(privateKey, password);
+      const result = await importFromPrivateKey(privateKey, password, { onProgress });
       address = result.address;
     }
+
+    // Hide progress bar
+    progressContainer.classList.add('hidden');
 
     // Success!
     alert('Wallet imported successfully!');
@@ -1090,6 +1151,9 @@ async function handleImportWallet() {
     showScreen('screen-dashboard');
     updateDashboard();
   } catch (error) {
+    // Hide progress bar on error
+    progressContainer.classList.add('hidden');
+
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
   }
@@ -1508,6 +1572,22 @@ async function handleUnlock() {
   const errorDiv = document.getElementById('unlock-error');
   const unlockBtn = document.getElementById('btn-unlock');
   const passwordInput = document.getElementById('password-unlock');
+  const progressContainer = document.getElementById('unlock-progress-container');
+  const progressBar = document.getElementById('unlock-progress-bar');
+  const progressText = document.getElementById('unlock-progress-text');
+
+  // Disable UI immediately to prevent multiple clicks
+  unlockBtn.disabled = true;
+  passwordInput.disabled = true;
+  const originalBtnText = unlockBtn.textContent;
+  unlockBtn.textContent = 'UNLOCKING...';
+
+  // Show progress bar
+  if (progressContainer) {
+    progressContainer.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+  }
 
   // Check if locked out due to too many failed attempts
   const lockoutInfo = await checkRateLimitLockout();
@@ -1515,20 +1595,41 @@ async function handleUnlock() {
     const remainingMinutes = Math.ceil(lockoutInfo.remainingMs / 1000 / 60);
     errorDiv.textContent = `Too many failed attempts. Please wait ${remainingMinutes} minute(s) before trying again.`;
     errorDiv.classList.remove('hidden');
+
+    // Re-enable UI and hide progress bar
+    unlockBtn.disabled = false;
+    passwordInput.disabled = false;
+    unlockBtn.textContent = originalBtnText;
+    if (progressContainer) {
+      progressContainer.classList.add('hidden');
+    }
     return;
   }
-
-  // Disable UI during unlock
-  unlockBtn.disabled = true;
-  passwordInput.disabled = true;
-  const originalBtnText = unlockBtn.textContent;
-  unlockBtn.textContent = 'UNLOCKING...';
 
   try {
     errorDiv.classList.add('hidden');
 
-    // Unlock wallet with auto-upgrade notification
+    // Track last displayed percentage to throttle UI updates
+    let lastDisplayedPercentage = 0;
+
+    // Unlock wallet with auto-upgrade notification and progress tracking
     const { address, signer, upgraded, versionBefore, versionAfter, paramsBefore, paramsAfter } = await unlockWallet(password, {
+      onProgress: (progress) => {
+        // Update progress bar (progress is 0.0 to 1.0)
+        const percentage = Math.round(progress * 100);
+
+        // Only update UI when percentage actually changes (throttle updates)
+        if (percentage !== lastDisplayedPercentage) {
+          lastDisplayedPercentage = percentage;
+
+          if (progressBar) {
+            progressBar.style.width = `${percentage}%`;
+          }
+          if (progressText) {
+            progressText.textContent = `${percentage}%`;
+          }
+        }
+      },
       onUpgradeStart: (info) => {
         // Handle both version upgrades and parameter upgrades
         const isVersionUpgrade = info.versionBefore < 3;
@@ -1583,6 +1684,14 @@ async function handleUnlock() {
     // Start auto-lock timer
     startAutoLockTimer();
 
+    // Re-enable UI and hide progress bar before switching screens
+    unlockBtn.disabled = false;
+    passwordInput.disabled = false;
+    unlockBtn.textContent = originalBtnText;
+    if (progressContainer) {
+      progressContainer.classList.add('hidden');
+    }
+
     showScreen('screen-dashboard');
     updateDashboard();
   } catch (error) {
@@ -1600,10 +1709,13 @@ async function handleUnlock() {
     }
     errorDiv.classList.remove('hidden');
 
-    // Re-enable UI
+    // Re-enable UI and hide progress bar
     unlockBtn.disabled = false;
     passwordInput.disabled = false;
     unlockBtn.textContent = originalBtnText;
+    if (progressContainer) {
+      progressContainer.classList.add('hidden');
+    }
   }
 }
 
@@ -2301,7 +2413,25 @@ async function handleSendTransaction() {
       errorEl.classList.remove('hidden');
     } else {
       // Software wallet - unlock with password and auto-upgrade if needed
+      // Show progress bar
+      const progressContainer = document.getElementById('send-progress-container');
+      const progressBar = document.getElementById('send-progress-bar');
+      const progressText = document.getElementById('send-progress-text');
+
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+
+      let lastDisplayedPercentage = 0;
       const unlockResult = await unlockWallet(password, {
+        onProgress: (progress) => {
+          const percentage = Math.round(progress * 100);
+          if (percentage !== lastDisplayedPercentage) {
+            lastDisplayedPercentage = percentage;
+            if (progressBar) progressBar.style.width = `${percentage}%`;
+            if (progressText) progressText.textContent = `${percentage}%`;
+          }
+        },
         onUpgradeStart: (info) => {
           const isVersionUpgrade = info.versionBefore < 3;
           const upgradeType = isVersionUpgrade ? 'version' : 'parameters';
@@ -2315,6 +2445,9 @@ async function handleSendTransaction() {
           setTimeout(() => statusDiv.remove(), 3000);
         }
       });
+
+      // Hide progress bar
+      progressContainer.classList.add('hidden');
 
       signer = unlockResult.signer;
       if (unlockResult.upgraded) {
@@ -3244,19 +3377,44 @@ async function handleTokenSend() {
 
     } else {
       // Software wallet flow
+      // Show progress bar
+      const progressContainer = document.getElementById('token-send-progress-container');
+      const progressBar = document.getElementById('token-send-progress-bar');
+      const progressText = document.getElementById('token-send-progress-text');
+
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+
       let signer;
       try {
+        let lastDisplayedPercentage = 0;
         const unlockResult = await unlockWallet(password, {
+          onProgress: (progress) => {
+            const percentage = Math.round(progress * 100);
+            if (percentage !== lastDisplayedPercentage) {
+              lastDisplayedPercentage = percentage;
+              if (progressBar) progressBar.style.width = `${percentage}%`;
+              if (progressText) progressText.textContent = `${percentage}%`;
+            }
+          },
           onUpgradeStart: (info) => {
             console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
           }
         });
+
+        // Hide progress bar
+        progressContainer.classList.add('hidden');
+
         signer = unlockResult.signer;
 
         if (unlockResult.upgraded) {
           console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
         }
       } catch (err) {
+        // Hide progress bar on error
+        progressContainer.classList.add('hidden');
+
         errorEl.textContent = err.message || 'Incorrect password';
         errorEl.classList.remove('hidden');
         // Re-enable button on password error
@@ -3908,8 +4066,35 @@ async function handleCreateNewWalletMulti() {
     return;
   }
 
+  // Show progress bar in password prompt modal
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+  progressContainer.classList.remove('hidden');
+  buttonsContainer.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = '0%';
+
   try {
-    await addWallet('create', {}, password, nickname || null);
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
+
+    await addWallet('create', {}, password, nickname || null, onProgress);
+
+    // Hide progress bar and close password prompt
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
 
     // Clear form
     document.getElementById('input-new-wallet-nickname').value = '';
@@ -3924,6 +4109,11 @@ async function handleCreateNewWalletMulti() {
 
     alert('Wallet created successfully!');
   } catch (error) {
+    // Hide progress bar and restore buttons
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
+
     alert('Error creating wallet: ' + error.message);
   }
 }
@@ -3953,8 +4143,35 @@ async function handleImportSeedMulti() {
     return;
   }
 
+  // Show progress bar in password prompt modal
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+  progressContainer.classList.remove('hidden');
+  buttonsContainer.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = '0%';
+
   try {
-    await addWallet('mnemonic', { mnemonic }, password, nickname || null);
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
+
+    await addWallet('mnemonic', { mnemonic }, password, nickname || null, onProgress);
+
+    // Hide progress bar and close password prompt
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
 
     // Clear form
     document.getElementById('input-import-seed-nickname').value = '';
@@ -3965,6 +4182,11 @@ async function handleImportSeedMulti() {
 
     alert('Wallet imported successfully!');
   } catch (error) {
+    // Hide progress bar and restore buttons
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
+
     // Show error and reopen modal
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
@@ -3997,8 +4219,35 @@ async function handleImportKeyMulti() {
     return;
   }
 
+  // Show progress bar in password prompt modal
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+  progressContainer.classList.remove('hidden');
+  buttonsContainer.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = '0%';
+
   try {
-    await addWallet('privatekey', { privateKey }, password, nickname || null);
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
+
+    await addWallet('privatekey', { privateKey }, password, nickname || null, onProgress);
+
+    // Hide progress bar and close password prompt
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
 
     // Clear form
     document.getElementById('input-import-key-nickname').value = '';
@@ -4009,6 +4258,11 @@ async function handleImportKeyMulti() {
 
     alert('Wallet imported successfully!');
   } catch (error) {
+    // Hide progress bar and restore buttons
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+    document.getElementById('modal-password-prompt').classList.add('hidden');
+
     // Show error and reopen modal
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
@@ -4111,8 +4365,36 @@ async function handleDeleteWalletMulti(walletId) {
     }
   }
 
+  // Show progress bar in password prompt modal
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const progressLabel = progressContainer.querySelector('.progress-label');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+  progressLabel.textContent = 'Decrypting...';
+  progressContainer.classList.remove('hidden');
+  buttonsContainer.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = '0%';
+
   try {
-    await deleteWallet(walletId, password);
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
+
+    await deleteWallet(walletId, password, { onProgress });
+
+    // Hide progress bar and close password prompt
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     closePasswordPrompt();
 
     // Refresh wallet list
@@ -4128,6 +4410,10 @@ async function handleDeleteWalletMulti(walletId) {
 
     alert('Wallet deleted successfully!');
   } catch (error) {
+    // Hide progress bar and restore buttons
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+
     alert('Error deleting wallet: ' + error.message);
   }
 }
@@ -4138,20 +4424,51 @@ async function handleExportForWallet(walletId) {
 
   if (!password) return;
 
+  // Show progress bar in password prompt modal
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const progressLabel = progressContainer.querySelector('.progress-label');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+  progressLabel.textContent = 'Decrypting...';
+  progressContainer.classList.remove('hidden');
+  buttonsContainer.classList.add('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = '0%';
+
   try {
+    // Progress callback with throttling
+    let lastDisplayedPercentage = 0;
+    const onProgress = (progress) => {
+      const percentage = Math.round(progress * 100);
+      if (percentage !== lastDisplayedPercentage) {
+        lastDisplayedPercentage = percentage;
+        if (progressBar) progressBar.style.width = `${percentage}%`;
+        if (progressText) progressText.textContent = `${percentage}%`;
+      }
+    };
+
     // Try to get mnemonic first
-    const mnemonic = await exportMnemonicForWallet(walletId, password);
+    const mnemonic = await exportMnemonicForWallet(walletId, password, { onProgress });
 
     if (mnemonic) {
       showSecretModal('Seed Phrase', mnemonic);
     } else {
       // No mnemonic, show private key
-      const privateKey = await exportPrivateKeyForWallet(walletId, password);
+      const privateKey = await exportPrivateKeyForWallet(walletId, password, { onProgress });
       showSecretModal('Private Key', privateKey);
     }
 
+    // Hide progress bar and close password prompt
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     closePasswordPrompt();
   } catch (error) {
+    // Hide progress bar and restore buttons
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
+
     alert('Error exporting wallet: ' + error.message);
   }
 }
@@ -5293,38 +5610,80 @@ async function handleTransactionApprovalScreen(requestId) {
           });
 
         } else {
-          // Software wallet - use password session
+          // Software wallet - validate password with progress bar first
           const activeWallet = await getActiveWallet();
-          const tempSessionResponse = await chrome.runtime.sendMessage({
-            type: 'CREATE_SESSION',
-            password,
-            walletId: activeWallet.id,
-            durationMs: 60000 // 1 minute temporary session
-          });
 
-          if (!tempSessionResponse.success) {
-            throw new Error('Invalid password');
-          }
+          // Show progress bar and hide error
+          const progressContainer = document.getElementById('tx-approval-progress-container');
+          const progressBar = document.getElementById('tx-approval-progress-bar');
+          const progressText = document.getElementById('tx-approval-progress-text');
 
-          const response = await chrome.runtime.sendMessage({
-            type: 'TRANSACTION_APPROVAL',
-            requestId,
-            approved: true,
-            sessionToken: tempSessionResponse.sessionToken,
-            gasPrice,
-            customNonce
-          });
+          progressContainer.classList.remove('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = '0%';
 
-          if (response.success) {
-            // Hide approval form and show status section
-            showTransactionStatus(response.txHash, activeWallet.address, requestId);
-          } else {
-            errorEl.textContent = response.error || 'Transaction failed';
+          try {
+            // Validate password with progress tracking
+            let lastDisplayedPercentage = 0;
+            await unlockWallet(password, {
+              onProgress: (progress) => {
+                const percentage = Math.round(progress * 100);
+                if (percentage !== lastDisplayedPercentage) {
+                  lastDisplayedPercentage = percentage;
+                  if (progressBar) progressBar.style.width = `${percentage}%`;
+                  if (progressText) progressText.textContent = `${percentage}%`;
+                }
+              }
+            });
+
+            // Password is valid! Hide progress bar
+            progressContainer.classList.add('hidden');
+
+            // Create session with validated password
+            const tempSessionResponse = await chrome.runtime.sendMessage({
+              type: 'CREATE_SESSION',
+              password,
+              walletId: activeWallet.id,
+              durationMs: 60000 // 1 minute temporary session
+            });
+
+            if (!tempSessionResponse.success) {
+              throw new Error('Failed to create session');
+            }
+
+            const response = await chrome.runtime.sendMessage({
+              type: 'TRANSACTION_APPROVAL',
+              requestId,
+              approved: true,
+              sessionToken: tempSessionResponse.sessionToken,
+              gasPrice,
+              customNonce
+            });
+
+            if (response.success) {
+              // Hide approval form and show status section
+              showTransactionStatus(response.txHash, activeWallet.address, requestId);
+            } else {
+              errorEl.textContent = response.error || 'Transaction failed';
+              errorEl.classList.remove('hidden');
+              // Re-enable button on error so user can try again
+              approveBtn.disabled = false;
+              approveBtn.style.opacity = '1';
+              approveBtn.style.cursor = 'pointer';
+            }
+          } catch (unlockError) {
+            // Hide progress bar on error
+            progressContainer.classList.add('hidden');
+
+            // Show error message
+            errorEl.textContent = unlockError.message || 'Incorrect password';
             errorEl.classList.remove('hidden');
+
             // Re-enable button on error so user can try again
             approveBtn.disabled = false;
             approveBtn.style.opacity = '1';
             approveBtn.style.cursor = 'pointer';
+            throw unlockError; // Re-throw to trigger outer catch
           }
         }
       } catch (error) {
@@ -5608,7 +5967,7 @@ async function handleMessageSignApprovalScreen(requestId) {
           }
 
         } else {
-          // Software wallet signing - use password
+          // Software wallet signing - validate password with progress bar first
           const password = document.getElementById('sign-password').value;
 
           if (!password) {
@@ -5620,35 +5979,75 @@ async function handleMessageSignApprovalScreen(requestId) {
             return;
           }
 
-          // Create a temporary session for this signing using the entered password
-          const tempSessionResponse = await chrome.runtime.sendMessage({
-            type: 'CREATE_SESSION',
-            password,
-            walletId: activeWallet.id,
-            durationMs: 60000 // 1 minute temporary session
-          });
+          // Show progress bar and hide error
+          const progressContainer = document.getElementById('sign-progress-container');
+          const progressBar = document.getElementById('sign-progress-bar');
+          const progressText = document.getElementById('sign-progress-text');
 
-          if (!tempSessionResponse.success) {
-            throw new Error('Invalid password');
-          }
+          progressContainer.classList.remove('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = '0%';
 
-          const response = await chrome.runtime.sendMessage({
-            type: 'SIGN_APPROVAL',
-            requestId,
-            approved: true,
-            sessionToken: tempSessionResponse.sessionToken
-          });
+          try {
+            // Validate password with progress tracking
+            let lastDisplayedPercentage = 0;
+            await unlockWallet(password, {
+              onProgress: (progress) => {
+                const percentage = Math.round(progress * 100);
+                if (percentage !== lastDisplayedPercentage) {
+                  lastDisplayedPercentage = percentage;
+                  if (progressBar) progressBar.style.width = `${percentage}%`;
+                  if (progressText) progressText.textContent = `${percentage}%`;
+                }
+              }
+            });
 
-          if (response.success) {
-            // Close the popup window
-            window.close();
-          } else {
-            errorEl.textContent = response.error || 'Signing failed';
+            // Password is valid! Hide progress bar
+            progressContainer.classList.add('hidden');
+
+            // Create a temporary session for this signing using the entered password
+            const tempSessionResponse = await chrome.runtime.sendMessage({
+              type: 'CREATE_SESSION',
+              password,
+              walletId: activeWallet.id,
+              durationMs: 60000 // 1 minute temporary session
+            });
+
+            if (!tempSessionResponse.success) {
+              throw new Error('Failed to create session');
+            }
+
+            const response = await chrome.runtime.sendMessage({
+              type: 'SIGN_APPROVAL',
+              requestId,
+              approved: true,
+              sessionToken: tempSessionResponse.sessionToken
+            });
+
+            if (response.success) {
+              // Close the popup window
+              window.close();
+            } else {
+              errorEl.textContent = response.error || 'Signing failed';
+              errorEl.classList.remove('hidden');
+              // Re-enable button on error so user can try again
+              approveBtn.disabled = false;
+              approveBtn.style.opacity = '1';
+              approveBtn.style.cursor = 'pointer';
+            }
+          } catch (unlockError) {
+            // Hide progress bar on error
+            progressContainer.classList.add('hidden');
+
+            // Show error message
+            errorEl.textContent = unlockError.message || 'Incorrect password';
             errorEl.classList.remove('hidden');
+
             // Re-enable button on error so user can try again
             approveBtn.disabled = false;
             approveBtn.style.opacity = '1';
             approveBtn.style.cursor = 'pointer';
+            throw unlockError; // Re-throw to trigger outer catch
           }
         }
       } catch (error) {
@@ -5754,36 +6153,76 @@ async function handleTypedDataSignApprovalScreen(requestId) {
       try {
         errorEl.classList.add('hidden');
 
-        // Create a temporary session for this signing using the entered password
-        const activeWallet = await getActiveWallet();
-        const tempSessionResponse = await chrome.runtime.sendMessage({
-          type: 'CREATE_SESSION',
-          password,
-          walletId: activeWallet.id,
-          durationMs: 60000 // 1 minute temporary session
-        });
+        // Show progress bar and hide error
+        const progressContainer = document.getElementById('sign-typed-progress-container');
+        const progressBar = document.getElementById('sign-typed-progress-bar');
+        const progressText = document.getElementById('sign-typed-progress-text');
 
-        if (!tempSessionResponse.success) {
-          throw new Error('Invalid password');
-        }
+        progressContainer.classList.remove('hidden');
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
 
-        const response = await chrome.runtime.sendMessage({
-          type: 'SIGN_APPROVAL',
-          requestId,
-          approved: true,
-          sessionToken: tempSessionResponse.sessionToken
-        });
+        try {
+          // Validate password with progress tracking
+          let lastDisplayedPercentage = 0;
+          await unlockWallet(password, {
+            onProgress: (progress) => {
+              const percentage = Math.round(progress * 100);
+              if (percentage !== lastDisplayedPercentage) {
+                lastDisplayedPercentage = percentage;
+                if (progressBar) progressBar.style.width = `${percentage}%`;
+                if (progressText) progressText.textContent = `${percentage}%`;
+              }
+            }
+          });
 
-        if (response.success) {
-          // Close the popup window
-          window.close();
-        } else {
-          errorEl.textContent = response.error || 'Signing failed';
+          // Password is valid! Hide progress bar
+          progressContainer.classList.add('hidden');
+
+          // Create a temporary session for this signing using the entered password
+          const activeWallet = await getActiveWallet();
+          const tempSessionResponse = await chrome.runtime.sendMessage({
+            type: 'CREATE_SESSION',
+            password,
+            walletId: activeWallet.id,
+            durationMs: 60000 // 1 minute temporary session
+          });
+
+          if (!tempSessionResponse.success) {
+            throw new Error('Failed to create session');
+          }
+
+          const response = await chrome.runtime.sendMessage({
+            type: 'SIGN_APPROVAL',
+            requestId,
+            approved: true,
+            sessionToken: tempSessionResponse.sessionToken
+          });
+
+          if (response.success) {
+            // Close the popup window
+            window.close();
+          } else {
+            errorEl.textContent = response.error || 'Signing failed';
+            errorEl.classList.remove('hidden');
+            // Re-enable button on error so user can try again
+            approveBtn.disabled = false;
+            approveBtn.style.opacity = '1';
+            approveBtn.style.cursor = 'pointer';
+          }
+        } catch (unlockError) {
+          // Hide progress bar on error
+          progressContainer.classList.add('hidden');
+
+          // Show error message
+          errorEl.textContent = unlockError.message || 'Incorrect password';
           errorEl.classList.remove('hidden');
+
           // Re-enable button on error so user can try again
           approveBtn.disabled = false;
           approveBtn.style.opacity = '1';
           approveBtn.style.cursor = 'pointer';
+          throw unlockError; // Re-throw to trigger outer catch
         }
       } catch (error) {
         errorEl.textContent = error.message;
