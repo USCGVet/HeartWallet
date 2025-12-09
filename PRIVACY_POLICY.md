@@ -23,7 +23,7 @@ HeartWallet is a self-custody cryptocurrency wallet extension for Chrome. Your p
 - ❌ No crash reports
 
 ### What is Stored Locally (On Your Device Only):
-- ✅ **Encrypted wallet data** - Your wallet is encrypted with your password using AES-256-GCM and PBKDF2 (1,094,000+ iterations)
+- ✅ **Encrypted wallet data** - Your wallet is encrypted with your password using Argon2id key derivation (256 MiB memory-hard) with HKDF-based independent keys and AES-256-GCM encryption
 - ✅ **User settings** - Theme preference, decimal display, auto-lock timer, etc.
 - ✅ **Transaction history** - Stored locally for your convenience
 - ✅ **Connected sites** - List of websites you've authorized to connect
@@ -84,7 +84,8 @@ HeartWallet requests the following Chrome permissions:
 
 ### Encryption
 - All wallet data is encrypted using **AES-256-GCM** (industry-standard encryption)
-- Key derivation uses **PBKDF2** with 1,094,000+ iterations (2025 standard, automatically upgrades)
+- Key derivation uses **Argon2id** with 256 MiB memory requirement (GPU/ASIC-resistant, with automatic parameter scaling through 2040)
+- **HKDF-based independent keys** provide two-layer encryption with cryptographically separated key material
 - Your password **never leaves your device**
 - Private keys are **never stored in plaintext**
 
