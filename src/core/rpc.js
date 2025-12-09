@@ -182,31 +182,94 @@ export async function getProvider(network) {
 }
 
 /**
- * LEGACY: Synchronous provider getter (deprecated, use async getProvider instead)
- * Kept for backward compatibility but may fail if provider isn't cached
- * @param {string} network - Network key
- * @returns {ethers.JsonRpcProvider}
- * @deprecated Use async getProvider() instead
+ * Validates RPC response format based on method
+ * @param {string} method - RPC method name
+ * @param {any} result - RPC response result
+ * @returns {{ valid: boolean, error?: string }}
  */
-export function getProviderSync(network) {
-  if (providers[network]) {
-    return providers[network];
+function validateRPCResponse(method, result) {
+  // Null/undefined is valid for some methods (e.g., pending tx receipt)
+  if (result === null || result === undefined) {
+    const nullAllowedMethods = [
+      'eth_getTransactionReceipt',
+      'eth_getTransactionByHash',
+      'eth_getBlockByNumber',
+      'eth_getBlockByHash'
+    ];
+    if (nullAllowedMethods.includes(method)) {
+      return { valid: true };
+    }
   }
-  
-  // Fallback: create provider with first endpoint (no health check)
-  const endpoints = RPC_ENDPOINTS[network];
-  if (!endpoints) {
-    throw new Error(`Unknown network: ${network}`);
+
+  switch (method) {
+    case 'eth_blockNumber':
+    case 'eth_gasPrice':
+    case 'eth_getBalance':
+    case 'eth_getTransactionCount':
+    case 'eth_estimateGas':
+      // These should return hex strings
+      if (typeof result !== 'string' || !result.startsWith('0x')) {
+        return { valid: false, error: `${method} expected hex string, got: ${typeof result}` };
+      }
+      // Validate it's a valid hex number
+      if (!/^0x[0-9a-fA-F]*$/.test(result)) {
+        return { valid: false, error: `${method} returned invalid hex: ${result}` };
+      }
+      break;
+
+    case 'eth_sendRawTransaction':
+    case 'eth_call':
+      // Should return hex string (tx hash or call result)
+      if (typeof result !== 'string' || !result.startsWith('0x')) {
+        return { valid: false, error: `${method} expected hex string, got: ${typeof result}` };
+      }
+      break;
+
+    case 'eth_chainId':
+      // Should be hex string chain ID
+      if (typeof result !== 'string' || !result.startsWith('0x')) {
+        return { valid: false, error: `eth_chainId expected hex string, got: ${typeof result}` };
+      }
+      break;
+
+    case 'eth_getBlockByNumber':
+    case 'eth_getBlockByHash':
+      // Should be object with required fields or null
+      if (result !== null) {
+        if (typeof result !== 'object') {
+          return { valid: false, error: `${method} expected object, got: ${typeof result}` };
+        }
+        if (!result.number || !result.hash) {
+          return { valid: false, error: `${method} missing required fields (number, hash)` };
+        }
+      }
+      break;
+
+    case 'eth_getTransactionReceipt':
+      // Should be object with status field or null
+      if (result !== null) {
+        if (typeof result !== 'object') {
+          return { valid: false, error: `${method} expected object, got: ${typeof result}` };
+        }
+        if (result.status === undefined) {
+          return { valid: false, error: `${method} missing status field` };
+        }
+      }
+      break;
+
+    case 'eth_getTransactionByHash':
+      // Should be object or null
+      if (result !== null && typeof result !== 'object') {
+        return { valid: false, error: `${method} expected object, got: ${typeof result}` };
+      }
+      break;
   }
-  
-  const endpoint = Array.isArray(endpoints) ? endpoints[0] : endpoints;
-  const provider = new ethers.JsonRpcProvider(endpoint);
-  providers[network] = provider;
-  return provider;
+
+  return { valid: true };
 }
 
 /**
- * Makes a raw RPC call with automatic failover
+ * Makes a raw RPC call with automatic failover and response validation
  * @param {string} network - Network key
  * @param {string} method - RPC method name
  * @param {Array} params - RPC parameters
@@ -214,7 +277,16 @@ export function getProviderSync(network) {
  */
 export async function rpcCall(network, method, params = []) {
   const provider = await getProvider(network);
-  return await provider.send(method, params);
+  const result = await provider.send(method, params);
+
+  // Validate response format
+  const validation = validateRPCResponse(method, result);
+  if (!validation.valid) {
+    console.error(`🫀 RPC response validation failed: ${validation.error}`);
+    throw new Error(`Invalid RPC response: ${validation.error}`);
+  }
+
+  return result;
 }
 
 /**
@@ -434,41 +506,3 @@ export function formatBalance(balanceWei, decimals = 4) {
   return num.toFixed(decimals);
 }
 
-/**
- * Gets health status of all RPC endpoints
- * @returns {Object} Health status per endpoint
- */
-export function getRPCHealthStatus() {
-  const status = {};
-  
-  for (const [network, endpoints] of Object.entries(RPC_ENDPOINTS)) {
-    status[network] = [];
-    const endpointsList = Array.isArray(endpoints) ? endpoints : [endpoints];
-    
-    for (const endpoint of endpointsList) {
-      const health = endpointHealth.get(endpoint) || { failures: 0, lastCheck: null, blacklisted: false };
-      status[network].push({
-        endpoint,
-        failures: health.failures,
-        blacklisted: health.blacklisted,
-        lastCheck: health.lastCheck
-      });
-    }
-  }
-  
-  return status;
-}
-
-/**
- * Clears the provider cache (useful for forcing reconnection)
- * @param {string} network - Network to clear, or null for all
- */
-export function clearProviderCache(network = null) {
-  if (network) {
-    delete providers[network];
-    console.log(`🫀 Cleared provider cache for: ${network}`);
-  } else {
-    Object.keys(providers).forEach(key => delete providers[key]);
-    console.log(`🫀 Cleared all provider caches`);
-  }
-}

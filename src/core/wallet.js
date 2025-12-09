@@ -14,6 +14,97 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import Argon2Worker from '../workers/argon2-worker.js?worker';
 
+// ===== SECURE MEMORY CLEANUP =====
+/**
+ * Overwrites sensitive string data with random garbage before dereferencing.
+ *
+ * SECURITY NOTE: JavaScript strings are immutable, so we can't modify them in place.
+ * However, we can:
+ * 1. Overwrite the variable reference with garbage data of similar size
+ * 2. Encourage GC to reclaim the original memory sooner
+ * 3. Make memory forensics harder by filling the variable with random data
+ *
+ * This is defense-in-depth - not perfect, but better than nothing.
+ *
+ * @param {Object} obj - Object containing sensitive properties to clear
+ * @param {string[]} props - Array of property names to overwrite
+ */
+export function secureCleanup(obj, props) {
+  if (!obj || typeof obj !== 'object') return;
+
+  for (const prop of props) {
+    if (obj[prop] !== undefined && obj[prop] !== null) {
+      const originalType = typeof obj[prop];
+      const originalLength = typeof obj[prop] === 'string' ? obj[prop].length : 0;
+
+      if (originalType === 'string') {
+        // Overwrite with random garbage of same length
+        const garbage = generateGarbageString(originalLength);
+        obj[prop] = garbage;
+        // Then null it out
+        obj[prop] = null;
+      } else if (originalType === 'object' && obj[prop] instanceof Uint8Array) {
+        // For Uint8Arrays, we CAN overwrite in place
+        crypto.getRandomValues(obj[prop]);
+        obj[prop].fill(0);
+        obj[prop] = null;
+      } else if (originalType === 'object') {
+        // Recursively clean nested objects
+        obj[prop] = null;
+      } else {
+        obj[prop] = null;
+      }
+    }
+  }
+}
+
+/**
+ * Generate a random garbage string of specified length
+ * @param {number} length - Length of string to generate
+ * @returns {string} Random string
+ */
+function generateGarbageString(length) {
+  if (length <= 0) return '';
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  return Array.from(array, b => String.fromCharCode(b % 94 + 33)).join('');
+}
+
+/**
+ * Securely cleans up an ethers.js Wallet/Signer object
+ * Attempts to overwrite the private key stored internally
+ * @param {Object} signer - ethers.js Wallet or Signer object
+ */
+export function secureCleanupSigner(signer) {
+  if (!signer) return;
+
+  try {
+    // ethers.js Wallet stores private key in signingKey.privateKey
+    if (signer.signingKey && signer.signingKey.privateKey) {
+      const pkLength = signer.signingKey.privateKey.length;
+      signer.signingKey.privateKey = generateGarbageString(pkLength);
+      signer.signingKey.privateKey = null;
+    }
+
+    // Also try to clear the _signingKey if it exists (internal property)
+    if (signer._signingKey) {
+      signer._signingKey = null;
+    }
+
+    // Clear mnemonic if present
+    if (signer.mnemonic && signer.mnemonic.phrase) {
+      const mnemonicLength = signer.mnemonic.phrase.length;
+      signer.mnemonic.phrase = generateGarbageString(mnemonicLength);
+      signer.mnemonic.phrase = null;
+      signer.mnemonic = null;
+    }
+  } catch (e) {
+    // Some properties may be read-only in newer ethers versions
+    // This is best-effort cleanup
+    console.debug('🫀 Secure cleanup: some properties could not be overwritten');
+  }
+}
+
 // ===== PBKDF2 ITERATION RECOMMENDATIONS =====
 // Based on historical OWASP data and GPU cracking speed trends
 //
@@ -1246,31 +1337,6 @@ export async function exportPrivateKeyForWallet(walletId, password, options = {}
 export async function exportMnemonicForWallet(walletId, password, options = {}) {
   const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true, ...options });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
-}
-
-/**
- * Gets security information for a wallet
- * @param {string} walletId - Wallet ID
- * @returns {Promise<{currentIterations: number, recommendedIterations: number, needsUpgrade: boolean, lastUpgrade: number}>}
- */
-export async function getWalletSecurityInfo(walletId) {
-  const walletsData = await getAllWallets();
-  const wallet = walletsData.walletList.find(w => w.id === walletId);
-
-  if (!wallet) {
-    throw new Error('Wallet not found');
-  }
-
-  // Use metadata field if available (more efficient), otherwise parse encrypted data
-  const currentIterations = wallet.currentIterations || getIterationsFromEncrypted(wallet.encryptedKeystore);
-  const recommendedIterations = getCurrentRecommendedIterations();
-
-  return {
-    currentIterations,
-    recommendedIterations,
-    needsUpgrade: currentIterations < recommendedIterations,
-    lastUpgrade: wallet.lastSecurityUpgrade || wallet.createdAt
-  };
 }
 
 /**

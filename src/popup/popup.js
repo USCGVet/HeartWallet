@@ -80,6 +80,21 @@ function sanitizeError(message) {
   return sanitized || 'Unknown error';
 }
 
+/**
+ * Hash a privacy PIN using SHA-256
+ * Note: This is for view-only protection, not for securing private keys.
+ * The actual wallet encryption uses Argon2id which is much stronger.
+ * @param {string} pin - The PIN to hash
+ * @returns {Promise<string>} Hex-encoded hash
+ */
+async function hashPrivacyPin(pin) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(pin + 'HeartWallet-PrivacyMode-Salt');
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // ============================================================================
 // STATE
 // ============================================================================
@@ -99,7 +114,8 @@ let currentState = {
     maxGasPriceGwei: 1000, // Maximum gas price in Gwei (default 1000)
     allowEthSign: false, // Allow dangerous eth_sign method (disabled by default for security)
     enableLedger: false, // Enable Ledger hardware wallet support (opt-in)
-    enableTrezor: false // Enable Trezor hardware wallet support (opt-in, not yet implemented)
+    enableTrezor: false, // Enable Trezor hardware wallet support (opt-in, not yet implemented)
+    privacyMode: false // When enabled, requires password to view dashboard (hides balances/addresses)
   },
   networkSettings: null, // Will be loaded from storage or use defaults
   lastActivityTime: null, // Track last activity for auto-lock
@@ -286,15 +302,31 @@ async function checkWalletStatus() {
     const activeWallet = await getActiveWallet();
 
     if (activeWallet && activeWallet.isHardwareWallet) {
-      // Hardware wallets don't need password unlocking - go straight to dashboard
-      currentState.address = activeWallet.address;
-      currentState.isUnlocked = true;
-      currentState.isHardwareWallet = true;
-      showScreen('screen-dashboard');
-      updateDashboard();
+      // Hardware wallet - check if privacy mode is enabled
+      if (currentState.settings.privacyMode) {
+        // Privacy mode enabled - require password to view dashboard
+        showScreen('screen-unlock');
+      } else {
+        // Privacy mode disabled - go straight to dashboard
+        currentState.address = activeWallet.address;
+        currentState.isUnlocked = true;
+        currentState.isHardwareWallet = true;
+        showScreen('screen-dashboard');
+        updateDashboard();
+      }
     } else {
-      // Software wallet - show unlock screen
-      showScreen('screen-unlock');
+      // Software wallet - check if privacy mode is enabled
+      if (currentState.settings.privacyMode) {
+        // Privacy mode enabled - require password to unlock
+        showScreen('screen-unlock');
+      } else {
+        // Privacy mode disabled - go straight to dashboard (password only needed for signing)
+        currentState.address = activeWallet.address;
+        currentState.isUnlocked = true;
+        currentState.isHardwareWallet = false;
+        showScreen('screen-dashboard');
+        updateDashboard();
+      }
     }
   }
 }
@@ -500,8 +532,8 @@ function setupEventListeners() {
   document.getElementById('btn-refresh')?.addEventListener('click', async () => {
     await updateDashboard();
   });
-  document.getElementById('btn-settings')?.addEventListener('click', () => {
-    loadSettingsToUI();
+  document.getElementById('btn-settings')?.addEventListener('click', async () => {
+    await loadSettingsToUI();
     showScreen('screen-settings');
   });
 
@@ -697,6 +729,45 @@ function setupEventListeners() {
     currentState.settings.enableTrezor = e.target.checked;
     saveSettings();
     updateHardwareWalletButtons(); // Show/hide Trezor buttons
+  });
+  document.getElementById('setting-privacy-mode')?.addEventListener('change', async (e) => {
+    currentState.settings.privacyMode = e.target.checked;
+    saveSettings();
+    updateLockButtonVisibility(); // Show/hide lock button based on privacy mode
+    await updatePrivacyPinSetupVisibility(); // Show/hide privacy PIN setup for hardware-only users
+  });
+
+  // Privacy PIN save button
+  document.getElementById('btn-save-privacy-pin')?.addEventListener('click', async () => {
+    const pin = document.getElementById('privacy-pin-input').value;
+    const confirmPin = document.getElementById('privacy-pin-confirm').value;
+    const statusEl = document.getElementById('privacy-pin-status');
+
+    if (!pin || pin.length < 4) {
+      statusEl.textContent = 'PIN must be at least 4 characters';
+      statusEl.style.color = 'var(--terminal-error)';
+      return;
+    }
+
+    if (pin !== confirmPin) {
+      statusEl.textContent = 'PINs do not match';
+      statusEl.style.color = 'var(--terminal-error)';
+      return;
+    }
+
+    try {
+      const hash = await hashPrivacyPin(pin);
+      await save('privacyPinHash', hash);
+      statusEl.textContent = 'Privacy PIN saved successfully!';
+      statusEl.style.color = 'var(--terminal-success)';
+
+      // Clear inputs
+      document.getElementById('privacy-pin-input').value = '';
+      document.getElementById('privacy-pin-confirm').value = '';
+    } catch (error) {
+      statusEl.textContent = 'Error saving PIN: ' + sanitizeError(error.message);
+      statusEl.style.color = 'var(--terminal-error)';
+    }
   });
   document.getElementById('btn-view-seed')?.addEventListener('click', handleViewSeed);
   document.getElementById('btn-export-key')?.addEventListener('click', handleExportKey);
@@ -1606,6 +1677,88 @@ async function handleUnlock() {
     return;
   }
 
+  // Check if active wallet is hardware wallet and privacy mode is enabled
+  const activeWallet = await getActiveWallet();
+  const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
+  const privacyModeEnabled = currentState.settings.privacyMode;
+
+  // For hardware wallet with privacy mode: verify password against any software wallet
+  // or stored privacy PIN (if user has no software wallets)
+  if (isHardwareWallet && privacyModeEnabled) {
+    try {
+      errorDiv.classList.add('hidden');
+
+      // Try to verify password by unlocking any software wallet
+      const allWallets = await getAllWallets();
+      const softwareWallet = allWallets.find(w => !w.isHardwareWallet);
+
+      if (softwareWallet) {
+        // Verify password by attempting to unlock a software wallet
+        await unlockWallet(password, { walletId: softwareWallet.id });
+      } else {
+        // No software wallets - check stored privacy PIN
+        const storedPrivacyHash = await load('privacyPinHash');
+        if (!storedPrivacyHash) {
+          // No privacy PIN set - prompt user to set one
+          errorDiv.textContent = 'No password set. Please add a software wallet or set up privacy PIN in settings.';
+          errorDiv.classList.remove('hidden');
+          unlockBtn.disabled = false;
+          passwordInput.disabled = false;
+          unlockBtn.textContent = originalBtnText;
+          if (progressContainer) progressContainer.classList.add('hidden');
+          return;
+        }
+
+        // Verify against stored privacy PIN hash (simple hash for view-only protection)
+        const inputHash = await hashPrivacyPin(password);
+        if (inputHash !== storedPrivacyHash) {
+          throw new Error('Incorrect password');
+        }
+      }
+
+      // Success! Clear failed attempts
+      await clearFailedAttempts();
+
+      currentState.isUnlocked = true;
+      currentState.address = activeWallet.address;
+      currentState.isHardwareWallet = true;
+      currentState.lastActivityTime = Date.now();
+
+      // Start auto-lock timer for privacy mode
+      startAutoLockTimer();
+
+      // Re-enable UI and hide progress bar
+      unlockBtn.disabled = false;
+      passwordInput.disabled = false;
+      unlockBtn.textContent = originalBtnText;
+      if (progressContainer) progressContainer.classList.add('hidden');
+
+      showScreen('screen-dashboard');
+      updateDashboard();
+      return;
+
+    } catch (error) {
+      // Record failed attempt
+      await recordFailedAttempt();
+
+      const newLockoutInfo = await checkRateLimitLockout();
+      if (newLockoutInfo.isLockedOut) {
+        const remainingMinutes = Math.ceil(newLockoutInfo.remainingMs / 1000 / 60);
+        errorDiv.textContent = `Too many failed attempts (${MAX_ATTEMPTS}). Wallet locked for ${remainingMinutes} minutes.`;
+      } else {
+        const attemptsLeft = MAX_ATTEMPTS - newLockoutInfo.attempts;
+        errorDiv.textContent = `${error.message} (${attemptsLeft} attempt${attemptsLeft !== 1 ? 's' : ''} remaining)`;
+      }
+      errorDiv.classList.remove('hidden');
+
+      unlockBtn.disabled = false;
+      passwordInput.disabled = false;
+      unlockBtn.textContent = originalBtnText;
+      if (progressContainer) progressContainer.classList.add('hidden');
+      return;
+    }
+  }
+
   try {
     errorDiv.classList.add('hidden');
 
@@ -1839,54 +1992,9 @@ async function updateDashboard() {
 
   // Update pending transaction indicator
   await updatePendingTxIndicator();
-}
 
-async function updateRecentTransactions() {
-  const txListEl = document.getElementById('tx-list');
-  if (!txListEl || !currentState.address) return;
-
-  // Show loading state
-  // SECURITY: innerHTML is safe here - string is hardcoded. DO NOT add dynamic data without escaping.
-  txListEl.innerHTML = '<p class="text-center text-dim">Loading transactions...</p>';
-
-  try {
-    const transactions = await rpc.getRecentTransactions(currentState.network, currentState.address, 3, 1000);
-
-    if (transactions.length === 0) {
-      // SECURITY: innerHTML is safe here - string is hardcoded. DO NOT add dynamic data without escaping.
-      txListEl.innerHTML = '<p class="text-center text-dim">No recent transactions</p>';
-      return;
-    }
-
-    let html = '';
-
-    for (const tx of transactions) {
-      const valueEth = ethers.formatEther(tx.value);
-      const formatted = formatBalanceWithCommas(valueEth, 18);
-      const date = new Date(tx.timestamp * 1000).toLocaleDateString();
-      const type = tx.type === 'sent' ? '→' : '←';
-      const typeColor = tx.type === 'sent' ? '#ff4444' : '#44ff44';
-      const explorerUrl = getExplorerUrl(currentState.network, 'tx', tx.hash);
-
-      html += `
-        <div style="padding: 8px; border-bottom: 1px solid var(--terminal-border); font-size: 11px;">
-          <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-            <span style="color: ${typeColor};">${type} ${tx.type === 'sent' ? 'Sent' : 'Received'}</span>
-            <span class="text-dim">${date}</span>
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: bold;" title="${formatted.tooltip}">${formatted.display}</span>
-            <a href="${explorerUrl}" target="_blank" style="color: var(--terminal-green); text-decoration: none; font-size: 10px;">VIEW →</a>
-          </div>
-        </div>
-      `;
-    }
-
-    txListEl.innerHTML = html;
-  } catch (error) {
-    console.error('Error fetching transactions:', error);
-    txListEl.innerHTML = '<p class="text-center text-dim">Error loading transactions</p>';
-  }
+  // Update lock button visibility based on privacy mode
+  updateLockButtonVisibility();
 }
 
 // Update wallet selector dropdown
@@ -3596,7 +3704,7 @@ async function handleAddCustomToken() {
 }
 
 // ===== SETTINGS =====
-function loadSettingsToUI() {
+async function loadSettingsToUI() {
   document.getElementById('setting-autolock').value = currentState.settings.autoLockMinutes;
   document.getElementById('setting-decimals').value = currentState.settings.decimalPlaces;
   document.getElementById('setting-theme').value = currentState.settings.theme;
@@ -3605,9 +3713,13 @@ function loadSettingsToUI() {
   document.getElementById('setting-allow-eth-sign').checked = currentState.settings.allowEthSign || false;
   document.getElementById('setting-enable-ledger').checked = currentState.settings.enableLedger || false;
   document.getElementById('setting-enable-trezor').checked = currentState.settings.enableTrezor || false;
+  document.getElementById('setting-privacy-mode').checked = currentState.settings.privacyMode || false;
 
   // Fetch and display current network gas price
   fetchCurrentGasPrice();
+
+  // Update privacy PIN setup visibility (async)
+  await updatePrivacyPinSetupVisibility();
 }
 
 /**
@@ -3637,6 +3749,61 @@ function updateHardwareWalletButtons() {
   // if (trezorButtonMulti) {
   //   trezorButtonMulti.style.display = enableTrezor ? 'inline-block' : 'none';
   // }
+}
+
+/**
+ * Show/hide lock button based on privacy mode setting
+ * When privacy mode is OFF, the lock button is hidden since there's nothing to "lock"
+ * When privacy mode is ON, the lock button is shown to allow user to hide the dashboard
+ */
+function updateLockButtonVisibility() {
+  const lockButton = document.getElementById('btn-lock');
+  if (lockButton) {
+    if (currentState.settings.privacyMode) {
+      lockButton.style.display = 'inline-block';
+      lockButton.title = 'Lock (hide dashboard)';
+    } else {
+      lockButton.style.display = 'none';
+    }
+  }
+}
+
+/**
+ * Show/hide privacy PIN setup section based on wallet configuration
+ * Only shown when:
+ * 1. Privacy mode is enabled
+ * 2. User has no software wallets (hardware-only)
+ */
+async function updatePrivacyPinSetupVisibility() {
+  const privacyPinSetup = document.getElementById('privacy-pin-setup');
+  if (!privacyPinSetup) return;
+
+  const privacyModeEnabled = currentState.settings.privacyMode;
+
+  if (!privacyModeEnabled) {
+    privacyPinSetup.classList.add('hidden');
+    return;
+  }
+
+  // Check if user has any software wallets
+  const allWallets = await getAllWallets();
+  const hasSoftwareWallet = allWallets.some(w => !w.isHardwareWallet);
+
+  if (hasSoftwareWallet) {
+    // User has software wallet - use that password, no need for separate PIN
+    privacyPinSetup.classList.add('hidden');
+  } else {
+    // Hardware-only user - show privacy PIN setup
+    privacyPinSetup.classList.remove('hidden');
+
+    // Check if PIN is already set
+    const storedHash = await load('privacyPinHash');
+    const statusEl = document.getElementById('privacy-pin-status');
+    if (storedHash && statusEl) {
+      statusEl.textContent = 'Privacy PIN is set. Enter new values to change it.';
+      statusEl.style.color = 'var(--terminal-dim)';
+    }
+  }
 }
 
 /**

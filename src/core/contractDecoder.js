@@ -15,6 +15,7 @@ import { ethers } from 'ethers';
 // Cache configuration
 const ABI_CACHE_KEY_PREFIX = 'abi_cache_';
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_CACHE_ENTRIES = 100; // Maximum number of cached ABIs (LRU eviction)
 
 // Common function signatures for instant recognition
 const COMMON_FUNCTIONS = {
@@ -43,7 +44,7 @@ const EXPLORER_URLS = {
 };
 
 /**
- * Get ABI from local cache
+ * Get ABI from local cache (updates lastAccessed for LRU tracking)
  */
 function getCachedABI(address, chainId) {
   try {
@@ -60,6 +61,14 @@ function getCachedABI(address, chainId) {
       return null;
     }
 
+    // Update lastAccessed timestamp for LRU tracking
+    data.lastAccessed = Date.now();
+    try {
+      localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {
+      // Ignore write errors for lastAccessed update
+    }
+
     return data.abi;
   } catch (error) {
     console.error('Error reading ABI cache:', error);
@@ -68,18 +77,112 @@ function getCachedABI(address, chainId) {
 }
 
 /**
- * Save ABI to local cache
+ * Get all ABI cache entries with their metadata
+ * @returns {Array<{key: string, timestamp: number, lastAccessed: number}>}
+ */
+function getAllCacheEntries() {
+  const entries = [];
+  const keys = Object.keys(localStorage);
+
+  for (const key of keys) {
+    if (key.startsWith(ABI_CACHE_KEY_PREFIX)) {
+      try {
+        const data = JSON.parse(localStorage.getItem(key));
+        entries.push({
+          key,
+          timestamp: data.timestamp || 0,
+          lastAccessed: data.lastAccessed || data.timestamp || 0
+        });
+      } catch (e) {
+        // Invalid entry, mark for cleanup
+        entries.push({ key, timestamp: 0, lastAccessed: 0 });
+      }
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Enforce LRU cache limit by removing oldest accessed entries
+ */
+function enforceCacheLimit() {
+  const entries = getAllCacheEntries();
+
+  if (entries.length <= MAX_CACHE_ENTRIES) {
+    return; // Under limit, no eviction needed
+  }
+
+  // Sort by lastAccessed (oldest first)
+  entries.sort((a, b) => a.lastAccessed - b.lastAccessed);
+
+  // Remove oldest entries until we're under the limit
+  const toRemove = entries.length - MAX_CACHE_ENTRIES;
+  for (let i = 0; i < toRemove; i++) {
+    localStorage.removeItem(entries[i].key);
+    console.log(`🫀 LRU evicted ABI cache: ${entries[i].key}`);
+  }
+}
+
+/**
+ * Clean up expired cache entries
+ * Should be called periodically to prevent unbounded growth
+ */
+export function cleanupExpiredCache() {
+  const entries = getAllCacheEntries();
+  const now = Date.now();
+  let cleaned = 0;
+
+  for (const entry of entries) {
+    if (now - entry.timestamp > CACHE_TTL) {
+      localStorage.removeItem(entry.key);
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    console.log(`🫀 Cleaned ${cleaned} expired ABI cache entries`);
+  }
+
+  return cleaned;
+}
+
+/**
+ * Save ABI to local cache with LRU eviction
  */
 function cacheABI(address, chainId, abi, source) {
   try {
+    // Enforce cache limit before adding new entry
+    enforceCacheLimit();
+
     const key = `${ABI_CACHE_KEY_PREFIX}${chainId}_${address.toLowerCase()}`;
     localStorage.setItem(key, JSON.stringify({
       abi,
       source,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      lastAccessed: Date.now()
     }));
   } catch (error) {
-    console.error('Error caching ABI:', error);
+    // Handle quota exceeded error by cleaning cache
+    if (error.name === 'QuotaExceededError') {
+      console.warn('🫀 localStorage quota exceeded, cleaning cache...');
+      cleanupExpiredCache();
+      enforceCacheLimit();
+      // Retry once after cleanup
+      try {
+        const key = `${ABI_CACHE_KEY_PREFIX}${chainId}_${address.toLowerCase()}`;
+        localStorage.setItem(key, JSON.stringify({
+          abi,
+          source,
+          timestamp: Date.now(),
+          lastAccessed: Date.now()
+        }));
+      } catch (retryError) {
+        console.error('Error caching ABI after cleanup:', retryError);
+      }
+    } else {
+      console.error('Error caching ABI:', error);
+    }
   }
 }
 
@@ -387,20 +490,3 @@ function getExplorerUrl(chainId, address) {
   return `${baseUrl}/address/${address}`;
 }
 
-/**
- * Clear all cached ABIs (for troubleshooting)
- */
-export function clearABICache() {
-  const keys = Object.keys(localStorage);
-  let cleared = 0;
-
-  for (const key of keys) {
-    if (key.startsWith(ABI_CACHE_KEY_PREFIX)) {
-      localStorage.removeItem(key);
-      cleared++;
-    }
-  }
-
-  console.log(`🫀 Cleared ${cleared} cached ABIs`);
-  return cleared;
-}

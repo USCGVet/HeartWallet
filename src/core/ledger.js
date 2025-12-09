@@ -24,20 +24,6 @@ export function isLedgerSupported() {
 }
 
 /**
- * Check if any Ledger device is connected
- * @returns {Promise<boolean>}
- */
-export async function isLedgerConnected() {
-  try {
-    const devices = await TransportWebHID.list();
-    return devices.length > 0;
-  } catch (error) {
-    console.error('Error checking Ledger connection:', error);
-    return false;
-  }
-}
-
-/**
  * Request permission and connect to Ledger device
  * This will show browser's HID device picker
  * @returns {Promise<TransportWebHID>}
@@ -318,45 +304,3 @@ export async function signTypedData(accountIndex, domain, types, value) {
   }
 }
 
-/**
- * Get Ledger app configuration (for debugging)
- * @returns {Promise<Object>}
- */
-export async function getAppConfiguration() {
-  let transport = null;
-
-  try {
-    transport = await connectLedger();
-    const eth = new Eth(transport);
-
-    const config = await eth.getAppConfiguration();
-
-    return {
-      arbitraryDataEnabled: config.arbitraryDataEnabled,
-      erc20ProvisioningNecessary: config.erc20ProvisioningNecessary,
-      starkEnabled: config.starkEnabled,
-      starkv2Supported: config.starkv2Supported,
-      version: config.version
-    };
-  } catch (error) {
-    console.error('Error getting Ledger app config:', error);
-    throw error;
-  } finally {
-    if (transport) {
-      await transport.close();
-    }
-  }
-}
-
-/**
- * Close all open Ledger transports
- * Call this when cleaning up
- */
-export async function disconnectLedger() {
-  try {
-    // Close all open HID connections
-    await TransportWebHID.close();
-  } catch (error) {
-    console.error('Error disconnecting Ledger:', error);
-  }
-}

@@ -877,6 +877,24 @@
           </button>
         </div>
         <div class="form-group" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
+          <input type="checkbox" id="setting-privacy-mode" />
+          <label for="setting-privacy-mode">Privacy Mode (require password to view)</label>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">
+            When enabled, you must enter your password to view your dashboard, balances, and addresses.
+            When disabled, the dashboard is visible immediately but password is still required for signing transactions.
+          </p>
+          <div id="privacy-pin-setup" class="hidden" style="margin-top: 8px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+            <p class="text-dim" style="font-size: 10px; margin-bottom: 8px;">
+              <strong>Hardware wallet only:</strong> Set a privacy PIN to protect your dashboard view.
+              This PIN is only used for hiding the dashboard, not for signing transactions.
+            </p>
+            <input type="password" id="privacy-pin-input" placeholder="Enter privacy PIN" style="margin-bottom: 8px;" />
+            <input type="password" id="privacy-pin-confirm" placeholder="Confirm privacy PIN" style="margin-bottom: 8px;" />
+            <button id="btn-save-privacy-pin" class="btn btn-small btn-primary">SAVE PRIVACY PIN</button>
+            <p id="privacy-pin-status" class="text-dim" style="font-size: 10px; margin-top: 4px;"></p>
+          </div>
+        </div>
+        <div class="form-group" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
           <input type="checkbox" id="setting-allow-eth-sign" />
           <label for="setting-allow-eth-sign" style="color: var(--error-color);">Allow eth_sign (⚠️ DANGEROUS)</label>
           <p class="text-dim" style="font-size: 10px; margin-top: 4px;">

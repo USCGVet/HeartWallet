@@ -218,9 +218,22 @@ if (!window.ethereum) {
   };
 
   // EIP-6963: Announce provider for modern wallet detection (Web3Modal, WalletConnect, etc.)
+  // Generate cryptographically secure UUID using Web Crypto API
+  const generateSecureUUID = () => {
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    // Set version (4) and variant bits per RFC 4122
+    array[6] = (array[6] & 0x0f) | 0x40;
+    array[8] = (array[8] & 0x3f) | 0x80;
+    const hex = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+
+  const providerUUID = generateSecureUUID();
+
   const announceProvider = () => {
     const info = {
-      uuid: 'heartwallet-' + Math.random().toString(36).substring(7),
+      uuid: providerUUID,
       name: 'HeartWallet',
       icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIxNiIgZmlsbD0iI0UwMDAzNyIvPgogIDxwYXRoIGQ9Ik0xNiA5QzEyLjY4NiA5IDEwIDExLjY4NiAxMCAxNUMxMCAyMC41MjMgMTYgMjYgMTYgMjZDMTYgMjYgMjIgMjAuNTIzIDIyIDE1QzIyIDExLjY4NiAxOS4zMTQgOSAxNiA5WiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
       rdns: 'com.heartwallet'
@@ -247,10 +260,23 @@ if (!window.ethereum) {
   console.warn('⚠️ window.ethereum already exists, HeartWallet not injected');
 
   // Even if window.ethereum exists, try to announce via EIP-6963 as an alternative provider
+  // Generate cryptographically secure UUID using Web Crypto API
+  const generateSecureUUID = () => {
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    // Set version (4) and variant bits per RFC 4122
+    array[6] = (array[6] & 0x0f) | 0x40;
+    array[8] = (array[8] & 0x3f) | 0x80;
+    const hex = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+
+  const heartWalletProvider = new HeartWalletProvider();
+  const altProviderUUID = generateSecureUUID();
+
   const announceAlternativeProvider = () => {
-    const heartWalletProvider = new HeartWalletProvider();
     const info = {
-      uuid: 'heartwallet-alt-' + Math.random().toString(36).substring(7),
+      uuid: altProviderUUID,
       name: 'HeartWallet',
       icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIxNiIgZmlsbD0iI0UwMDAzNyIvPgogIDxwYXRoIGQ9Ik0xNiA5QzEyLjY4NiA5IDEwIDExLjY4NiAxMCAxNUMxMCAyMC41MjMgMTYgMjYgMTYgMjZDMTYgMjYgMjIgMjAuNTIzIDIyIDE1QzIyIDExLjY4NiAxOS4zMTQgOSAxNiA5WiIgZmlsbD0id2hpdGUiLz4KPC9zdmc+',
       rdns: 'com.heartwallet'

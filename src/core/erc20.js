@@ -105,24 +105,6 @@ export function parseTokenAmount(amount, decimals) {
 }
 
 /**
- * Transfers tokens
- * @param {ethers.Wallet} signer - Wallet signer
- * @param {string} tokenAddress - Token contract address
- * @param {string} toAddress - Recipient address
- * @param {string} amount - Amount in wei (as string)
- * @returns {Promise<ethers.TransactionResponse>} Transaction response
- */
-export async function transferToken(signer, tokenAddress, toAddress, amount) {
-  try {
-    const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-    const tx = await contract.transfer(toAddress, amount);
-    return tx;
-  } catch (error) {
-    throw new Error(`Failed to transfer token: ${error.message}`);
-  }
-}
-
-/**
  * Validates if an address is a valid ERC-20 token contract
  * @param {string} network - Network key
  * @param {string} tokenAddress - Token contract address

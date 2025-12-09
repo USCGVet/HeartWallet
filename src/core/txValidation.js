@@ -239,16 +239,3 @@ export function sanitizeErrorMessage(message) {
   return sanitized || 'Unknown error';
 }
 
-/**
- * Sanitizes user input for safe display (prevents XSS)
- * @param {string} input - User input to sanitize
- * @returns {string} Sanitized input
- */
-export function sanitizeUserInput(input) {
-  if (typeof input !== 'string') return '';
-  
-  // Create a text node and extract the escaped text
-  const div = document.createElement('div');
-  div.textContent = input;
-  return div.innerHTML;
-}

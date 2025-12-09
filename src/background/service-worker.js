@@ -5,7 +5,7 @@
  * Handles RPC requests from dApps and manages wallet state
  */
 
-import { getActiveWallet, unlockWallet } from '../core/wallet.js';
+import { getActiveWallet, unlockWallet, secureCleanup, secureCleanupSigner } from '../core/wallet.js';
 import { load, save } from '../core/storage.js';
 import * as rpc from '../core/rpc.js';
 import * as txHistory from '../core/txHistory.js';
@@ -28,6 +28,61 @@ const CONNECTED_SITES_KEY = 'connected_sites';
 
 // Pending connection requests (origin -> { resolve, reject, tabId })
 const pendingConnections = new Map();
+
+// ===== SIGNING AUDIT LOG =====
+// Stores recent signing operations for security auditing (in-memory, cleared on service worker restart)
+const SIGNING_LOG_KEY = 'signing_audit_log';
+const MAX_SIGNING_LOG_ENTRIES = 100;
+
+/**
+ * Log a signing operation for audit purposes
+ * @param {Object} entry - Log entry details
+ * @param {string} entry.type - Type of signing (transaction, personal_sign, typed_data)
+ * @param {string} entry.address - Wallet address that signed
+ * @param {string} entry.origin - dApp origin that requested the signature
+ * @param {string} entry.method - RPC method used
+ * @param {boolean} entry.success - Whether signing succeeded
+ * @param {string} [entry.txHash] - Transaction hash (for transactions)
+ * @param {string} [entry.error] - Error message (if failed)
+ */
+async function logSigningOperation(entry) {
+  try {
+    const logEntry = {
+      ...entry,
+      timestamp: Date.now(),
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    };
+
+    // Get existing log
+    const existingLog = await load(SIGNING_LOG_KEY) || [];
+
+    // Add new entry at the beginning
+    existingLog.unshift(logEntry);
+
+    // Trim to max entries
+    if (existingLog.length > MAX_SIGNING_LOG_ENTRIES) {
+      existingLog.length = MAX_SIGNING_LOG_ENTRIES;
+    }
+
+    // Save log
+    await save(SIGNING_LOG_KEY, existingLog);
+
+    // Also log to console for debugging
+    const icon = entry.success ? '✅' : '❌';
+    console.log(`🫀 ${icon} Signing audit: ${entry.type} from ${entry.origin} - ${entry.success ? 'SUCCESS' : 'FAILED'}`);
+  } catch (error) {
+    // Don't let logging failures affect signing operations
+    console.error('🫀 Error logging signing operation:', error);
+  }
+}
+
+/**
+ * Get signing audit log
+ * @returns {Promise<Array>} Array of log entries
+ */
+async function getSigningAuditLog() {
+  return await load(SIGNING_LOG_KEY) || [];
+}
 
 // ===== SESSION MANAGEMENT =====
 // Session tokens stored in memory (cleared when service worker terminates)
@@ -105,7 +160,8 @@ function generateSessionToken() {
 }
 
 // Create new session
-async function createSession(password, walletId, durationMs = 3600000) { // Default 1 hour
+// SECURITY: Default session duration reduced to 15 minutes to minimize password exposure in memory
+async function createSession(password, walletId, durationMs = 900000) { // Default 15 minutes (was 1 hour)
   const sessionToken = generateSessionToken();
   const expiresAt = Date.now() + durationMs;
   
@@ -1002,16 +1058,30 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       const provider = await rpc.getProvider(network);
       waitForConfirmation({ hash: txHash }, provider, activeWallet.address);
 
+      // Log successful signing operation
+      await logSigningOperation({
+        type: 'transaction',
+        address: activeWallet.address,
+        origin: origin,
+        method: 'eth_sendTransaction',
+        success: true,
+        txHash: txHash,
+        walletType: 'hardware'
+      });
+
       // Resolve with transaction hash
       resolve({ result: txHash });
       return { success: true, txHash };
     }
 
     // Software wallet flow - validate session and get password (now async)
-    const password = await validateSession(sessionToken);
+    let password = await validateSession(sessionToken);
+    let signer = null;
+    let connectedSigner = null;
 
+    try {
     // Unlock wallet with auto-upgrade notification
-    const { signer, upgraded, iterationsBefore, iterationsAfter } = await unlockWallet(password, {
+    const unlockResult = await unlockWallet(password, {
       onUpgradeStart: (info) => {
         // Notify user that wallet encryption is being upgraded
         console.log(`🔐 Auto-upgrading wallet encryption: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()} iterations`);
@@ -1024,6 +1094,9 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
         });
       }
     });
+
+    signer = unlockResult.signer;
+    const { upgraded, iterationsBefore, iterationsAfter } = unlockResult;
 
     // Show completion notification if upgrade occurred
     if (upgraded) {
@@ -1041,7 +1114,7 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
     const provider = await rpc.getProvider(network);
 
     // Connect signer to provider
-    const connectedSigner = signer.connect(provider);
+    connectedSigner = signer.connect(provider);
 
     // Prepare transaction - create a clean copy with only necessary fields
     const txToSend = {
@@ -1144,13 +1217,55 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
     // Wait for confirmation in background
     waitForConfirmation(tx, provider, signer.address);
 
+    // Log successful signing operation
+    await logSigningOperation({
+      type: 'transaction',
+      address: signer.address,
+      origin: origin,
+      method: 'eth_sendTransaction',
+      success: true,
+      txHash: tx.hash,
+      walletType: 'software'
+    });
+
     // Resolve with transaction hash
     resolve({ result: tx.hash });
 
     return { success: true, txHash: tx.hash };
+    } finally {
+      // SECURITY: Clean up sensitive data from memory
+      // Overwrite password with garbage before dereferencing
+      if (password) {
+        const tempObj = { password };
+        secureCleanup(tempObj, ['password']);
+        password = null;
+      }
+
+      // Clean up signer's private key
+      if (signer) {
+        secureCleanupSigner(signer);
+        signer = null;
+      }
+      if (connectedSigner) {
+        secureCleanupSigner(connectedSigner);
+        connectedSigner = null;
+      }
+    }
   } catch (error) {
     console.error('🫀 Transaction error:', error);
     const sanitizedError = sanitizeErrorMessage(error.message);
+
+    // Log failed signing operation
+    await logSigningOperation({
+      type: 'transaction',
+      address: 'unknown',
+      origin: origin,
+      method: 'eth_sendTransaction',
+      success: false,
+      error: sanitizedError,
+      walletType: 'software'
+    });
+
     reject(new Error(sanitizedError));
     return { success: false, error: sanitizedError };
   }
@@ -1254,9 +1369,13 @@ function getTokenAddRequest(requestId) {
 
 // Speed up a pending transaction by replacing it with higher gas price
 async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, gasPriceMultiplier = 1.2, customGasPrice = null) {
+  let password = null;
+  let signer = null;
+  let wallet = null;
+
   try {
     // Validate session (now async)
-    const password = await validateSession(sessionToken);
+    password = await validateSession(sessionToken);
 
     // Get original transaction details
     const originalTx = await txHistory.getTxByHash(address, originalTxHash);
@@ -1269,16 +1388,30 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
     }
 
     // Get wallet and unlock (auto-upgrade if needed)
-    const { signer } = await unlockWallet(password, {
+    const unlockResult = await unlockWallet(password, {
       onUpgradeStart: (info) => {
         console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
       }
     });
+    signer = unlockResult.signer;
+
+    // SECURITY: Verify the transaction belongs to this wallet
+    const walletAddress = await signer.getAddress();
+    if (walletAddress.toLowerCase() !== address.toLowerCase()) {
+      console.error('🫀 Address mismatch in speed-up: wallet address does not match request');
+      return { success: false, error: 'Wallet address mismatch' };
+    }
+
+    // Verify original transaction is from this wallet
+    if (originalTx.from && originalTx.from.toLowerCase() !== walletAddress.toLowerCase()) {
+      console.error('🫀 Transaction ownership check failed: transaction does not belong to this wallet');
+      return { success: false, error: 'Transaction does not belong to this wallet' };
+    }
 
     // Get network and create provider with automatic failover
     const network = originalTx.network;
     const provider = await rpc.getProvider(network);
-    const wallet = signer.connect(provider);
+    wallet = signer.connect(provider);
 
     // Calculate new gas price
     let newGasPrice;
@@ -1346,14 +1479,33 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
   } catch (error) {
     console.error('🫀 Error speeding up transaction:', error);
     return { success: false, error: sanitizeErrorMessage(error.message) };
+  } finally {
+    // SECURITY: Clean up sensitive data from memory
+    if (password) {
+      const tempObj = { password };
+      secureCleanup(tempObj, ['password']);
+      password = null;
+    }
+    if (signer) {
+      secureCleanupSigner(signer);
+      signer = null;
+    }
+    if (wallet) {
+      secureCleanupSigner(wallet);
+      wallet = null;
+    }
   }
 }
 
 // Cancel a pending transaction by replacing it with a zero-value tx to self
 async function handleCancelTransaction(address, originalTxHash, sessionToken, customGasPrice = null) {
+  let password = null;
+  let signer = null;
+  let wallet = null;
+
   try {
     // Validate session (now async)
-    const password = await validateSession(sessionToken);
+    password = await validateSession(sessionToken);
 
     // Get original transaction details
     const originalTx = await txHistory.getTxByHash(address, originalTxHash);
@@ -1366,16 +1518,30 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
     }
 
     // Get wallet and unlock (auto-upgrade if needed)
-    const { signer } = await unlockWallet(password, {
+    const unlockResult = await unlockWallet(password, {
       onUpgradeStart: (info) => {
         console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
       }
     });
+    signer = unlockResult.signer;
+
+    // SECURITY: Verify the transaction belongs to this wallet
+    const walletAddress = await signer.getAddress();
+    if (walletAddress.toLowerCase() !== address.toLowerCase()) {
+      console.error('🫀 Address mismatch in cancel: wallet address does not match request');
+      return { success: false, error: 'Wallet address mismatch' };
+    }
+
+    // Verify original transaction is from this wallet
+    if (originalTx.from && originalTx.from.toLowerCase() !== walletAddress.toLowerCase()) {
+      console.error('🫀 Transaction ownership check failed: transaction does not belong to this wallet');
+      return { success: false, error: 'Transaction does not belong to this wallet' };
+    }
 
     // Get network and create provider with automatic failover
     const network = originalTx.network;
     const provider = await rpc.getProvider(network);
-    const wallet = signer.connect(provider);
+    wallet = signer.connect(provider);
 
     // Calculate new gas price
     let newGasPrice;
@@ -1439,6 +1605,21 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
   } catch (error) {
     console.error('🫀 Error cancelling transaction:', error);
     return { success: false, error: sanitizeErrorMessage(error.message) };
+  } finally {
+    // SECURITY: Clean up sensitive data from memory
+    if (password) {
+      const tempObj = { password };
+      secureCleanup(tempObj, ['password']);
+      password = null;
+    }
+    if (signer) {
+      secureCleanupSigner(signer);
+      signer = null;
+    }
+    if (wallet) {
+      secureCleanupSigner(wallet);
+      wallet = null;
+    }
   }
 }
 
@@ -1745,16 +1926,20 @@ async function handleSignApproval(requestId, approved, sessionToken) {
     return { success: false, error: 'User rejected' };
   }
 
+  let password = null;
+  let signer = null;
+
   try {
     // Validate session and get password
-    const password = await validateSession(sessionToken);
+    password = await validateSession(sessionToken);
 
     // Unlock wallet (auto-upgrade if needed)
-    const { signer } = await unlockWallet(password, {
+    const unlockResult = await unlockWallet(password, {
       onUpgradeStart: (info) => {
         console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
       }
     });
+    signer = unlockResult.signer;
 
     let signature;
 
@@ -1767,6 +1952,17 @@ async function handleSignApproval(requestId, approved, sessionToken) {
       throw new Error(`Unsupported signing method: ${method}`);
     }
 
+    // Log successful signing operation
+    const signerAddress = await signer.getAddress();
+    await logSigningOperation({
+      type: method.startsWith('eth_signTypedData') ? 'typed_data' : 'personal_sign',
+      address: signerAddress,
+      origin: origin,
+      method: method,
+      success: true,
+      walletType: 'software'
+    });
+
     // Signature generated successfully
     console.log('🫀 Message signed for origin:', origin);
 
@@ -1774,8 +1970,31 @@ async function handleSignApproval(requestId, approved, sessionToken) {
     return { success: true, signature };
   } catch (error) {
     console.error('🫀 Error signing message:', error);
+
+    // Log failed signing operation
+    await logSigningOperation({
+      type: method.startsWith('eth_signTypedData') ? 'typed_data' : 'personal_sign',
+      address: signRequest.address || 'unknown',
+      origin: origin,
+      method: method,
+      success: false,
+      error: error.message,
+      walletType: 'software'
+    });
+
     reject(error);
     return { success: false, error: error.message };
+  } finally {
+    // SECURITY: Clean up sensitive data from memory
+    if (password) {
+      const tempObj = { password };
+      secureCleanup(tempObj, ['password']);
+      password = null;
+    }
+    if (signer) {
+      secureCleanupSigner(signer);
+      signer = null;
+    }
   }
 }
 
@@ -1787,7 +2006,7 @@ async function handleLedgerSignApproval(requestId, approved, signature) {
     return { success: false, error: 'Request not found or expired' };
   }
 
-  const { resolve, reject, origin, approvalToken } = pendingSignRequests.get(requestId);
+  const { resolve, reject, origin, method, signRequest, approvalToken } = pendingSignRequests.get(requestId);
 
   // Validate one-time approval token
   if (!validateAndUseApprovalToken(approvalToken)) {
@@ -1804,12 +2023,34 @@ async function handleLedgerSignApproval(requestId, approved, signature) {
   }
 
   try {
+    // Log successful Ledger signing operation
+    await logSigningOperation({
+      type: method && method.startsWith('eth_signTypedData') ? 'typed_data' : 'personal_sign',
+      address: signRequest?.address || 'ledger',
+      origin: origin,
+      method: method || 'personal_sign',
+      success: true,
+      walletType: 'hardware'
+    });
+
     // Signature already created by Ledger in popup - just pass it through
     console.log('🫀 Ledger message signed for origin:', origin);
     resolve({ result: signature });
     return { success: true, signature };
   } catch (error) {
     console.error('🫀 Error processing Ledger signature:', error);
+
+    // Log failed signing operation
+    await logSigningOperation({
+      type: method && method.startsWith('eth_signTypedData') ? 'typed_data' : 'personal_sign',
+      address: signRequest?.address || 'ledger',
+      origin: origin,
+      method: method || 'personal_sign',
+      success: false,
+      error: error.message,
+      walletType: 'hardware'
+    });
+
     reject(error);
     return { success: false, error: error.message };
   }
@@ -1924,6 +2165,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tokenRequestInfo = getTokenAddRequest(message.requestId);
           console.log('🫀 Sending token add request info:', tokenRequestInfo);
           sendResponse(tokenRequestInfo);
+          break;
+
+        // Signing Audit Log
+        case 'GET_SIGNING_AUDIT_LOG':
+          const signingLog = await getSigningAuditLog();
+          sendResponse({ success: true, log: signingLog });
           break;
 
         // Transaction History

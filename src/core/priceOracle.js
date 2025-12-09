@@ -341,11 +341,3 @@ export function formatUSD(value) {
   }
 }
 
-/**
- * Clear price cache (useful for testing or manual refresh)
- */
-export function clearPriceCache() {
-  priceCache.prices = {};
-  priceCache.timestamp = 0;
-  // Price cache cleared
-}

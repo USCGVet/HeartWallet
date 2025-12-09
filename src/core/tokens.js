@@ -288,13 +288,3 @@ export async function toggleDefaultToken(network, symbol, enabled) {
   await save(key, updated);
 }
 
-/**
- * Checks if a default token is enabled
- * @param {string} network - Network key
- * @param {string} symbol - Token symbol
- * @returns {Promise<boolean>}
- */
-export async function isDefaultTokenEnabled(network, symbol) {
-  const enabled = await getEnabledDefaultTokens(network);
-  return enabled.includes(symbol);
-}

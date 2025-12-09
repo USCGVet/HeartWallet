@@ -36,13 +36,6 @@ export async function getTxHistorySettings() {
 }
 
 /**
- * Update transaction history settings
- */
-export async function updateTxHistorySettings(settings) {
-  await save(TX_HISTORY_SETTINGS_KEY, settings);
-}
-
-/**
  * Get all transaction history
  */
 async function getAllHistory() {
@@ -185,18 +178,3 @@ export async function clearTxHistory(address) {
   }
 }
 
-/**
- * Clear all transaction history (all addresses)
- */
-export async function clearAllTxHistory() {
-  await save(TX_HISTORY_KEY, {});
-  // All transaction history cleared
-}
-
-/**
- * Export transaction history as JSON (for debugging)
- */
-export async function exportTxHistory(address) {
-  const txs = await getTxHistory(address);
-  return JSON.stringify(txs, null, 2);
-}

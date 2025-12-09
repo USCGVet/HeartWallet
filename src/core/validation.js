@@ -20,20 +20,6 @@ export function isValidAddress(address) {
 }
 
 /**
- * Validates amount (must be positive number)
- * @param {string} amount
- * @returns {boolean}
- */
-export function isValidAmount(amount) {
-  try {
-    const num = parseFloat(amount);
-    return !isNaN(num) && num > 0 && isFinite(num);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Validates mnemonic phrase (BIP39)
  * @param {string} mnemonic
  * @returns {boolean}
@@ -112,65 +98,6 @@ export function validatePasswordStrength(password) {
     valid: errors.length === 0,
     errors
   };
-}
-
-/**
- * Sanitizes user input (removes potentially dangerous characters)
- * @param {string} input
- * @returns {string}
- */
-export function sanitizeInput(input) {
-  if (typeof input !== 'string') return '';
-
-  // Remove null bytes and control characters
-  return input
-    .replace(/[\x00-\x1F\x7F]/g, '')
-    .trim();
-}
-
-/**
- * Validates chain ID
- * @param {number} chainId
- * @returns {boolean}
- */
-export function isValidChainId(chainId) {
-  return Number.isInteger(chainId) && chainId > 0;
-}
-
-/**
- * Validates decimal places setting
- * @param {number} decimals
- * @returns {boolean}
- */
-export function isValidDecimalPlaces(decimals) {
-  const valid = [2, 4, 6, 8, 18];
-  return valid.includes(decimals);
-}
-
-/**
- * Validates theme name
- * @param {string} theme
- * @returns {boolean}
- */
-export function isValidTheme(theme) {
-  const valid = ['high-contrast', 'professional', 'amber', 'cga', 'classic'];
-  return valid.includes(theme);
-}
-
-/**
- * Formats amount to specified decimal places
- * @param {string|number} amount
- * @param {number} decimals
- * @returns {string}
- */
-export function formatAmount(amount, decimals = 8) {
-  try {
-    const num = parseFloat(amount);
-    if (isNaN(num)) return '0';
-    return num.toFixed(decimals);
-  } catch {
-    return '0';
-  }
 }
 
 /**
