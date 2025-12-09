@@ -299,8 +299,8 @@ HeartWallet implements multiple layers of security:
 - HEX
 - PLSX (PulseX)
 - INC (Incentive)
-- TKR (Trickle)
-- JDAI (Just DAI)
+- TKR (Taker)
+- JDAI (Gold tracking stablecoin)
 
 ### Ethereum
 - USDT
