@@ -8,7 +8,6 @@
 import '../polyfills.js';
 
 import {
-  createWallet,
   importFromMnemonic,
   importFromPrivateKey,
   unlockWallet,

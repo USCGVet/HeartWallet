@@ -608,30 +608,6 @@ async function decryptWithAES(encryptedData, passwordOrKey) {
   }
 }
 
-/**
- * Extracts iteration count from encrypted data without decrypting
- * @param {string} encryptedData - Base64 encoded encrypted data
- * @returns {number} Iteration count, or LEGACY_ITERATIONS if legacy format
- */
-function getIterationsFromEncrypted(encryptedData) {
-  try {
-    const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
-
-    if (combined.length >= 4) {
-      const possibleIterations = new DataView(combined.buffer, 0, 4).getUint32(0, false);
-
-      // Check if it looks like a valid iteration count
-      if (possibleIterations >= 100000 && possibleIterations <= 5000000) {
-        return possibleIterations;
-      }
-    }
-
-    // Legacy format
-    return LEGACY_ITERATIONS;
-  } catch (error) {
-    return LEGACY_ITERATIONS;
-  }
-}
 
 // Storage keys
 const OLD_WALLET_KEY = 'wallet_encrypted'; // Legacy single wallet
@@ -1337,19 +1313,6 @@ export async function exportPrivateKeyForWallet(walletId, password, options = {}
 export async function exportMnemonicForWallet(walletId, password, options = {}) {
   const { signer } = await unlockSpecificWallet(walletId, password, { skipUpgrade: true, ...options });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
-}
-
-/**
- * LEGACY: Creates first wallet (for initial setup compatibility)
- * @param {string} password - User password
- * @returns {Promise<{address: string, mnemonic: string}>}
- */
-export async function createWallet(password) {
-  const result = await addWallet('create', {}, password, 'Main Wallet');
-  return {
-    address: result.address,
-    mnemonic: result.mnemonic
-  };
 }
 
 /**

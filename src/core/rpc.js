@@ -92,29 +92,6 @@ function isEndpointBlacklisted(endpoint) {
   const health = endpointHealth.get(endpoint);
   return health?.blacklisted || false;
 }
-
-/**
- * Performs a health check on an RPC endpoint
- * @param {string} endpoint - RPC endpoint URL
- * @returns {Promise<boolean>} True if healthy
- */
-async function checkEndpointHealth(endpoint) {
-  try {
-    const provider = new ethers.JsonRpcProvider(endpoint);
-    
-    // Race the health check against timeout
-    const healthCheckPromise = provider.getBlockNumber();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Health check timeout')), HEALTH_CONFIG.HEALTH_CHECK_TIMEOUT)
-    );
-    
-    await Promise.race([healthCheckPromise, timeoutPromise]);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
 /**
  * Gets or creates an RPC provider for a network with automatic failover
  * @param {string} network - Network key (e.g., 'pulsechainTestnet')
@@ -384,64 +361,6 @@ export async function getBlockNumber(network) {
  */
 export async function getBlockByNumber(network, blockNumber, includeTransactions = false) {
   return await rpcCall(network, 'eth_getBlockByNumber', [blockNumber, includeTransactions]);
-}
-
-/**
- * Gets recent transactions for an address
- * NOTE: This is a placeholder that returns empty array.
- * Scanning blocks via RPC is too expensive (would make 100+ requests).
- * Proper transaction history requires an indexer/block explorer API.
- * @param {string} network - Network key
- * @param {string} address - Ethereum address
- * @param {number} limit - Maximum number of transactions to return (default 3)
- * @param {number} blocksToScan - Number of recent blocks to scan (default 50)
- * @returns {Promise<Array>} Array of transaction objects
- */
-export async function getRecentTransactions(network, address, limit = 3, blocksToScan = 50) {
-  // Transaction history disabled to avoid excessive RPC calls
-  // Would require scanning hundreds/thousands of blocks
-  // Users can view transactions on block explorer instead
-  return [];
-
-  /* ORIGINAL IMPLEMENTATION - DISABLED DUE TO EXCESSIVE RPC CALLS
-  try {
-    const provider = getProvider(network);
-    const currentBlock = await provider.getBlockNumber();
-    const fromBlock = Math.max(0, currentBlock - blocksToScan);
-
-    const transactions = [];
-    const addressLower = address.toLowerCase();
-
-    // This would make blocksToScan RPC requests!
-    for (let i = currentBlock; i >= fromBlock && transactions.length < limit; i--) {
-      try {
-        const block = await provider.getBlock(i, true);
-        if (block && block.transactions) {
-          for (const tx of block.transactions) {
-            if (transactions.length >= limit) break;
-            if (tx.from?.toLowerCase() === addressLower || tx.to?.toLowerCase() === addressLower) {
-              transactions.push({
-                hash: tx.hash,
-                from: tx.from,
-                to: tx.to,
-                value: tx.value.toString(),
-                blockNumber: tx.blockNumber,
-                timestamp: block.timestamp,
-                type: tx.from?.toLowerCase() === addressLower ? 'sent' : 'received'
-              });
-            }
-          }
-        }
-      } catch (blockError) {
-        console.error(`Error loading block ${i}:`, blockError);
-      }
-    }
-    return transactions;
-  } catch (error) {
-    console.error('Error fetching recent transactions:', error);
-    return [];
-  }
-  */
 }
 
 /**

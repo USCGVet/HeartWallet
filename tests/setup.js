@@ -2,9 +2,55 @@
  * tests/setup.js
  *
  * Test setup and Chrome API mocks
+ *
+ * PERFORMANCE: Mocks expensive crypto operations for fast test execution
+ * - Argon2id worker: Returns instant mock result (no 256MB memory allocation)
+ * - PBKDF2: Uses Node.js native (faster than browser)
  */
 
 import { vi } from 'vitest';
+
+// ===== MOCK ARGON2 WORKER =====
+// The real Argon2id uses 256MB memory and takes 2-5 seconds per operation.
+// For tests, we mock it to return a deterministic result instantly.
+// This tests the integration logic without the expensive computation.
+vi.mock('../src/workers/argon2-worker.js?worker', () => {
+  return {
+    default: class MockArgon2Worker {
+      constructor() {
+        this.onmessage = null;
+        this.onerror = null;
+      }
+
+      postMessage(data) {
+        // Simulate async worker response
+        setTimeout(() => {
+          if (this.onmessage) {
+            // Generate deterministic mock result based on password + salt
+            // This ensures same inputs = same outputs (like real Argon2id)
+            const { password, salt } = data;
+            const mockResult = new Uint8Array(32);
+
+            // Simple deterministic fill based on password
+            const encoder = new TextEncoder();
+            const pwBytes = encoder.encode(password);
+            for (let i = 0; i < 32; i++) {
+              mockResult[i] = (pwBytes[i % pwBytes.length] + salt[i % salt.length] + i) % 256;
+            }
+
+            // Send progress then complete (mimics real worker)
+            this.onmessage({ data: { type: 'progress', progress: 0.5 } });
+            this.onmessage({ data: { type: 'complete', result: Array.from(mockResult) } });
+          }
+        }, 1); // 1ms delay to simulate async
+      }
+
+      terminate() {
+        // No-op for mock
+      }
+    }
+  };
+});
 
 // Mock Chrome Storage API
 global.chrome = {

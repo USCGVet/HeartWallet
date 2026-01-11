@@ -12,7 +12,7 @@ import {
   addCustomToken,
   removeCustomToken,
   toggleDefaultToken,
-  isDefaultTokenEnabled,
+  
   DEFAULT_TOKENS
 } from '../../src/core/tokens.js';
 import * as storage from '../../src/core/storage.js';
@@ -381,40 +381,6 @@ describe('tokens.js', () => {
     });
   });
 
-  describe('isDefaultTokenEnabled', () => {
-    it('should return true for enabled token', async () => {
-      storage.load.mockResolvedValue(['HEX', 'PLSX']);
-
-      const result = await isDefaultTokenEnabled('pulsechain', 'HEX');
-
-      expect(result).toBe(true);
-    });
-
-    it('should return false for disabled token', async () => {
-      storage.load.mockResolvedValue(['HEX']);
-
-      const result = await isDefaultTokenEnabled('pulsechain', 'PLSX');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return true when all defaults enabled (null storage)', async () => {
-      storage.load.mockResolvedValue(null);
-
-      const result = await isDefaultTokenEnabled('pulsechain', 'HEX');
-
-      // When null, all defaults are enabled
-      expect(result).toBe(true);
-    });
-
-    it('should return false for non-existent token', async () => {
-      storage.load.mockResolvedValue(['HEX']);
-
-      const result = await isDefaultTokenEnabled('pulsechain', 'NONEXISTENT');
-
-      expect(result).toBe(false);
-    });
-  });
 
   describe('integration tests', () => {
     it('should handle complete add/remove workflow', async () => {
@@ -445,34 +411,6 @@ describe('tokens.js', () => {
       );
     });
 
-    it('should handle default token enable/disable workflow', async () => {
-      storage.load.mockResolvedValue(['HEX', 'PLSX']);
-
-      // Check enabled
-      let enabled = await isDefaultTokenEnabled('pulsechain', 'HEX');
-      expect(enabled).toBe(true);
-
-      // Disable
-      await toggleDefaultToken('pulsechain', 'HEX', false);
-      expect(storage.save).toHaveBeenCalledWith(
-        'enabled_default_tokens_pulsechain',
-        ['PLSX']
-      );
-
-      // Simulate storage updated
-      storage.load.mockResolvedValue(['PLSX']);
-
-      // Check disabled
-      enabled = await isDefaultTokenEnabled('pulsechain', 'HEX');
-      expect(enabled).toBe(false);
-
-      // Re-enable
-      await toggleDefaultToken('pulsechain', 'HEX', true);
-      expect(storage.save).toHaveBeenLastCalledWith(
-        'enabled_default_tokens_pulsechain',
-        ['PLSX', 'HEX']
-      );
-    });
 
     it('should properly combine tokens from multiple sources', async () => {
       const customTokens = [
