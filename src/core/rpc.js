@@ -6,23 +6,24 @@
 
 import { ethers } from 'ethers';
 
-// Network RPC endpoints - Multiple endpoints per network for redundancy
-const RPC_ENDPOINTS = {
+// Default Network RPC endpoints - Multiple endpoints per network for redundancy
+// These are the fallback defaults; user-configured priorities are loaded from storage
+const DEFAULT_RPC_ENDPOINTS = {
   'pulsechainTestnet': [
     'https://rpc.v4.testnet.pulsechain.com',
     'https://rpc-testnet-pulsechain.g4mm4.io'
   ],
   'pulsechain': [
-    'https://rpc.pulsechain.com',
     'https://pulsechain-rpc.publicnode.com',
+    'https://pulsechain.publicnode.com',
     'https://rpc-pulsechain.g4mm4.io',
-    'https://pulsechain.publicnode.com'
+    'https://rpc.pulsechain.com'
   ],
   'ethereum': [
-    'https://eth.llamarpc.com',
     'https://ethereum.publicnode.com',
     'https://rpc.ankr.com/eth',
-    'https://cloudflare-eth.com'
+    'https://cloudflare-eth.com',
+    'https://eth.llamarpc.com'
   ],
   'sepolia': [
     'https://rpc.sepolia.org',
@@ -31,8 +32,65 @@ const RPC_ENDPOINTS = {
   ]
 };
 
+// User-configured RPC priorities (loaded from storage)
+let userRpcPriorities = null;
+
 // Cached providers per network
 const providers = {};
+
+/**
+ * Loads user-configured RPC priorities from storage
+ * @returns {Promise<Object|null>}
+ */
+async function loadUserRpcPriorities() {
+  if (userRpcPriorities !== null) {
+    return userRpcPriorities;
+  }
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const result = await chrome.storage.local.get('rpcPriorities');
+      userRpcPriorities = result.rpcPriorities || {};
+      return userRpcPriorities;
+    }
+  } catch (error) {
+    console.warn('Could not load RPC priorities from storage:', error);
+  }
+
+  userRpcPriorities = {};
+  return userRpcPriorities;
+}
+
+/**
+ * Gets the RPC endpoints for a network (user-configured or defaults)
+ * @param {string} network - Network key
+ * @returns {Promise<string[]>}
+ */
+async function getRpcEndpoints(network) {
+  const priorities = await loadUserRpcPriorities();
+
+  // Use user-configured priorities if available, otherwise defaults
+  if (priorities[network] && priorities[network].length > 0) {
+    return priorities[network];
+  }
+
+  return DEFAULT_RPC_ENDPOINTS[network] || [];
+}
+
+/**
+ * Updates RPC priorities for a network (called from popup)
+ * @param {string} network - Network key
+ * @param {string[]} priorities - Ordered list of RPC URLs
+ */
+export function updateRpcPriorities(network, priorities) {
+  if (!userRpcPriorities) {
+    userRpcPriorities = {};
+  }
+  userRpcPriorities[network] = priorities;
+
+  // Clear cached provider for this network to force reconnection with new priority
+  delete providers[network];
+}
 
 // Track failed endpoints to avoid repeated failures
 const endpointHealth = new Map(); // endpoint -> { failures: number, lastCheck: timestamp, blacklisted: boolean }
@@ -98,12 +156,13 @@ function isEndpointBlacklisted(endpoint) {
  * @returns {Promise<ethers.JsonRpcProvider>}
  */
 export async function getProvider(network) {
-  const endpoints = RPC_ENDPOINTS[network];
-  
-  if (!endpoints) {
+  // Get endpoints from user config or defaults
+  const endpoints = await getRpcEndpoints(network);
+
+  if (!endpoints || endpoints.length === 0) {
     throw new Error(`Unknown network: ${network}`);
   }
-  
+
   // If we have a cached working provider, return it
   if (providers[network]) {
     try {

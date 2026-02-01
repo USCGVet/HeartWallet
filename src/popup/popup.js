@@ -583,6 +583,33 @@ function setupEventListeners() {
       resetNetworkSettingsToDefaults();
     }
   });
+
+  // RPC Priority Settings
+  document.getElementById('btn-rpc-priority')?.addEventListener('click', () => {
+    loadRpcPriorityUI();
+    showScreen('screen-rpc-priority');
+  });
+
+  document.getElementById('btn-back-from-rpc-priority')?.addEventListener('click', () => {
+    showScreen('screen-network-settings');
+  });
+
+  document.getElementById('rpc-priority-network')?.addEventListener('change', () => {
+    loadRpcPriorityUI();
+  });
+
+  document.getElementById('btn-test-rpc-speeds')?.addEventListener('click', testRpcSpeeds);
+
+  document.getElementById('btn-add-custom-rpc')?.addEventListener('click', addCustomRpc);
+
+  document.getElementById('btn-save-rpc-priority')?.addEventListener('click', saveRpcPriority);
+
+  document.getElementById('btn-reset-rpc-priority')?.addEventListener('click', () => {
+    if (confirm('Reset RPC endpoints to defaults for this network?')) {
+      resetRpcPriorityToDefaults();
+    }
+  });
+
   document.getElementById('btn-copy-address')?.addEventListener('click', handleCopyAddress);
   document.getElementById('btn-send')?.addEventListener('click', showSendScreen);
   document.getElementById('btn-receive')?.addEventListener('click', showReceiveScreen);
@@ -3857,8 +3884,8 @@ const NETWORK_KEYS = ['pulsechainTestnet', 'pulsechain', 'ethereum', 'sepolia'];
 // Default network configuration
 const DEFAULT_RPCS = {
   'pulsechainTestnet': 'https://rpc.v4.testnet.pulsechain.com',
-  'pulsechain': 'https://rpc.pulsechain.com',
-  'ethereum': 'https://eth.llamarpc.com',
+  'pulsechain': 'https://pulsechain-rpc.publicnode.com',
+  'ethereum': 'https://ethereum.publicnode.com',
   'sepolia': 'https://rpc.sepolia.org'
 };
 
@@ -3947,6 +3974,314 @@ function resetNetworkSettingsToDefaults() {
 function applyNetworkSettings() {
   // This would update the runtime RPC and explorer configs
   // For now, settings take effect on reload
+}
+
+// ===== RPC PRIORITY SETTINGS =====
+// Default RPC endpoints per network (in priority order)
+const DEFAULT_RPC_PRIORITIES = {
+  'pulsechainTestnet': [
+    'https://rpc.v4.testnet.pulsechain.com',
+    'https://rpc-testnet-pulsechain.g4mm4.io'
+  ],
+  'pulsechain': [
+    'https://pulsechain-rpc.publicnode.com',
+    'https://pulsechain.publicnode.com',
+    'https://rpc-pulsechain.g4mm4.io',
+    'https://rpc.pulsechain.com'
+  ],
+  'ethereum': [
+    'https://ethereum.publicnode.com',
+    'https://rpc.ankr.com/eth',
+    'https://cloudflare-eth.com',
+    'https://eth.llamarpc.com'
+  ],
+  'sepolia': [
+    'https://rpc.sepolia.org',
+    'https://ethereum-sepolia.publicnode.com',
+    'https://rpc.ankr.com/eth_sepolia'
+  ]
+};
+
+// Track current RPC list being edited
+let currentRpcPriorityList = [];
+
+async function loadRpcPriorityUI() {
+  const networkSelect = document.getElementById('rpc-priority-network');
+  const network = networkSelect?.value || 'pulsechain';
+
+  // Load saved priorities or use defaults
+  const savedPriorities = await load('rpcPriorities');
+  const priorities = savedPriorities?.[network] || DEFAULT_RPC_PRIORITIES[network] || [];
+
+  currentRpcPriorityList = [...priorities];
+  renderRpcPriorityList();
+
+  // Hide speed results when switching networks
+  document.getElementById('rpc-speed-results')?.classList.add('hidden');
+}
+
+function renderRpcPriorityList() {
+  const listEl = document.getElementById('rpc-priority-list');
+  if (!listEl) return;
+
+  listEl.innerHTML = '';
+
+  currentRpcPriorityList.forEach((url, index) => {
+    const isDefault = isDefaultRpc(url);
+    const item = document.createElement('div');
+    item.className = 'rpc-item';
+    item.draggable = true;
+    item.dataset.index = index;
+
+    item.innerHTML = `
+      <span class="rpc-item-handle">☰</span>
+      <span class="rpc-item-priority">#${index + 1}</span>
+      <span class="rpc-item-url">${url}</span>
+      <span class="rpc-item-status"></span>
+      <button class="rpc-item-remove ${isDefault ? 'hidden' : ''}" title="Remove">×</button>
+    `;
+
+    // Drag events
+    item.addEventListener('dragstart', handleRpcDragStart);
+    item.addEventListener('dragover', handleRpcDragOver);
+    item.addEventListener('dragleave', handleRpcDragLeave);
+    item.addEventListener('drop', handleRpcDrop);
+    item.addEventListener('dragend', handleRpcDragEnd);
+
+    // Remove button
+    const removeBtn = item.querySelector('.rpc-item-remove');
+    removeBtn?.addEventListener('click', () => {
+      currentRpcPriorityList.splice(index, 1);
+      renderRpcPriorityList();
+    });
+
+    listEl.appendChild(item);
+  });
+}
+
+function isDefaultRpc(url) {
+  const networkSelect = document.getElementById('rpc-priority-network');
+  const network = networkSelect?.value || 'pulsechain';
+  const defaults = DEFAULT_RPC_PRIORITIES[network] || [];
+  return defaults.includes(url);
+}
+
+// Drag and drop handlers
+let draggedRpcIndex = null;
+
+function handleRpcDragStart(e) {
+  draggedRpcIndex = parseInt(e.target.dataset.index);
+  e.target.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function handleRpcDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const item = e.target.closest('.rpc-item');
+  if (item && parseInt(item.dataset.index) !== draggedRpcIndex) {
+    item.classList.add('drag-over');
+  }
+}
+
+function handleRpcDragLeave(e) {
+  const item = e.target.closest('.rpc-item');
+  if (item) {
+    item.classList.remove('drag-over');
+  }
+}
+
+function handleRpcDrop(e) {
+  e.preventDefault();
+  const item = e.target.closest('.rpc-item');
+  if (!item) return;
+
+  const dropIndex = parseInt(item.dataset.index);
+  item.classList.remove('drag-over');
+
+  if (draggedRpcIndex !== null && draggedRpcIndex !== dropIndex) {
+    // Reorder the list
+    const [moved] = currentRpcPriorityList.splice(draggedRpcIndex, 1);
+    currentRpcPriorityList.splice(dropIndex, 0, moved);
+    renderRpcPriorityList();
+  }
+}
+
+function handleRpcDragEnd(e) {
+  e.target.classList.remove('dragging');
+  draggedRpcIndex = null;
+
+  // Remove drag-over from all items
+  document.querySelectorAll('.rpc-item').forEach(item => {
+    item.classList.remove('drag-over');
+  });
+}
+
+async function testRpcSpeeds() {
+  const resultsContainer = document.getElementById('rpc-speed-results');
+  const resultsContent = document.getElementById('rpc-speed-results-content');
+  const testBtn = document.getElementById('btn-test-rpc-speeds');
+
+  if (!resultsContainer || !resultsContent || !testBtn) return;
+
+  // Show results container and disable button
+  resultsContainer.classList.remove('hidden');
+  resultsContent.innerHTML = '<p class="text-dim">Testing endpoints...</p>';
+  testBtn.disabled = true;
+  testBtn.textContent = 'TESTING...';
+
+  // Update status indicators on each RPC item
+  const items = document.querySelectorAll('.rpc-item');
+  items.forEach(item => {
+    const status = item.querySelector('.rpc-item-status');
+    if (status) {
+      status.textContent = 'testing...';
+      status.className = 'rpc-item-status testing';
+    }
+  });
+
+  const results = [];
+
+  for (let i = 0; i < currentRpcPriorityList.length; i++) {
+    const url = currentRpcPriorityList[i];
+    const item = items[i];
+    const statusEl = item?.querySelector('.rpc-item-status');
+
+    const result = await testSingleRpc(url);
+    results.push(result);
+
+    // Update individual item status
+    if (statusEl) {
+      if (result.success) {
+        statusEl.textContent = `${result.elapsed}ms`;
+        statusEl.className = 'rpc-item-status success';
+      } else {
+        statusEl.textContent = 'failed';
+        statusEl.className = 'rpc-item-status error';
+      }
+    }
+  }
+
+  // Display sorted results
+  const sortedResults = [...results].sort((a, b) => {
+    if (!a.success) return 1;
+    if (!b.success) return -1;
+    return a.elapsed - b.elapsed;
+  });
+
+  let html = '';
+  sortedResults.forEach((r, i) => {
+    const timeClass = r.success ? (r.elapsed < 300 ? 'fast' : r.elapsed < 700 ? 'medium' : 'slow') : 'slow';
+    html += `
+      <div class="speed-result-item">
+        <span class="speed-result-url">${i + 1}. ${r.url}</span>
+        <span class="speed-result-time ${timeClass}">${r.success ? r.elapsed + 'ms' : 'FAILED'}</span>
+      </div>
+    `;
+  });
+
+  resultsContent.innerHTML = html || '<p class="text-dim">No results</p>';
+
+  // Re-enable button
+  testBtn.disabled = false;
+  testBtn.textContent = 'TEST SPEEDS';
+}
+
+async function testSingleRpc(url) {
+  const start = Date.now();
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_blockNumber',
+        params: [],
+        id: 1
+      })
+    });
+
+    const data = await response.json();
+    const elapsed = Date.now() - start;
+
+    if (data.result) {
+      return { url, elapsed, success: true };
+    } else {
+      return { url, elapsed, success: false };
+    }
+  } catch (error) {
+    const elapsed = Date.now() - start;
+    return { url, elapsed, success: false, error: error.message };
+  }
+}
+
+function addCustomRpc() {
+  const input = document.getElementById('custom-rpc-url');
+  if (!input) return;
+
+  const url = input.value.trim();
+
+  // Validate URL
+  if (!url) {
+    alert('Please enter an RPC URL');
+    return;
+  }
+
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    alert('URL must start with http:// or https://');
+    return;
+  }
+
+  // Check for duplicates
+  if (currentRpcPriorityList.includes(url)) {
+    alert('This endpoint is already in the list');
+    return;
+  }
+
+  // Add to list
+  currentRpcPriorityList.push(url);
+  input.value = '';
+  renderRpcPriorityList();
+}
+
+async function saveRpcPriority() {
+  const networkSelect = document.getElementById('rpc-priority-network');
+  const network = networkSelect?.value || 'pulsechain';
+
+  if (currentRpcPriorityList.length === 0) {
+    alert('At least one RPC endpoint is required');
+    return;
+  }
+
+  // Load existing priorities
+  const savedPriorities = await load('rpcPriorities') || {};
+
+  // Update for this network
+  savedPriorities[network] = [...currentRpcPriorityList];
+
+  // Save
+  await save('rpcPriorities', savedPriorities);
+
+  // Notify service worker to update RPC config
+  try {
+    await chrome.runtime.sendMessage({ type: 'UPDATE_RPC_PRIORITIES', network, priorities: currentRpcPriorityList });
+  } catch (e) {
+    // Service worker may not be listening for this yet
+    console.log('Could not notify service worker of RPC changes');
+  }
+
+  alert('RPC priority saved! Changes will take effect on next request.');
+}
+
+async function resetRpcPriorityToDefaults() {
+  const networkSelect = document.getElementById('rpc-priority-network');
+  const network = networkSelect?.value || 'pulsechain';
+
+  currentRpcPriorityList = [...(DEFAULT_RPC_PRIORITIES[network] || [])];
+  renderRpcPriorityList();
+
+  // Hide speed results
+  document.getElementById('rpc-speed-results')?.classList.add('hidden');
 }
 
 // ===== PASSWORD PROMPT MODAL =====

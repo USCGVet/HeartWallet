@@ -2271,6 +2271,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(cancelResult);
           break;
 
+        case 'UPDATE_RPC_PRIORITIES':
+          // Update RPC priorities in the rpc module
+          if (message.network && message.priorities) {
+            rpc.updateRpcPriorities(message.network, message.priorities);
+            console.log(`🫀 Updated RPC priorities for ${message.network}`);
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: 'Missing network or priorities' });
+          }
+          break;
+
         default:
           console.log('🫀 Unknown message type:', message.type);
           sendResponse({ success: false, error: 'Unknown message type' });

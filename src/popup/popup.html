@@ -1150,6 +1150,71 @@
         <button id="btn-save-network-settings" class="btn-primary">SAVE SETTINGS</button>
         <button id="btn-reset-network-settings" class="btn">RESET TO DEFAULTS</button>
       </div>
+
+      <div class="panel mt-2">
+        <div class="panel-header">RPC Failover Priority</div>
+        <p class="text-dim" style="font-size: 11px; margin-bottom: 8px;">
+          Configure the order in which RPC endpoints are tried when one fails. Endpoints closer to your location may be faster.
+        </p>
+        <button id="btn-rpc-priority" class="btn btn-primary btn-small">CONFIGURE RPC PRIORITY</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RPC Priority Settings Screen -->
+  <div id="screen-rpc-priority" class="hidden">
+    <div class="header">
+      <div class="header-title">RPC PRIORITY</div>
+      <button id="btn-back-from-rpc-priority" class="header-btn">←</button>
+    </div>
+    <div class="container">
+      <p class="text-dim mb-2" style="font-size: 11px;">
+        Drag to reorder RPC endpoints. The wallet will try them in order until one succeeds. Test speeds to find the fastest for your location.
+      </p>
+
+      <!-- Network selector for RPC priority -->
+      <div class="form-group mb-2">
+        <label class="form-label">Select Network</label>
+        <select id="rpc-priority-network" class="form-control">
+          <option value="pulsechain">PulseChain Mainnet</option>
+          <option value="pulsechainTestnet">PulseChain Testnet V4</option>
+          <option value="ethereum">Ethereum Mainnet</option>
+          <option value="sepolia">Sepolia Testnet</option>
+        </select>
+      </div>
+
+      <!-- RPC list container -->
+      <div class="panel">
+        <div class="panel-header">RPC Endpoints (drag to reorder)</div>
+        <div id="rpc-priority-list" class="rpc-priority-list">
+          <!-- RPC items will be populated by JavaScript -->
+        </div>
+      </div>
+
+      <!-- Test speeds button -->
+      <div class="button-group mt-2">
+        <button id="btn-test-rpc-speeds" class="btn">TEST SPEEDS</button>
+      </div>
+
+      <!-- Speed test results -->
+      <div id="rpc-speed-results" class="panel mt-2 hidden">
+        <div class="panel-header">Speed Test Results</div>
+        <div id="rpc-speed-results-content"></div>
+      </div>
+
+      <!-- Add custom RPC -->
+      <div class="panel mt-2">
+        <div class="panel-header">Add Custom RPC</div>
+        <div class="form-group">
+          <input type="text" id="custom-rpc-url" class="form-control" placeholder="https://your-rpc-endpoint.com" />
+        </div>
+        <button id="btn-add-custom-rpc" class="btn btn-small">ADD ENDPOINT</button>
+      </div>
+
+      <div class="button-group mt-2">
+        <button id="btn-save-rpc-priority" class="btn-primary">SAVE PRIORITY ORDER</button>
+        <button id="btn-reset-rpc-priority" class="btn">RESET TO DEFAULTS</button>
+      </div>
     </div>
   </div>
 

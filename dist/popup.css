@@ -864,3 +864,139 @@ select::-webkit-scrollbar-thumb:hover {
   font-family: var(--terminal-font);
   font-weight: bold;
 }
+
+/* ===== RPC PRIORITY LIST (DRAG & DROP) ===== */
+.rpc-priority-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rpc-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--terminal-bg);
+  border: 1px solid var(--terminal-border-dim);
+  cursor: grab;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.rpc-item:hover {
+  border-color: var(--terminal-fg);
+  background: var(--terminal-bg-secondary);
+}
+
+.rpc-item.dragging {
+  opacity: 0.5;
+  border-color: var(--terminal-fg);
+  box-shadow: 0 0 8px var(--terminal-glow);
+}
+
+.rpc-item.drag-over {
+  border-color: var(--terminal-success);
+  background: rgba(0, 255, 0, 0.1);
+}
+
+.rpc-item-handle {
+  color: var(--terminal-fg-dim);
+  margin-right: 10px;
+  font-size: 14px;
+  cursor: grab;
+}
+
+.rpc-item-priority {
+  color: var(--terminal-fg-dim);
+  font-size: 11px;
+  min-width: 24px;
+  margin-right: 8px;
+}
+
+.rpc-item-url {
+  flex: 1;
+  font-size: 11px;
+  color: var(--terminal-fg);
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+
+.rpc-item-status {
+  margin-left: 8px;
+  font-size: 11px;
+  min-width: 70px;
+  text-align: right;
+}
+
+.rpc-item-status.testing {
+  color: var(--terminal-info);
+}
+
+.rpc-item-status.success {
+  color: var(--terminal-success);
+}
+
+.rpc-item-status.error {
+  color: var(--terminal-error);
+}
+
+.rpc-item-remove {
+  margin-left: 8px;
+  background: none;
+  border: none;
+  color: var(--terminal-error);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+
+.rpc-item-remove:hover {
+  opacity: 1;
+}
+
+.rpc-item-remove.hidden {
+  display: none;
+}
+
+/* Speed test results */
+#rpc-speed-results-content {
+  font-size: 11px;
+}
+
+.speed-result-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--terminal-border-dim);
+}
+
+.speed-result-item:last-child {
+  border-bottom: none;
+}
+
+.speed-result-url {
+  flex: 1;
+  color: var(--terminal-fg-dim);
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+
+.speed-result-time {
+  min-width: 80px;
+  text-align: right;
+  margin-left: 10px;
+}
+
+.speed-result-time.fast {
+  color: var(--terminal-success);
+}
+
+.speed-result-time.medium {
+  color: var(--terminal-warning);
+}
+
+.speed-result-time.slow {
+  color: var(--terminal-error);
+}
