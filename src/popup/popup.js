@@ -32,7 +32,7 @@ import { ethers } from 'ethers';
 import QRCode from 'qrcode';
 import * as tokens from '../core/tokens.js';
 import { decodeTransaction } from '../core/contractDecoder.js';
-import { fetchTokenPrices, getTokenValueUSD, formatUSD } from '../core/priceOracle.js';
+import { fetchTokenPrices, getTokenValueUSD, formatUSD, getNativeTokenPrice, getNativeTokenSymbol } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
 
@@ -92,6 +92,38 @@ async function hashPrivacyPin(pin) {
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================================
+// GAS PRICE HELPERS
+// ============================================================================
+
+/**
+ * Formats gas price in Gwei with appropriate precision based on magnitude
+ * PulseChain uses very high gas prices (millions of Gwei), Ethereum uses low (< 100 Gwei)
+ * @param {bigint|string|number} weiValue - Gas price in wei
+ * @returns {string} Formatted Gwei string
+ */
+function formatGweiSmart(weiValue) {
+  const wei = typeof weiValue === 'bigint' ? weiValue : BigInt(weiValue);
+  const gwei = Number(wei) / 1e9;
+
+  if (gwei >= 1000000) {
+    // Millions of Gwei (PulseChain) - show no decimals
+    return Math.round(gwei).toLocaleString();
+  } else if (gwei >= 1000) {
+    // Thousands of Gwei - show no decimals
+    return Math.round(gwei).toLocaleString();
+  } else if (gwei >= 1) {
+    // Normal Gwei - show 2 decimals
+    return gwei.toFixed(2);
+  } else if (gwei >= 0.001) {
+    // Sub-Gwei - show 3 decimals
+    return gwei.toFixed(3);
+  } else {
+    // Very low - show 6 decimals
+    return gwei.toFixed(6);
+  }
 }
 
 // ============================================================================
@@ -651,6 +683,7 @@ function setupEventListeners() {
   document.getElementById('filter-pending-txs')?.addEventListener('click', () => renderTransactionHistory('pending'));
   document.getElementById('filter-confirmed-txs')?.addEventListener('click', () => renderTransactionHistory('confirmed'));
   document.getElementById('btn-clear-tx-history')?.addEventListener('click', handleClearTransactionHistory);
+  setupTransactionHistoryEventDelegation(); // Set up event delegation once for transaction list
 
   // Transaction Details
   document.getElementById('btn-back-from-tx-details')?.addEventListener('click', () => showScreen('screen-tx-history'));
@@ -671,6 +704,7 @@ function setupEventListeners() {
   document.getElementById('btn-speed-up-tx')?.addEventListener('click', handleSpeedUpTransaction);
   document.getElementById('btn-cancel-tx')?.addEventListener('click', handleCancelTransaction);
   document.getElementById('btn-refresh-tx-status')?.addEventListener('click', refreshTransactionStatus);
+  document.getElementById('btn-rebroadcast-tx')?.addEventListener('click', rebroadcastTransaction);
 
   // Speed-up transaction modal
   document.getElementById('btn-close-speed-up-modal')?.addEventListener('click', () => {
@@ -983,6 +1017,9 @@ function setupEventListeners() {
     if (!txStatusCurrentHash || !txStatusCurrentAddress) return;
 
     try {
+      // Reset modal state first
+      resetSpeedUpModalState();
+
       // Get transaction details
       const txResponse = await chrome.runtime.sendMessage({
         type: 'GET_TX_BY_HASH',
@@ -1002,6 +1039,7 @@ function setupEventListeners() {
       speedUpModalState.address = txStatusCurrentAddress;
       speedUpModalState.network = tx.network;
       speedUpModalState.originalGasPrice = tx.gasPrice;
+      speedUpModalState.originalGasLimit = tx.gasLimit ? BigInt(tx.gasLimit) : 21000n;
 
       // Show modal and load gas prices
       document.getElementById('modal-speed-up-tx').classList.remove('hidden');
@@ -1017,6 +1055,9 @@ function setupEventListeners() {
     if (!txStatusCurrentHash || !txStatusCurrentAddress) return;
 
     try {
+      // Reset modal state first
+      resetCancelModalState();
+
       // Get transaction details
       const txResponse = await chrome.runtime.sendMessage({
         type: 'GET_TX_BY_HASH',
@@ -2247,8 +2288,13 @@ async function fetchAndUpdatePrices() {
   }
 
   try {
+    // Skip price fetching on testnets - no liquidity pools exist
+    if (currentState.network === 'pulsechainTestnet' || currentState.network === 'sepolia') {
+      return;
+    }
+
     const provider = await rpc.getProvider(currentState.network);
-    const prices = await fetchTokenPrices(provider, currentState.network === 'pulsechainTestnet' ? 'pulsechain' : currentState.network);
+    const prices = await fetchTokenPrices(provider, currentState.network);
 
     if (prices) {
       currentState.tokenPrices = prices;
@@ -2256,7 +2302,7 @@ async function fetchAndUpdatePrices() {
       // Prices updated
     }
   } catch (error) {
-    console.error('Error fetching token prices:', error);
+    // Silently fail - price data not critical
   } finally {
     // Hide loading indicator
     if (loadingEl && usdEl) {
@@ -2436,7 +2482,9 @@ async function handleSendMax() {
       gweiText = document.getElementById('send-gas-normal-price').textContent;
     }
 
-    const gwei = parseFloat(gweiText);
+    // Remove commas from locale-formatted numbers (e.g., "1,234,567 Gwei" -> "1234567")
+    const cleanedText = gweiText.replace(/,/g, '').replace(/\s*Gwei\s*/i, '').trim();
+    const gwei = parseFloat(cleanedText);
     let gasPrice = null;
     if (gwei && gwei > 0) {
       gasPrice = ethers.parseUnits(gwei.toString(), 'gwei');
@@ -3851,20 +3899,8 @@ async function fetchCurrentGasPrice() {
     // Get gas price from RPC
     const gasPrice = await rpc.getGasPrice(currentState.network);
 
-    // Convert from Wei to Gwei (1 Gwei = 1e9 Wei)
-    const gasPriceGwei = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
-
-    // Format nicely
-    let displayPrice;
-    if (gasPriceGwei < 0.001) {
-      displayPrice = gasPriceGwei.toFixed(6); // Very low (PulseChain)
-    } else if (gasPriceGwei < 1) {
-      displayPrice = gasPriceGwei.toFixed(3);
-    } else if (gasPriceGwei < 10) {
-      displayPrice = gasPriceGwei.toFixed(2);
-    } else {
-      displayPrice = gasPriceGwei.toFixed(1);
-    }
+    // Format nicely using helper function
+    const displayPrice = formatGweiSmart(BigInt(gasPrice));
 
     const networkName = NETWORK_NAMES[currentState.network] || currentState.network;
     labelEl.textContent = `Current ${networkName} price: ${displayPrice} Gwei`;
@@ -5047,22 +5083,56 @@ async function populateGasPrices(network, txRequest, symbol) {
   // Store params for refresh button
   gasPriceRefreshState.approval = { network, txRequest, symbol };
 
-  try {
-    // Fetch SAFE gas price from RPC (uses base fee * 2 to prevent stuck transactions)
-    const gasPriceHex = await rpc.getSafeGasPrice(network);
-    const gasPriceWei = BigInt(gasPriceHex);
-    const gasPriceGwei = Number(gasPriceWei) / 1e9;
+  // Fetch native token price for USD estimates (don't block on this)
+  let nativeTokenPrice = null;
+  const provider = await rpc.getProvider(network);
+  getNativeTokenPrice(network, provider).then(price => {
+    nativeTokenPrice = price;
+    updateTxMaxFeeUSD();
+  }).catch(err => console.warn('Could not fetch native token price:', err));
 
-    // Calculate slow (90%), normal (100%), fast (120%)
-    // Note: slow is 90% instead of 80% to ensure it's still above base fee
-    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
-    const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
+  // Helper to update USD display
+  const updateTxMaxFeeUSD = () => {
+    const usdEl = document.getElementById('tx-max-fee-usd');
+    if (!usdEl) return;
+
+    const maxFeeEl = document.getElementById('tx-max-fee');
+    if (!maxFeeEl || maxFeeEl.textContent === '--' || maxFeeEl.textContent.includes('Unable')) {
+      usdEl.textContent = '';
+      return;
+    }
+
+    const feeMatch = maxFeeEl.textContent.match(/^([\d.]+)/);
+    if (feeMatch && nativeTokenPrice) {
+      const feeInNative = parseFloat(feeMatch[1]);
+      const feeInUSD = feeInNative * nativeTokenPrice;
+      usdEl.textContent = `(${formatUSD(feeInUSD)})`;
+    } else {
+      usdEl.textContent = '';
+    }
+  };
+
+  try {
+    // Get tiered gas price recommendations based on fee history
+    const gasRecommendations = await rpc.getGasPriceRecommendations(network);
+
+    // Extract maxFeePerGas values for each tier (in wei)
+    const slowWei = BigInt(gasRecommendations.slow.maxFeePerGas);
+    const normalWei = BigInt(gasRecommendations.normal.maxFeePerGas);
+    const fastWei = BigInt(gasRecommendations.fast.maxFeePerGas);
+
+    // Format for display
+    const slowGwei = formatGweiSmart(slowWei);
+    const normalGwei = formatGweiSmart(normalWei);
+    const fastGwei = formatGweiSmart(fastWei);
 
     // Update UI
     document.getElementById('gas-slow-price').textContent = `${slowGwei} Gwei`;
     document.getElementById('gas-normal-price').textContent = `${normalGwei} Gwei`;
     document.getElementById('gas-fast-price').textContent = `${fastGwei} Gwei`;
+
+    // Store wei values for calculations
+    const gasPriceWei = normalWei; // Use normal as default
 
     // Estimate gas for the transaction
     try {
@@ -5075,28 +5145,30 @@ async function populateGasPrices(network, txRequest, symbol) {
       const maxFeeWei = estimatedGas * gasPriceWei;
       const maxFeeEth = ethers.formatEther(maxFeeWei.toString());
       document.getElementById('tx-max-fee').textContent = `${parseFloat(maxFeeEth).toFixed(8)} ${symbol}`;
+      updateTxMaxFeeUSD();
 
       // Update max fee when gas price selection changes
       const updateMaxFee = () => {
         const selectedSpeed = document.querySelector('input[name="gas-speed"]:checked')?.value;
-        let selectedGwei;
+        let selectedGasPriceWei;
 
         if (selectedSpeed === 'slow') {
-          selectedGwei = parseFloat(slowGwei);
+          selectedGasPriceWei = slowWei;
         } else if (selectedSpeed === 'normal') {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         } else if (selectedSpeed === 'fast') {
-          selectedGwei = parseFloat(fastGwei);
+          selectedGasPriceWei = fastWei;
         } else if (selectedSpeed === 'custom') {
-          selectedGwei = parseFloat(document.getElementById('tx-custom-gas-price').value) || parseFloat(normalGwei);
+          const customGwei = parseFloat(document.getElementById('tx-custom-gas-price').value);
+          selectedGasPriceWei = customGwei > 0 ? BigInt(Math.floor(customGwei * 1e9)) : normalWei;
         } else {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         }
 
-        const selectedGasPriceWei = BigInt(Math.floor(selectedGwei * 1e9));
         const selectedMaxFeeWei = estimatedGas * selectedGasPriceWei;
         const selectedMaxFeeEth = ethers.formatEther(selectedMaxFeeWei.toString());
         document.getElementById('tx-max-fee').textContent = `${parseFloat(selectedMaxFeeEth).toFixed(8)} ${symbol}`;
+        updateTxMaxFeeUSD();
       };
 
       // Add event listeners for gas price changes
@@ -5182,7 +5254,10 @@ function getSelectedGasPrice() {
     gweiText = document.getElementById('gas-normal-price').textContent;
   }
 
-  const gwei = parseFloat(gweiText);
+  // Remove commas from locale-formatted numbers (e.g., "1,234,567 Gwei" -> "1234567")
+  // Also remove the "Gwei" suffix if present
+  const cleanedText = gweiText.replace(/,/g, '').replace(/\s*Gwei\s*/i, '').trim();
+  const gwei = parseFloat(cleanedText);
   if (gwei && gwei > 0) {
     return ethers.parseUnits(gwei.toString(), 'gwei').toString();
   }
@@ -5211,19 +5286,57 @@ async function populateSendGasPrices(network, txRequest, symbol) {
   // Store params for refresh button
   gasPriceRefreshState.send = { network, txRequest, symbol };
 
-  try {
-    // Use safe gas price to prevent stuck transactions
-    const gasPriceHex = await rpc.getSafeGasPrice(network);
-    const gasPriceWei = BigInt(gasPriceHex);
-    const gasPriceGwei = Number(gasPriceWei) / 1e9;
+  // Fetch native token price for USD estimates (don't block on this)
+  let nativeTokenPrice = null;
+  const provider = await rpc.getProvider(network);
+  getNativeTokenPrice(network, provider).then(price => {
+    nativeTokenPrice = price;
+    // Update USD display if already showing a fee
+    updateSendMaxFeeUSD();
+  }).catch(err => console.warn('Could not fetch native token price:', err));
 
-    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
-    const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
+  // Helper to update USD display
+  const updateSendMaxFeeUSD = () => {
+    const usdEl = document.getElementById('send-max-fee-usd');
+    if (!usdEl) return;
+
+    const maxFeeEl = document.getElementById('send-max-fee');
+    if (!maxFeeEl || maxFeeEl.textContent === '--' || maxFeeEl.textContent.includes('Unable')) {
+      usdEl.textContent = '';
+      return;
+    }
+
+    // Parse the native token amount from the fee display
+    const feeMatch = maxFeeEl.textContent.match(/^([\d.]+)/);
+    if (feeMatch && nativeTokenPrice) {
+      const feeInNative = parseFloat(feeMatch[1]);
+      const feeInUSD = feeInNative * nativeTokenPrice;
+      usdEl.textContent = `(${formatUSD(feeInUSD)})`;
+    } else {
+      usdEl.textContent = '';
+    }
+  };
+
+  try {
+    // Get tiered gas price recommendations based on fee history
+    const gasRecommendations = await rpc.getGasPriceRecommendations(network);
+
+    // Extract maxFeePerGas values for each tier (in wei)
+    const slowWei = BigInt(gasRecommendations.slow.maxFeePerGas);
+    const normalWei = BigInt(gasRecommendations.normal.maxFeePerGas);
+    const fastWei = BigInt(gasRecommendations.fast.maxFeePerGas);
+
+    // Format for display
+    const slowGwei = formatGweiSmart(slowWei);
+    const normalGwei = formatGweiSmart(normalWei);
+    const fastGwei = formatGweiSmart(fastWei);
 
     document.getElementById('send-gas-slow-price').textContent = `${slowGwei} Gwei`;
     document.getElementById('send-gas-normal-price').textContent = `${normalGwei} Gwei`;
     document.getElementById('send-gas-fast-price').textContent = `${fastGwei} Gwei`;
+
+    // Store wei values for calculations
+    const gasPriceWei = normalWei; // Use normal as default
 
     try {
       const estimatedGasHex = await rpc.estimateGas(network, txRequest);
@@ -5234,27 +5347,29 @@ async function populateSendGasPrices(network, txRequest, symbol) {
       const maxFeeWei = estimatedGas * gasPriceWei;
       const maxFeeEth = ethers.formatEther(maxFeeWei.toString());
       document.getElementById('send-max-fee').textContent = `${parseFloat(maxFeeEth).toFixed(8)} ${symbol}`;
+      updateSendMaxFeeUSD();
 
       const updateMaxFee = () => {
         const selectedSpeed = document.querySelector('input[name="send-gas-speed"]:checked')?.value;
-        let selectedGwei;
+        let selectedGasPriceWei;
 
         if (selectedSpeed === 'slow') {
-          selectedGwei = parseFloat(slowGwei);
+          selectedGasPriceWei = slowWei;
         } else if (selectedSpeed === 'normal') {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         } else if (selectedSpeed === 'fast') {
-          selectedGwei = parseFloat(fastGwei);
+          selectedGasPriceWei = fastWei;
         } else if (selectedSpeed === 'custom') {
-          selectedGwei = parseFloat(document.getElementById('send-custom-gas-price').value) || parseFloat(normalGwei);
+          const customGwei = parseFloat(document.getElementById('send-custom-gas-price').value);
+          selectedGasPriceWei = customGwei > 0 ? BigInt(Math.floor(customGwei * 1e9)) : normalWei;
         } else {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         }
 
-        const selectedGasPriceWei = BigInt(Math.floor(selectedGwei * 1e9));
         const selectedMaxFeeWei = estimatedGas * selectedGasPriceWei;
         const selectedMaxFeeEth = ethers.formatEther(selectedMaxFeeWei.toString());
         document.getElementById('send-max-fee').textContent = `${parseFloat(selectedMaxFeeEth).toFixed(8)} ${symbol}`;
+        updateSendMaxFeeUSD();
       };
 
       document.querySelectorAll('input[name="send-gas-speed"]').forEach(radio => {
@@ -5332,7 +5447,9 @@ function getSelectedSendGasPrice() {
     gweiText = document.getElementById('send-gas-normal-price').textContent;
   }
 
-  const gwei = parseFloat(gweiText);
+  // Remove commas from locale-formatted numbers (e.g., "1,234,567 Gwei" -> "1234567")
+  const cleanedText = gweiText.replace(/,/g, '').replace(/\s*Gwei\s*/i, '').trim();
+  const gwei = parseFloat(cleanedText);
   if (gwei && gwei > 0) {
     return ethers.parseUnits(gwei.toString(), 'gwei').toString();
   }
@@ -5345,19 +5462,55 @@ async function populateTokenGasPrices(network, txRequest, symbol) {
   // Store params for refresh button
   gasPriceRefreshState.token = { network, txRequest, symbol };
 
-  try {
-    // Use safe gas price to prevent stuck transactions
-    const gasPriceHex = await rpc.getSafeGasPrice(network);
-    const gasPriceWei = BigInt(gasPriceHex);
-    const gasPriceGwei = Number(gasPriceWei) / 1e9;
+  // Fetch native token price for USD estimates (don't block on this)
+  let nativeTokenPrice = null;
+  const provider = await rpc.getProvider(network);
+  getNativeTokenPrice(network, provider).then(price => {
+    nativeTokenPrice = price;
+    updateTokenMaxFeeUSD();
+  }).catch(err => console.warn('Could not fetch native token price:', err));
 
-    const slowGwei = (gasPriceGwei * 0.9).toFixed(2);
-    const normalGwei = gasPriceGwei.toFixed(2);
-    const fastGwei = (gasPriceGwei * 1.2).toFixed(2);
+  // Helper to update USD display
+  const updateTokenMaxFeeUSD = () => {
+    const usdEl = document.getElementById('token-max-fee-usd');
+    if (!usdEl) return;
+
+    const maxFeeEl = document.getElementById('token-max-fee');
+    if (!maxFeeEl || maxFeeEl.textContent === '--' || maxFeeEl.textContent.includes('Unable')) {
+      usdEl.textContent = '';
+      return;
+    }
+
+    const feeMatch = maxFeeEl.textContent.match(/^([\d.]+)/);
+    if (feeMatch && nativeTokenPrice) {
+      const feeInNative = parseFloat(feeMatch[1]);
+      const feeInUSD = feeInNative * nativeTokenPrice;
+      usdEl.textContent = `(${formatUSD(feeInUSD)})`;
+    } else {
+      usdEl.textContent = '';
+    }
+  };
+
+  try {
+    // Get tiered gas price recommendations based on fee history
+    const gasRecommendations = await rpc.getGasPriceRecommendations(network);
+
+    // Extract maxFeePerGas values for each tier (in wei)
+    const slowWei = BigInt(gasRecommendations.slow.maxFeePerGas);
+    const normalWei = BigInt(gasRecommendations.normal.maxFeePerGas);
+    const fastWei = BigInt(gasRecommendations.fast.maxFeePerGas);
+
+    // Format for display
+    const slowGwei = formatGweiSmart(slowWei);
+    const normalGwei = formatGweiSmart(normalWei);
+    const fastGwei = formatGweiSmart(fastWei);
 
     document.getElementById('token-gas-slow-price').textContent = `${slowGwei} Gwei`;
     document.getElementById('token-gas-normal-price').textContent = `${normalGwei} Gwei`;
     document.getElementById('token-gas-fast-price').textContent = `${fastGwei} Gwei`;
+
+    // Store wei values for calculations
+    const gasPriceWei = normalWei; // Use normal as default
 
     try {
       const estimatedGasHex = await rpc.estimateGas(network, txRequest);
@@ -5368,27 +5521,29 @@ async function populateTokenGasPrices(network, txRequest, symbol) {
       const maxFeeWei = estimatedGas * gasPriceWei;
       const maxFeeEth = ethers.formatEther(maxFeeWei.toString());
       document.getElementById('token-max-fee').textContent = `${parseFloat(maxFeeEth).toFixed(8)} ${symbol}`;
+      updateTokenMaxFeeUSD();
 
       const updateMaxFee = () => {
         const selectedSpeed = document.querySelector('input[name="token-gas-speed"]:checked')?.value;
-        let selectedGwei;
+        let selectedGasPriceWei;
 
         if (selectedSpeed === 'slow') {
-          selectedGwei = parseFloat(slowGwei);
+          selectedGasPriceWei = slowWei;
         } else if (selectedSpeed === 'normal') {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         } else if (selectedSpeed === 'fast') {
-          selectedGwei = parseFloat(fastGwei);
+          selectedGasPriceWei = fastWei;
         } else if (selectedSpeed === 'custom') {
-          selectedGwei = parseFloat(document.getElementById('token-custom-gas-price').value) || parseFloat(normalGwei);
+          const customGwei = parseFloat(document.getElementById('token-custom-gas-price').value);
+          selectedGasPriceWei = customGwei > 0 ? BigInt(Math.floor(customGwei * 1e9)) : normalWei;
         } else {
-          selectedGwei = parseFloat(normalGwei);
+          selectedGasPriceWei = normalWei;
         }
 
-        const selectedGasPriceWei = BigInt(Math.floor(selectedGwei * 1e9));
         const selectedMaxFeeWei = estimatedGas * selectedGasPriceWei;
         const selectedMaxFeeEth = ethers.formatEther(selectedMaxFeeWei.toString());
         document.getElementById('token-max-fee').textContent = `${parseFloat(selectedMaxFeeEth).toFixed(8)} ${symbol}`;
+        updateTokenMaxFeeUSD();
       };
 
       document.querySelectorAll('input[name="token-gas-speed"]').forEach(radio => {
@@ -5466,7 +5621,9 @@ function getSelectedTokenGasPrice() {
     gweiText = document.getElementById('token-gas-normal-price').textContent;
   }
 
-  const gwei = parseFloat(gweiText);
+  // Remove commas from locale-formatted numbers (e.g., "1,234,567 Gwei" -> "1234567")
+  const cleanedText = gweiText.replace(/,/g, '').replace(/\s*Gwei\s*/i, '').trim();
+  const gwei = parseFloat(cleanedText);
   if (gwei && gwei > 0) {
     return ethers.parseUnits(gwei.toString(), 'gwei').toString();
   }
@@ -5566,13 +5723,47 @@ async function showSendTransactionStatus(txHash, network, amount, symbol) {
 
   // Setup Speed Up button
   document.getElementById('btn-send-status-speed-up').onclick = async () => {
-    // TODO: Implement speed up transaction functionality
-    alert('Speed Up functionality will be implemented in a future update');
+    try {
+      // Reset modal state first
+      resetSpeedUpModalState();
+
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
+        return;
+      }
+
+      const tx = txResponse.transaction;
+
+      // Store state for modal
+      speedUpModalState.txHash = txHash;
+      speedUpModalState.address = address;
+      speedUpModalState.network = tx.network;
+      speedUpModalState.originalGasPrice = tx.gasPrice;
+      speedUpModalState.originalGasLimit = tx.gasLimit ? BigInt(tx.gasLimit) : 21000n;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-speed-up-tx').classList.remove('hidden');
+      await refreshGasPrices();
+
+    } catch (error) {
+      console.error('Error opening speed-up modal:', error);
+      alert('Error loading gas prices');
+    }
   };
 
   // Setup Cancel button
   document.getElementById('btn-send-status-cancel').onclick = async () => {
     try {
+      // Reset modal state first
+      resetCancelModalState();
+
       // Get transaction details
       const txResponse = await chrome.runtime.sendMessage({
         type: 'GET_TX_BY_HASH',
@@ -5695,13 +5886,47 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
 
   // Setup Speed Up button
   document.getElementById('btn-token-send-status-speed-up').onclick = async () => {
-    // TODO: Implement speed up transaction functionality
-    alert('Speed Up functionality will be implemented in a future update');
+    try {
+      // Reset modal state first
+      resetSpeedUpModalState();
+
+      // Get transaction details
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: address,
+        txHash: txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        alert('Could not load transaction details');
+        return;
+      }
+
+      const tx = txResponse.transaction;
+
+      // Store state for modal
+      speedUpModalState.txHash = txHash;
+      speedUpModalState.address = address;
+      speedUpModalState.network = tx.network;
+      speedUpModalState.originalGasPrice = tx.gasPrice;
+      speedUpModalState.originalGasLimit = tx.gasLimit ? BigInt(tx.gasLimit) : 21000n;
+
+      // Show modal and load gas prices
+      document.getElementById('modal-speed-up-tx').classList.remove('hidden');
+      await refreshGasPrices();
+
+    } catch (error) {
+      console.error('Error opening speed-up modal:', error);
+      alert('Error loading gas prices');
+    }
   };
 
   // Setup Cancel button
   document.getElementById('btn-token-send-status-cancel').onclick = async () => {
     try {
+      // Reset modal state first
+      resetCancelModalState();
+
       // Get transaction details
       const txResponse = await chrome.runtime.sendMessage({
         type: 'GET_TX_BY_HASH',
@@ -6124,7 +6349,8 @@ async function handleTransactionApprovalScreen(requestId) {
           });
 
         } else {
-          // Software wallet - validate password with progress bar first
+          // Software wallet - sign transaction in popup (like hardware wallets)
+          // This runs Argon2id only once with accurate progress bar
           const activeWallet = await getActiveWallet();
 
           // Show progress bar and hide error
@@ -6137,9 +6363,9 @@ async function handleTransactionApprovalScreen(requestId) {
           progressText.textContent = '0%';
 
           try {
-            // Validate password with progress tracking
+            // Unlock wallet with progress tracking
             let lastDisplayedPercentage = 0;
-            await unlockWallet(password, {
+            const unlockResult = await unlockWallet(password, {
               onProgress: (progress) => {
                 const percentage = Math.round(progress * 100);
                 if (percentage !== lastDisplayedPercentage) {
@@ -6150,37 +6376,123 @@ async function handleTransactionApprovalScreen(requestId) {
               }
             });
 
-            // Password is valid! Hide progress bar
+            // Password is valid! Update progress text
+            progressText.textContent = 'Signing...';
+
+            // Get the signer from unlock result
+            const signer = unlockResult.signer;
+
+            // Build transaction
+            const tx = { ...txRequest };
+
+            // Add chain ID
+            const chainIdMap = {
+              'pulsechain': 369,
+              'pulsechainTestnet': 943,
+              'ethereum': 1,
+              'sepolia': 11155111
+            };
+            tx.chainId = chainIdMap[network] || 943;
+
+            // Get provider for gas price and nonce
+            const provider = await rpc.getProvider(network);
+            const connectedSigner = signer.connect(provider);
+
+            // Set gas price - user-selected or fetch from network
+            // Check if dApp requested EIP-1559 or if we should use it
+            const hasEIP1559Fields = tx.maxFeePerGas || tx.maxPriorityFeePerGas;
+
+            if (gasPrice) {
+              // User selected a specific gas price - use legacy format
+              tx.gasPrice = gasPrice;
+              delete tx.maxFeePerGas;
+              delete tx.maxPriorityFeePerGas;
+              delete tx.type;
+            } else if (hasEIP1559Fields) {
+              // dApp provided EIP-1559 fields - preserve them
+              // But ensure they're BigInt
+              if (tx.maxFeePerGas) tx.maxFeePerGas = BigInt(tx.maxFeePerGas);
+              if (tx.maxPriorityFeePerGas) tx.maxPriorityFeePerGas = BigInt(tx.maxPriorityFeePerGas);
+              delete tx.gasPrice; // Don't mix legacy and EIP-1559
+            } else if (!tx.gasPrice) {
+              // No gas price set - fetch from network (use legacy for simplicity)
+              try {
+                const safeGasPriceHex = await rpc.getSafeGasPrice(network);
+                tx.gasPrice = BigInt(safeGasPriceHex);
+              } catch (gasPriceError) {
+                console.warn('Error getting safe gas price:', gasPriceError);
+                const feeData = await provider.getFeeData();
+                if (feeData.gasPrice) {
+                  tx.gasPrice = feeData.gasPrice;
+                }
+              }
+            }
+
+            // Get nonce if not custom
+            if (customNonce !== null) {
+              tx.nonce = customNonce;
+            } else if (tx.nonce === undefined) {
+              const nonceHex = await rpc.getTransactionCount(network, activeWallet.address, 'pending');
+              tx.nonce = parseInt(nonceHex, 16);
+            }
+
+            // Normalize gas field (dApps may use 'gas' or 'gasLimit')
+            if (tx.gas && !tx.gasLimit) {
+              tx.gasLimit = tx.gas;
+            }
+
+            // Ensure from address for gas estimation
+            if (!tx.from) {
+              tx.from = activeWallet.address;
+            }
+
+            // Estimate gas limit if not set
+            if (!tx.gasLimit) {
+              tx.gasLimit = await provider.estimateGas(tx);
+            }
+
+            // Clean up transaction fields for signing
+            delete tx.gas;
+            delete tx.from;
+
+            // Sign and broadcast transaction
+            const txResponse = await connectedSigner.sendTransaction(tx);
+
+            // Hide progress bar
             progressContainer.classList.add('hidden');
 
-            // Create session with validated password
-            const tempSessionResponse = await chrome.runtime.sendMessage({
-              type: 'CREATE_SESSION',
-              password,
-              walletId: activeWallet.id,
-              durationMs: 60000 // 1 minute temporary session
-            });
+            // Notify service worker that transaction was approved and broadcast
+            const txDetailsForHistory = {
+              to: tx.to,
+              value: tx.value?.toString() || '0',
+              data: tx.data || '0x',
+              gasLimit: tx.gasLimit?.toString(),
+              nonce: tx.nonce
+            };
 
-            if (!tempSessionResponse.success) {
-              throw new Error('Failed to create session');
+            // Include the appropriate gas fields
+            if (tx.maxFeePerGas) {
+              txDetailsForHistory.maxFeePerGas = tx.maxFeePerGas.toString();
+              txDetailsForHistory.maxPriorityFeePerGas = tx.maxPriorityFeePerGas?.toString();
+              txDetailsForHistory.gasPrice = tx.maxFeePerGas.toString(); // For display purposes
+            } else if (tx.gasPrice) {
+              txDetailsForHistory.gasPrice = tx.gasPrice.toString();
             }
 
             const response = await chrome.runtime.sendMessage({
               type: 'TRANSACTION_APPROVAL',
               requestId,
               approved: true,
-              sessionToken: tempSessionResponse.sessionToken,
-              gasPrice,
-              customNonce
+              txHash: txResponse.hash,
+              txDetails: txDetailsForHistory
             });
 
             if (response.success) {
-              // Hide approval form and show status section
-              showTransactionStatus(response.txHash, activeWallet.address, requestId);
+              // Show transaction status
+              showTransactionStatus(txResponse.hash, activeWallet.address, requestId);
             } else {
               errorEl.textContent = response.error || 'Transaction failed';
               errorEl.classList.remove('hidden');
-              // Re-enable button on error so user can try again
               approveBtn.disabled = false;
               approveBtn.style.opacity = '1';
               approveBtn.style.cursor = 'pointer';
@@ -6867,8 +7179,15 @@ async function renderTransactionHistory(filter = 'all') {
       address: currentState.address
     });
 
-    if (!response.success || !response.transactions || response.transactions.length === 0) {
-      listEl.innerHTML = '<p class="text-center text-dim">No transactions</p>';
+    // Distinguish between errors and empty results
+    if (!response.success) {
+      console.error('Failed to load transaction history:', response.error);
+      listEl.innerHTML = '<p class="text-center text-dim">Error loading transactions</p>';
+      return;
+    }
+
+    if (!response.transactions || response.transactions.length === 0) {
+      listEl.innerHTML = '<p class="text-center text-dim">No transactions yet</p>';
       return;
     }
 
@@ -6920,28 +7239,40 @@ async function renderTransactionHistory(filter = 'all') {
 
     listEl.innerHTML = html;
 
-    // Add click handlers for transaction items
-    listEl.querySelectorAll('[data-tx-hash]').forEach(el => {
-      el.addEventListener('click', () => {
-        const txHash = el.dataset.txHash;
-        showTransactionDetails(txHash);
-      });
-    });
-
-    // Add click handlers for refresh buttons
-    listEl.querySelectorAll('[data-refresh-tx]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault(); // Prevent default button behavior
-        e.stopPropagation(); // Prevent opening transaction details
-        const txHash = btn.dataset.refreshTx;
-        await refreshTransactionFromList(txHash);
-      });
-    });
+    // Event delegation is set up once in setupTransactionHistoryEventDelegation()
+    // No need to add individual listeners here
 
   } catch (error) {
     console.error('Error loading transaction history:', error);
     listEl.innerHTML = '<p class="text-center text-dim">Error loading transactions</p>';
   }
+}
+
+// Set up event delegation for transaction history list (call once during init)
+function setupTransactionHistoryEventDelegation() {
+  const listEl = document.getElementById('tx-history-list');
+  if (!listEl || listEl.dataset.delegationSetup) return; // Already set up
+
+  listEl.dataset.delegationSetup = 'true';
+
+  listEl.addEventListener('click', async (e) => {
+    // Handle refresh button clicks
+    const refreshBtn = e.target.closest('[data-refresh-tx]');
+    if (refreshBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const txHash = refreshBtn.dataset.refreshTx;
+      await refreshTransactionFromList(txHash);
+      return;
+    }
+
+    // Handle transaction item clicks
+    const txItem = e.target.closest('[data-tx-hash]');
+    if (txItem) {
+      const txHash = txItem.dataset.txHash;
+      showTransactionDetails(txHash);
+    }
+  });
 }
 
 // Refresh transaction status from blockchain
@@ -6985,6 +7316,8 @@ async function refreshTransactionStatus() {
       alert('✋ Transaction is still pending on the blockchain.\n\nIt has not been mined yet.');
     } else if (refreshResponse.status === 'confirmed') {
       alert(`✅ Status updated!\n\nTransaction is CONFIRMED on block ${refreshResponse.blockNumber}`);
+    } else if (refreshResponse.status === 'dropped') {
+      alert('⚠️ Transaction was DROPPED from the mempool.\n\nIt was never confirmed and is no longer pending. You can submit a new transaction.');
     } else {
       alert('❌ Status updated!\n\nTransaction FAILED on the blockchain.');
     }
@@ -6998,6 +7331,70 @@ async function refreshTransactionStatus() {
   } finally {
     btn.disabled = false;
     btn.textContent = '🔄 REFRESH STATUS FROM BLOCKCHAIN';
+  }
+}
+
+async function rebroadcastTransaction() {
+  if (!currentState.address || !currentState.currentTxHash) return;
+
+  const btn = document.getElementById('btn-rebroadcast-tx');
+  if (!btn) return;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = '📡 Broadcasting...';
+
+    // Get current transaction to get network
+    const txResponse = await chrome.runtime.sendMessage({
+      type: 'GET_TX_BY_HASH',
+      address: currentState.address,
+      txHash: currentState.currentTxHash
+    });
+
+    if (!txResponse.success || !txResponse.transaction) {
+      throw new Error('Transaction not found');
+    }
+
+    const network = txResponse.transaction.network;
+
+    // Rebroadcast to all RPCs
+    const rebroadcastResponse = await chrome.runtime.sendMessage({
+      type: 'REBROADCAST_TX',
+      txHash: currentState.currentTxHash,
+      network: network
+    });
+
+    if (!rebroadcastResponse.success) {
+      throw new Error(rebroadcastResponse.error || 'Failed to rebroadcast');
+    }
+
+    // Show results
+    const successCount = rebroadcastResponse.successes?.length || 0;
+    const failCount = rebroadcastResponse.failures?.length || 0;
+
+    let message = `📡 Rebroadcast Complete\n\n`;
+    message += `✅ Sent to ${successCount} RPC(s)\n`;
+
+    if (failCount > 0) {
+      message += `❌ Failed on ${failCount} RPC(s)\n`;
+    }
+
+    if (rebroadcastResponse.successes?.length > 0) {
+      message += `\nSuccessful RPCs:\n`;
+      rebroadcastResponse.successes.forEach(s => {
+        const shortUrl = s.endpoint.replace('https://', '').slice(0, 30);
+        message += `• ${shortUrl}...\n`;
+      });
+    }
+
+    alert(message);
+
+  } catch (error) {
+    console.error('Error rebroadcasting transaction:', error);
+    alert('Error rebroadcasting: ' + error.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📡 REBROADCAST TO ALL RPCS';
   }
 }
 
@@ -7025,12 +7422,16 @@ async function showTransactionDetails(txHash) {
     const statusBadge = document.getElementById('tx-status-badge');
     const statusText = document.getElementById('tx-status-text');
 
+    const rebroadcastBtn = document.getElementById('btn-rebroadcast-tx');
+
     if (tx.status === 'pending') {
       statusText.textContent = '⏳ PENDING';
       statusBadge.style.borderColor = 'var(--terminal-warning)';
       statusText.style.color = 'var(--terminal-warning)';
       document.getElementById('tx-pending-actions').classList.remove('hidden');
       document.getElementById('tx-detail-block-section').classList.add('hidden');
+      // Show rebroadcast button for pending transactions
+      if (rebroadcastBtn) rebroadcastBtn.classList.remove('hidden');
     } else if (tx.status === 'confirmed') {
       statusText.textContent = '✅ CONFIRMED';
       statusBadge.style.borderColor = '#44ff44';
@@ -7038,12 +7439,16 @@ async function showTransactionDetails(txHash) {
       document.getElementById('tx-pending-actions').classList.add('hidden');
       document.getElementById('tx-detail-block-section').classList.remove('hidden');
       document.getElementById('tx-detail-block').textContent = tx.blockNumber || '--';
+      // Hide rebroadcast button for confirmed transactions
+      if (rebroadcastBtn) rebroadcastBtn.classList.add('hidden');
     } else {
       statusText.textContent = '❌ FAILED';
       statusBadge.style.borderColor = '#ff4444';
       statusText.style.color = '#ff4444';
       document.getElementById('tx-pending-actions').classList.add('hidden');
       document.getElementById('tx-detail-block-section').classList.add('hidden');
+      // Hide rebroadcast button for failed transactions
+      if (rebroadcastBtn) rebroadcastBtn.classList.add('hidden');
     }
 
     document.getElementById('tx-detail-hash').textContent = tx.hash;
@@ -7084,6 +7489,7 @@ let speedUpModalState = {
   address: null,
   network: null,
   originalGasPrice: null,
+  originalGasLimit: null,
   currentGasPrice: null,
   recommendedGasPrice: null
 };
@@ -7098,10 +7504,37 @@ let cancelModalState = {
   recommendedGasPrice: null
 };
 
+// Reset modal state to prevent leaking between uses
+function resetSpeedUpModalState() {
+  speedUpModalState = {
+    txHash: null,
+    address: null,
+    network: null,
+    originalGasPrice: null,
+    originalGasLimit: null,
+    currentGasPrice: null,
+    recommendedGasPrice: null
+  };
+}
+
+function resetCancelModalState() {
+  cancelModalState = {
+    txHash: null,
+    address: null,
+    network: null,
+    originalGasPrice: null,
+    currentGasPrice: null,
+    recommendedGasPrice: null
+  };
+}
+
 async function handleSpeedUpTransaction() {
   if (!currentState.address || !currentState.currentTxHash) return;
 
   try {
+    // Reset modal state first to prevent data leaking from previous use
+    resetSpeedUpModalState();
+
     // Get transaction details
     const txResponse = await chrome.runtime.sendMessage({
       type: 'GET_TX_BY_HASH',
@@ -7116,11 +7549,18 @@ async function handleSpeedUpTransaction() {
 
     const tx = txResponse.transaction;
 
-    // Store state for modal
+    // Validate transaction is on current network
+    if (tx.network !== currentState.network) {
+      alert(`This transaction was on ${tx.network}. Please switch to that network first.`);
+      return;
+    }
+
+    // Store state for modal (including gasLimit for accurate cost estimates)
     speedUpModalState.txHash = currentState.currentTxHash;
     speedUpModalState.address = currentState.address;
     speedUpModalState.network = tx.network;
     speedUpModalState.originalGasPrice = tx.gasPrice;
+    speedUpModalState.originalGasLimit = tx.gasLimit ? BigInt(tx.gasLimit) : 21000n;
 
     // Show modal and load gas prices
     document.getElementById('modal-speed-up-tx').classList.remove('hidden');
@@ -7152,20 +7592,49 @@ async function refreshGasPrices() {
       throw new Error(gasResponse.error || 'Failed to fetch gas price');
     }
 
-    // Store current and calculate recommended (current + 10%)
+    // Use instant tier as the recommended speed-up gas price
     speedUpModalState.currentGasPrice = gasResponse.gasPrice;
-    const currentGwei = parseFloat(gasResponse.gasPriceGwei);
-    const recommendedGwei = (currentGwei * 1.1).toFixed(2);
-    speedUpModalState.recommendedGasPrice = (BigInt(gasResponse.gasPrice) * BigInt(110) / BigInt(100)).toString();
+    const currentGwei = formatGweiSmart(BigInt(gasResponse.gasPrice));
+
+    // Use instant price for speed-ups to ensure faster confirmation
+    const instantPrice = gasResponse.instantPrice || gasResponse.gasPrice;
+    speedUpModalState.recommendedGasPrice = instantPrice;
+    const recommendedGwei = formatGweiSmart(BigInt(instantPrice));
 
     // Update UI
-    const originalGwei = (Number(speedUpModalState.originalGasPrice) / 1e9).toFixed(2);
+    const originalGwei = formatGweiSmart(BigInt(speedUpModalState.originalGasPrice || '0'));
     document.getElementById('speed-up-original-gas').textContent = `${originalGwei} Gwei`;
     document.getElementById('speed-up-current-gas').textContent = `${currentGwei} Gwei`;
     document.getElementById('speed-up-recommended-gas').textContent = `${recommendedGwei} Gwei`;
 
-    // Calculate and show comparison
-    const comparison = currentGwei / parseFloat(originalGwei);
+    // Calculate and show estimated cost in USD
+    const estimatedCostEl = document.getElementById('speed-up-estimated-cost');
+    if (estimatedCostEl) {
+      try {
+        const provider = await rpc.getProvider(speedUpModalState.network);
+        const nativePrice = await getNativeTokenPrice(speedUpModalState.network, provider);
+        if (nativePrice) {
+          // Estimate gas for speed-up (use original gas limit or 21000)
+          const gasLimit = speedUpModalState.originalGasLimit || 21000n;
+          const recommendedGasPriceWei = BigInt(speedUpModalState.recommendedGasPrice);
+          const costWei = gasLimit * recommendedGasPriceWei;
+          const costNative = parseFloat(ethers.formatEther(costWei.toString()));
+          const costUSD = costNative * nativePrice;
+          const symbol = getNativeTokenSymbol(speedUpModalState.network);
+          estimatedCostEl.textContent = `~${costNative.toFixed(6)} ${symbol} (${formatUSD(costUSD)})`;
+        } else {
+          estimatedCostEl.textContent = '--';
+        }
+      } catch (priceErr) {
+        console.warn('Could not fetch price for speed-up estimate:', priceErr);
+        estimatedCostEl.textContent = '--';
+      }
+    }
+
+    // Calculate and show comparison (use raw wei values for accurate comparison)
+    const currentWei = BigInt(gasResponse.gasPrice);
+    const originalWei = BigInt(speedUpModalState.originalGasPrice || '1'); // Avoid division by zero
+    const comparison = Number(currentWei) / Number(originalWei);
     const messageEl = document.getElementById('speed-up-comparison-message');
     if (comparison > 2) {
       messageEl.textContent = `⚠️ Network gas is ${comparison.toFixed(0)}x higher than your transaction!`;
@@ -7205,46 +7674,155 @@ async function confirmSpeedUp() {
       gasPriceToUse = (BigInt(Math.floor(customGwei * 1e9))).toString();
     }
 
-    // Close modal
+    // Close speed-up modal
     document.getElementById('modal-speed-up-tx').classList.add('hidden');
 
     // Get password
     const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to confirm speed-up');
     if (!password) return;
 
-    // Create temporary session
-    const activeWallet = await getActiveWallet();
-    const sessionResponse = await chrome.runtime.sendMessage({
-      type: 'CREATE_SESSION',
-      password: password,
-      walletId: activeWallet.id,
-      durationMs: 60000
-    });
+    // Show progress bar in password prompt
+    const progressContainer = document.getElementById('password-prompt-progress-container');
+    const progressBar = document.getElementById('password-prompt-progress-bar');
+    const progressText = document.getElementById('password-prompt-progress-text');
+    const progressLabel = progressContainer.querySelector('.progress-label');
+    const buttonsContainer = document.getElementById('password-prompt-buttons');
 
-    if (!sessionResponse.success) {
-      alert('Invalid password');
-      return;
-    }
+    progressLabel.textContent = 'Decrypting wallet...';
+    progressContainer.classList.remove('hidden');
+    buttonsContainer.classList.add('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
 
-    // Speed up transaction with custom gas price
-    const response = await chrome.runtime.sendMessage({
-      type: 'SPEED_UP_TX',
-      address: speedUpModalState.address,
-      txHash: speedUpModalState.txHash,
-      sessionToken: sessionResponse.sessionToken,
-      customGasPrice: gasPriceToUse
-    });
+    try {
+      // Unlock wallet with progress tracking
+      let lastDisplayedPercentage = 0;
+      const unlockResult = await unlockWallet(password, {
+        onProgress: (progress) => {
+          const percentage = Math.round(progress * 100);
+          if (percentage !== lastDisplayedPercentage) {
+            lastDisplayedPercentage = percentage;
+            if (progressBar) progressBar.style.width = `${percentage}%`;
+            if (progressText) progressText.textContent = `${percentage}%`;
+          }
+        }
+      });
 
-    if (response.success) {
-      alert(`Transaction sped up!\nNew TX: ${response.txHash.slice(0, 20)}...`);
-      showTransactionDetails(response.txHash);
-    } else {
-      alert('Error speeding up transaction: ' + response.error);
+      progressLabel.textContent = 'Signing transaction...';
+      progressText.textContent = '100%';
+
+      const signer = unlockResult.signer;
+      const provider = await rpc.getProvider(speedUpModalState.network);
+      const connectedSigner = signer.connect(provider);
+
+      // Get original transaction from history
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: speedUpModalState.address,
+        txHash: speedUpModalState.txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        throw new Error('Original transaction not found');
+      }
+
+      const originalTx = txResponse.transaction;
+
+      // Fetch on-chain transaction to detect EIP-1559
+      let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+      let onChainMaxFeePerGas = null;
+      let onChainMaxPriorityFeePerGas = null;
+
+      try {
+        const onChainTx = await provider.getTransaction(speedUpModalState.txHash);
+        if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+          isEIP1559 = true;
+          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+        }
+      } catch (fetchErr) {
+        console.warn('Could not fetch on-chain tx:', fetchErr.message);
+      }
+
+      // Build replacement transaction
+      const replacementTx = {
+        to: originalTx.to,
+        value: originalTx.value,
+        data: originalTx.data || '0x',
+        nonce: originalTx.nonce
+      };
+
+      if (originalTx.gasLimit) {
+        replacementTx.gasLimit = originalTx.gasLimit;
+      }
+
+      let newMaxFeePerGas = null;
+      let newMaxPriorityFeePerGas = null;
+
+      if (isEIP1559) {
+        const bumpMultiplier = 1125n;
+        const bumpDivisor = 1000n;
+        const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+        const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+        const customFee = BigInt(gasPriceToUse);
+        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+        newMaxFeePerGas = customFee;
+        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+        replacementTx.maxFeePerGas = newMaxFeePerGas;
+        replacementTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+      } else {
+        replacementTx.gasPrice = BigInt(gasPriceToUse);
+      }
+
+      // Sign and send
+      const txResult = await connectedSigner.sendTransaction(replacementTx);
+
+      // Hide progress and close modal
+      progressContainer.classList.add('hidden');
+      buttonsContainer.classList.remove('hidden');
+      document.getElementById('modal-password-prompt').classList.add('hidden');
+
+      // Notify service worker to save to history
+      await chrome.runtime.sendMessage({
+        type: 'SPEED_UP_TX_COMPLETE',
+        address: speedUpModalState.address,
+        originalTxHash: speedUpModalState.txHash,
+        newTxHash: txResult.hash,
+        txDetails: {
+          to: originalTx.to,
+          value: originalTx.value,
+          data: originalTx.data || '0x',
+          gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+          gasLimit: originalTx.gasLimit,
+          nonce: originalTx.nonce,
+          maxFeePerGas: newMaxFeePerGas?.toString(),
+          maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+        }
+      });
+
+      alert(`Transaction sped up!\nNew TX: ${txResult.hash.slice(0, 20)}...`);
+      showTransactionDetails(txResult.hash);
+
+    } catch (unlockError) {
+      // Hide progress and show buttons again
+      progressContainer.classList.add('hidden');
+      buttonsContainer.classList.remove('hidden');
+      document.getElementById('modal-password-prompt').classList.add('hidden');
+
+      if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
+        alert('Incorrect password');
+      } else {
+        alert('Error speeding up transaction: ' + unlockError.message);
+      }
     }
 
   } catch (error) {
     console.error('Error speeding up transaction:', error);
-    alert('Error speeding up transaction');
+    alert('Error speeding up transaction: ' + error.message);
   }
 }
 
@@ -7269,20 +7847,49 @@ async function refreshCancelGasPrices() {
       throw new Error(gasResponse.error || 'Failed to fetch gas price');
     }
 
-    // Store current and calculate recommended (current + 10%)
+    // Use instant tier as the recommended cancel gas price
     cancelModalState.currentGasPrice = gasResponse.gasPrice;
-    const currentGwei = parseFloat(gasResponse.gasPriceGwei);
-    const recommendedGwei = (currentGwei * 1.1).toFixed(2);
-    cancelModalState.recommendedGasPrice = (BigInt(gasResponse.gasPrice) * BigInt(110) / BigInt(100)).toString();
+    const currentGwei = formatGweiSmart(BigInt(gasResponse.gasPrice));
+
+    // Use instant price for cancels to ensure faster confirmation
+    const instantPrice = gasResponse.instantPrice || gasResponse.gasPrice;
+    cancelModalState.recommendedGasPrice = instantPrice;
+    const recommendedGwei = formatGweiSmart(BigInt(instantPrice));
 
     // Update UI
-    const originalGwei = (Number(cancelModalState.originalGasPrice) / 1e9).toFixed(2);
+    const originalGwei = formatGweiSmart(BigInt(cancelModalState.originalGasPrice || '0'));
     document.getElementById('cancel-original-gas').textContent = `${originalGwei} Gwei`;
     document.getElementById('cancel-current-gas').textContent = `${currentGwei} Gwei`;
     document.getElementById('cancel-recommended-gas').textContent = `${recommendedGwei} Gwei`;
 
-    // Calculate and show comparison
-    const comparison = currentGwei / parseFloat(originalGwei);
+    // Calculate and show estimated cost in USD
+    const estimatedCostEl = document.getElementById('cancel-estimated-cost');
+    if (estimatedCostEl) {
+      try {
+        const provider = await rpc.getProvider(cancelModalState.network);
+        const nativePrice = await getNativeTokenPrice(cancelModalState.network, provider);
+        if (nativePrice) {
+          // Cancel transaction uses 21000 gas (simple transfer to self)
+          const gasLimit = 21000n;
+          const recommendedGasPriceWei = BigInt(cancelModalState.recommendedGasPrice);
+          const costWei = gasLimit * recommendedGasPriceWei;
+          const costNative = parseFloat(ethers.formatEther(costWei.toString()));
+          const costUSD = costNative * nativePrice;
+          const symbol = getNativeTokenSymbol(cancelModalState.network);
+          estimatedCostEl.textContent = `~${costNative.toFixed(6)} ${symbol} (${formatUSD(costUSD)})`;
+        } else {
+          estimatedCostEl.textContent = '--';
+        }
+      } catch (priceErr) {
+        console.warn('Could not fetch price for cancel estimate:', priceErr);
+        estimatedCostEl.textContent = '--';
+      }
+    }
+
+    // Calculate and show comparison (use raw wei values for accurate comparison)
+    const currentWei = BigInt(gasResponse.gasPrice);
+    const originalWei = BigInt(cancelModalState.originalGasPrice || '1'); // Avoid division by zero
+    const comparison = Number(currentWei) / Number(originalWei);
     const messageEl = document.getElementById('cancel-comparison-message');
     if (comparison > 2) {
       messageEl.textContent = `⚠️ Network gas is ${comparison.toFixed(0)}x higher than your transaction!`;
@@ -7323,46 +7930,148 @@ async function confirmCancelTransaction() {
       gasPriceToUse = (BigInt(Math.floor(customGwei * 1e9))).toString();
     }
 
-    // Close modal
+    // Close cancel modal
     document.getElementById('modal-cancel-tx').classList.add('hidden');
 
     // Get password
     const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to confirm cancellation');
     if (!password) return;
 
-    // Create temporary session
-    const activeWallet = await getActiveWallet();
-    const sessionResponse = await chrome.runtime.sendMessage({
-      type: 'CREATE_SESSION',
-      password: password,
-      walletId: activeWallet.id,
-      durationMs: 60000
-    });
+    // Show progress bar in password prompt
+    const progressContainer = document.getElementById('password-prompt-progress-container');
+    const progressBar = document.getElementById('password-prompt-progress-bar');
+    const progressText = document.getElementById('password-prompt-progress-text');
+    const progressLabel = progressContainer.querySelector('.progress-label');
+    const buttonsContainer = document.getElementById('password-prompt-buttons');
 
-    if (!sessionResponse.success) {
-      alert('Invalid password');
-      return;
-    }
+    progressLabel.textContent = 'Decrypting wallet...';
+    progressContainer.classList.remove('hidden');
+    buttonsContainer.classList.add('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
 
-    // Cancel transaction with custom gas price
-    const response = await chrome.runtime.sendMessage({
-      type: 'CANCEL_TX',
-      address: cancelModalState.address,
-      txHash: cancelModalState.txHash,
-      sessionToken: sessionResponse.sessionToken,
-      customGasPrice: gasPriceToUse
-    });
+    try {
+      // Unlock wallet with progress tracking
+      let lastDisplayedPercentage = 0;
+      const unlockResult = await unlockWallet(password, {
+        onProgress: (progress) => {
+          const percentage = Math.round(progress * 100);
+          if (percentage !== lastDisplayedPercentage) {
+            lastDisplayedPercentage = percentage;
+            if (progressBar) progressBar.style.width = `${percentage}%`;
+            if (progressText) progressText.textContent = `${percentage}%`;
+          }
+        }
+      });
 
-    if (response.success) {
-      alert(`Transaction cancelled!\nCancellation TX: ${response.txHash.slice(0, 20)}...`);
-      showTransactionDetails(response.txHash);
-    } else {
-      alert('Error cancelling transaction: ' + response.error);
+      progressLabel.textContent = 'Signing cancellation...';
+      progressText.textContent = '100%';
+
+      const signer = unlockResult.signer;
+      const provider = await rpc.getProvider(cancelModalState.network);
+      const connectedSigner = signer.connect(provider);
+
+      // Get original transaction from history
+      const txResponse = await chrome.runtime.sendMessage({
+        type: 'GET_TX_BY_HASH',
+        address: cancelModalState.address,
+        txHash: cancelModalState.txHash
+      });
+
+      if (!txResponse.success || !txResponse.transaction) {
+        throw new Error('Original transaction not found');
+      }
+
+      const originalTx = txResponse.transaction;
+
+      // Fetch on-chain transaction to detect EIP-1559
+      let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+      let onChainMaxFeePerGas = null;
+      let onChainMaxPriorityFeePerGas = null;
+
+      try {
+        const onChainTx = await provider.getTransaction(cancelModalState.txHash);
+        if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+          isEIP1559 = true;
+          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+        }
+      } catch (fetchErr) {
+        console.warn('Could not fetch on-chain tx:', fetchErr.message);
+      }
+
+      // Build cancellation transaction (send 0 to self with same nonce)
+      const cancelTx = {
+        to: cancelModalState.address,
+        value: '0',
+        data: '0x',
+        nonce: originalTx.nonce,
+        gasLimit: 21000
+      };
+
+      let newMaxFeePerGas = null;
+      let newMaxPriorityFeePerGas = null;
+
+      if (isEIP1559) {
+        const bumpMultiplier = 1125n;
+        const bumpDivisor = 1000n;
+        const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+        const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+        const customFee = BigInt(gasPriceToUse);
+        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+        newMaxFeePerGas = customFee;
+        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+        cancelTx.maxFeePerGas = newMaxFeePerGas;
+        cancelTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+      } else {
+        cancelTx.gasPrice = BigInt(gasPriceToUse);
+      }
+
+      // Sign and send
+      const txResult = await connectedSigner.sendTransaction(cancelTx);
+
+      // Hide progress and close modal
+      progressContainer.classList.add('hidden');
+      buttonsContainer.classList.remove('hidden');
+      document.getElementById('modal-password-prompt').classList.add('hidden');
+
+      // Notify service worker to save to history
+      await chrome.runtime.sendMessage({
+        type: 'CANCEL_TX_COMPLETE',
+        address: cancelModalState.address,
+        originalTxHash: cancelModalState.txHash,
+        newTxHash: txResult.hash,
+        txDetails: {
+          gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+          nonce: originalTx.nonce,
+          maxFeePerGas: newMaxFeePerGas?.toString(),
+          maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+        }
+      });
+
+      alert(`Transaction cancelled!\nCancellation TX: ${txResult.hash.slice(0, 20)}...`);
+      showTransactionDetails(txResult.hash);
+
+    } catch (unlockError) {
+      // Hide progress and show buttons again
+      progressContainer.classList.add('hidden');
+      buttonsContainer.classList.remove('hidden');
+      document.getElementById('modal-password-prompt').classList.add('hidden');
+
+      if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
+        alert('Incorrect password');
+      } else {
+        alert('Error cancelling transaction: ' + unlockError.message);
+      }
     }
 
   } catch (error) {
     console.error('Error cancelling transaction:', error);
-    alert('Error cancelling transaction');
+    alert('Error cancelling transaction: ' + error.message);
   }
 }
 
@@ -7430,6 +8139,9 @@ async function handleCancelTransaction() {
   if (!currentState.address || !currentState.currentTxHash) return;
 
   try {
+    // Reset modal state first
+    resetCancelModalState();
+
     // Get transaction details
     const txResponse = await chrome.runtime.sendMessage({
       type: 'GET_TX_BY_HASH',
@@ -7443,6 +8155,12 @@ async function handleCancelTransaction() {
     }
 
     const tx = txResponse.transaction;
+
+    // Validate transaction is on current network
+    if (tx.network !== currentState.network) {
+      alert(`This transaction was on ${tx.network}. Please switch to that network first.`);
+      return;
+    }
 
     // Store state for modal
     cancelModalState.txHash = currentState.currentTxHash;

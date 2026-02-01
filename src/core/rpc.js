@@ -403,6 +403,148 @@ export async function getSafeGasPrice(network) {
 }
 
 /**
+ * Gets fee history from recent blocks for accurate gas price estimation
+ * Uses eth_feeHistory to analyze what priority fees were actually paid
+ * @param {string} network - Network key
+ * @param {number} blockCount - Number of recent blocks to analyze (default 20)
+ * @param {number[]} percentiles - Percentiles to calculate (default [25, 50, 75, 90])
+ * @returns {Promise<Object>} Fee history with base fees and priority fee percentiles
+ */
+export async function getFeeHistory(network, blockCount = 20, percentiles = [25, 50, 75, 90]) {
+  try {
+    const result = await rpcCall(network, 'eth_feeHistory', [
+      '0x' + blockCount.toString(16),
+      'latest',
+      percentiles
+    ]);
+
+    return {
+      baseFeePerGas: result.baseFeePerGas || [],
+      gasUsedRatio: result.gasUsedRatio || [],
+      reward: result.reward || [],
+      oldestBlock: result.oldestBlock
+    };
+  } catch (error) {
+    console.warn('eth_feeHistory not supported, falling back to basic gas price:', error);
+    return null;
+  }
+}
+
+/**
+ * Gets tiered gas price recommendations (slow, normal, fast, instant)
+ * Uses eth_feeHistory for accurate estimation on EIP-1559 networks
+ * @param {string} network - Network key
+ * @returns {Promise<Object>} Gas price recommendations in wei
+ */
+export async function getGasPriceRecommendations(network) {
+  try {
+    // Get fee history for last 20 blocks
+    const feeHistory = await getFeeHistory(network, 20, [25, 50, 75, 95]);
+    const baseFee = await getBaseFee(network);
+    const baseFeeWei = BigInt(baseFee);
+
+    if (feeHistory && feeHistory.reward && feeHistory.reward.length > 0) {
+      // Calculate median priority fees from fee history
+      // feeHistory.reward[i] contains [25th, 50th, 75th, 95th] percentile priority fees for block i
+      const priorityFees = {
+        slow: [],
+        normal: [],
+        fast: [],
+        instant: []
+      };
+
+      for (const blockRewards of feeHistory.reward) {
+        if (blockRewards && blockRewards.length >= 4) {
+          priorityFees.slow.push(BigInt(blockRewards[0]));     // 25th percentile
+          priorityFees.normal.push(BigInt(blockRewards[1]));   // 50th percentile
+          priorityFees.fast.push(BigInt(blockRewards[2]));     // 75th percentile
+          priorityFees.instant.push(BigInt(blockRewards[3]));  // 95th percentile
+        }
+      }
+
+      // Calculate median of each tier
+      const medianPriorityFees = {};
+      for (const tier of ['slow', 'normal', 'fast', 'instant']) {
+        const sorted = priorityFees[tier].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+        if (sorted.length > 0) {
+          const mid = Math.floor(sorted.length / 2);
+          medianPriorityFees[tier] = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2n;
+        } else {
+          medianPriorityFees[tier] = 0n;
+        }
+      }
+
+      // Calculate next block base fee (can increase by up to 12.5% per block)
+      // To be safe, assume 2 blocks of 12.5% increase for fast transactions
+      const nextBaseFee = baseFeeWei * 1125n / 1000n; // +12.5%
+      const safeBaseFee = baseFeeWei * 1265n / 1000n; // +26.5% (2 blocks of increase)
+
+      // maxFeePerGas = baseFee (with buffer) + priorityFee
+      return {
+        baseFee: baseFeeWei.toString(),
+        slow: {
+          maxFeePerGas: (baseFeeWei + medianPriorityFees.slow).toString(),
+          maxPriorityFeePerGas: medianPriorityFees.slow.toString()
+        },
+        normal: {
+          maxFeePerGas: (nextBaseFee + medianPriorityFees.normal).toString(),
+          maxPriorityFeePerGas: medianPriorityFees.normal.toString()
+        },
+        fast: {
+          maxFeePerGas: (safeBaseFee + medianPriorityFees.fast).toString(),
+          maxPriorityFeePerGas: medianPriorityFees.fast.toString()
+        },
+        instant: {
+          maxFeePerGas: (safeBaseFee * 125n / 100n + medianPriorityFees.instant).toString(),
+          maxPriorityFeePerGas: medianPriorityFees.instant.toString()
+        },
+        supportsEIP1559: true
+      };
+    }
+
+    // Fallback: Use eth_gasPrice with multipliers if feeHistory not available
+    const gasPrice = await rpcCall(network, 'eth_gasPrice', []);
+    const gasPriceWei = BigInt(gasPrice);
+
+    return {
+      baseFee: baseFeeWei.toString(),
+      slow: {
+        maxFeePerGas: gasPriceWei.toString(),
+        maxPriorityFeePerGas: '0'
+      },
+      normal: {
+        maxFeePerGas: (gasPriceWei * 110n / 100n).toString(),
+        maxPriorityFeePerGas: '0'
+      },
+      fast: {
+        maxFeePerGas: (gasPriceWei * 125n / 100n).toString(),
+        maxPriorityFeePerGas: '0'
+      },
+      instant: {
+        maxFeePerGas: (gasPriceWei * 150n / 100n).toString(),
+        maxPriorityFeePerGas: '0'
+      },
+      supportsEIP1559: false
+    };
+  } catch (error) {
+    console.error('Error getting gas price recommendations:', error);
+
+    // Ultimate fallback
+    const gasPrice = await rpcCall(network, 'eth_gasPrice', []);
+    const gasPriceWei = BigInt(gasPrice);
+
+    return {
+      baseFee: gasPriceWei.toString(),
+      slow: { maxFeePerGas: gasPriceWei.toString(), maxPriorityFeePerGas: '0' },
+      normal: { maxFeePerGas: (gasPriceWei * 110n / 100n).toString(), maxPriorityFeePerGas: '0' },
+      fast: { maxFeePerGas: (gasPriceWei * 125n / 100n).toString(), maxPriorityFeePerGas: '0' },
+      instant: { maxFeePerGas: (gasPriceWei * 150n / 100n).toString(), maxPriorityFeePerGas: '0' },
+      supportsEIP1559: false
+    };
+  }
+}
+
+/**
  * Gets current block number
  * @param {string} network - Network key
  * @returns {Promise<string>} Block number (hex string)
@@ -482,5 +624,79 @@ export function formatBalance(balanceWei, decimals = 4) {
   const balance = ethers.formatEther(balanceWei);
   const num = parseFloat(balance);
   return num.toFixed(decimals);
+}
+
+/**
+ * Broadcasts a raw signed transaction to ALL configured RPC endpoints for a network
+ * This helps ensure transaction propagation across different node pools
+ * @param {string} network - Network key
+ * @param {string} rawTx - Raw signed transaction hex string
+ * @returns {Promise<Object>} Results from each RPC { successes: [], failures: [] }
+ */
+export async function broadcastToAllRpcs(network, rawTx) {
+  const endpoints = await getRpcEndpoints(network);
+  const results = {
+    successes: [],
+    failures: []
+  };
+
+  // Broadcast to all endpoints in parallel
+  const promises = endpoints.map(async (endpoint) => {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_sendRawTransaction',
+          params: [rawTx],
+          id: Date.now()
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        // Some errors are expected (e.g., "already known") - these are actually successes
+        const errorMsg = data.error.message || data.error;
+        if (errorMsg.includes('already known') || errorMsg.includes('already in pool')) {
+          results.successes.push({ endpoint, result: 'already in mempool' });
+        } else {
+          results.failures.push({ endpoint, error: errorMsg });
+        }
+      } else if (data.result) {
+        results.successes.push({ endpoint, result: data.result });
+      } else {
+        results.failures.push({ endpoint, error: 'No result returned' });
+      }
+    } catch (error) {
+      results.failures.push({ endpoint, error: error.message });
+    }
+  });
+
+  await Promise.all(promises);
+  return results;
+}
+
+/**
+ * Gets the raw transaction data for a pending transaction by hash
+ * This can be used to rebroadcast the transaction
+ * @param {string} network - Network key
+ * @param {string} txHash - Transaction hash
+ * @returns {Promise<string|null>} Raw transaction hex or null if not found/not pending
+ */
+export async function getRawTransaction(network, txHash) {
+  try {
+    // Try eth_getRawTransactionByHash (not all nodes support this)
+    const result = await rpcCall(network, 'eth_getRawTransactionByHash', [txHash]);
+    if (result) {
+      return result;
+    }
+  } catch (error) {
+    // Method not supported, try alternative approach
+    console.warn('eth_getRawTransactionByHash not supported:', error.message);
+  }
+
+  return null;
 }
 

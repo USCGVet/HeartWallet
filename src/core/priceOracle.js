@@ -210,6 +210,11 @@ async function getTokenPriceInPLS(provider, pairAddress, tokenAddress, tokenDeci
  * Returns: { PLS: price, HEX: price, PLSX: price, INC: price, ... }
  */
 export async function fetchTokenPrices(provider, network = 'pulsechain') {
+  // Skip price fetching on testnets - no liquidity pools exist
+  if (network === 'pulsechainTestnet' || network === 'sepolia') {
+    return null; // Silently return null for testnets
+  }
+
   // Check cache first
   const now = Date.now();
   if (priceCache.prices[network] && (now - priceCache.timestamp) < priceCache.CACHE_DURATION) {
@@ -225,7 +230,7 @@ export async function fetchTokenPrices(provider, network = 'pulsechain') {
     // Step 1: Get PLS price in USD
     const plsUsdPrice = await getPLSPrice(provider);
     if (!plsUsdPrice) {
-      console.warn('Could not fetch PLS price');
+      // Silently fail - price data not available
       return null;
     }
 
@@ -339,5 +344,97 @@ export function formatUSD(value) {
   } else {
     return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
+}
+
+/**
+ * Fetch ETH price from Uniswap V3 USDC/ETH pool on Ethereum mainnet
+ * Falls back to a cached/estimated price if RPC fails
+ */
+async function getETHPrice(provider) {
+  try {
+    // Uniswap V3 USDC/ETH pool (0.3% fee tier) - most liquid
+    const USDC_ETH_POOL = '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8';
+
+    // Uniswap V3 Pool ABI (slot0 for price)
+    const POOL_ABI = [
+      'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)'
+    ];
+
+    const poolContract = new ethers.Contract(USDC_ETH_POOL, POOL_ABI, provider);
+    const slot0 = await poolContract.slot0();
+    const sqrtPriceX96 = slot0.sqrtPriceX96;
+
+    // Convert sqrtPriceX96 to actual price
+    // In this pool, token0 = USDC (6 decimals), token1 = ETH (18 decimals)
+    // price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals0 - decimals1)
+    // price = (sqrtPriceX96 / 2^96)^2 * 10^(6-18) = price of ETH in USDC
+
+    const sqrtPrice = Number(sqrtPriceX96) / (2 ** 96);
+    const price = sqrtPrice * sqrtPrice;
+
+    // Adjust for decimal difference (USDC has 6 decimals, ETH has 18)
+    // This gives us USDC per ETH
+    const ethPriceUSD = price * (10 ** 12);
+
+    console.log('✓ ETH price from Uniswap:', ethPriceUSD);
+    return ethPriceUSD;
+  } catch (error) {
+    console.warn('Could not fetch ETH price from Uniswap, using fallback:', error.message);
+    // Fallback to a reasonable estimate (update periodically)
+    return 3500; // Approximate ETH price
+  }
+}
+
+/**
+ * Fetch native token price for any supported network
+ * @param {string} network - Network key (pulsechain, ethereum, etc.)
+ * @param {ethers.Provider} provider - Provider for the network
+ * @returns {Promise<number|null>} Price in USD
+ */
+export async function getNativeTokenPrice(network, provider) {
+  // Testnets: return null silently (test tokens have no real USD value)
+  if (network === 'pulsechainTestnet' || network === 'sepolia') {
+    return null;
+  }
+
+  // Check cache first
+  const now = Date.now();
+  const cacheKey = `${network}_native`;
+
+  if (priceCache.prices[cacheKey] && (now - priceCache.timestamp) < priceCache.CACHE_DURATION) {
+    return priceCache.prices[cacheKey];
+  }
+
+  try {
+    let price = null;
+
+    if (network === 'pulsechain') {
+      price = await getPLSPrice(provider);
+    } else if (network === 'ethereum') {
+      price = await getETHPrice(provider);
+    }
+
+    if (price) {
+      priceCache.prices[cacheKey] = price;
+      priceCache.timestamp = now;
+    }
+
+    return price;
+  } catch (error) {
+    // Silently fail - price data not critical
+    return null;
+  }
+}
+
+/**
+ * Get the native token symbol for a network
+ * @param {string} network - Network key
+ * @returns {string} Native token symbol
+ */
+export function getNativeTokenSymbol(network) {
+  if (network === 'pulsechain' || network === 'pulsechainTestnet') {
+    return 'PLS';
+  }
+  return 'ETH';
 }
 

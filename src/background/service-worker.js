@@ -1007,7 +1007,7 @@ async function handleSendTransaction(params, origin) {
 }
 
 // Handle transaction approval from popup
-async function handleTransactionApproval(requestId, approved, sessionToken, gasPrice, customNonce, txHash) {
+async function handleTransactionApproval(requestId, approved, sessionToken, gasPrice, customNonce, txHash, txDetails = null) {
   if (!pendingTransactions.has(requestId)) {
     return { success: false, error: 'Request not found or expired' };
   }
@@ -1033,31 +1033,42 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
   }
 
   try {
-    // If txHash is provided, it means transaction was already signed and broadcast
-    // by a hardware wallet in the popup. Just resolve with the hash.
+    // If txHash is provided, transaction was already signed and broadcast in the popup
+    // (by hardware wallet OR software wallet). Just save to history and resolve.
     if (txHash) {
-      console.log('Hardware wallet transaction already broadcast:', txHash);
+      const walletType = txDetails ? 'software' : 'hardware';
+      console.log(`🫀 ${walletType} wallet transaction already broadcast:`, txHash);
 
       // Get active wallet for saving to history
       const activeWallet = await getActiveWallet();
       const network = await getCurrentNetwork();
 
-      // Save transaction to history
-      await txHistory.addTxToHistory(activeWallet.address, {
+      // Save transaction to history (use txDetails if provided for accurate data)
+      const historyEntry = {
         hash: txHash,
         timestamp: Date.now(),
         from: activeWallet.address,
-        to: txRequest.to || null,
-        value: txRequest.value || '0',
-        data: txRequest.data || '0x',
-        gasPrice: '0', // Will be updated by transaction monitoring
-        gasLimit: txRequest.gasLimit || txRequest.gas || null,
-        nonce: null, // Will be updated by transaction monitoring
+        to: txDetails?.to || txRequest.to || null,
+        value: txDetails?.value || txRequest.value || '0',
+        data: txDetails?.data || txRequest.data || '0x',
+        gasPrice: txDetails?.gasPrice || '0',
+        gasLimit: txDetails?.gasLimit || txRequest.gasLimit || txRequest.gas || null,
+        nonce: txDetails?.nonce ?? null,
         network: network,
         status: txHistory.TX_STATUS.PENDING,
         blockNumber: null,
         type: txHistory.TX_TYPES.CONTRACT
-      });
+      };
+
+      // Include EIP-1559 fields if provided (needed for speed-up/cancel)
+      if (txDetails?.maxFeePerGas) {
+        historyEntry.maxFeePerGas = txDetails.maxFeePerGas;
+      }
+      if (txDetails?.maxPriorityFeePerGas) {
+        historyEntry.maxPriorityFeePerGas = txDetails.maxPriorityFeePerGas;
+      }
+
+      await txHistory.addTxToHistory(activeWallet.address, historyEntry);
 
       // Send desktop notification
       chrome.notifications.create({
@@ -1080,7 +1091,7 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
         method: 'eth_sendTransaction',
         success: true,
         txHash: txHash,
-        walletType: 'hardware'
+        walletType: walletType
       });
 
       // Resolve with transaction hash
@@ -1427,15 +1438,29 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
     const provider = await rpc.getProvider(network);
     wallet = signer.connect(provider);
 
-    // Calculate new gas price
-    let newGasPrice;
-    if (customGasPrice) {
-      // Use custom gas price provided by user
-      newGasPrice = BigInt(customGasPrice);
-    } else {
-      // Calculate from multiplier (1.2x of original by default)
-      const originalGasPrice = BigInt(originalTx.gasPrice);
-      newGasPrice = (originalGasPrice * BigInt(Math.floor(gasPriceMultiplier * 100))) / BigInt(100);
+    // Fetch the actual transaction from blockchain to check its type
+    // This is needed because older transactions in history may not have EIP-1559 fields stored
+    let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+    let onChainMaxFeePerGas = null;
+    let onChainMaxPriorityFeePerGas = null;
+
+    try {
+      const onChainTx = await provider.getTransaction(originalTxHash);
+      if (onChainTx) {
+        // Check if it's EIP-1559 (type 2)
+        if (onChainTx.type === 2 || onChainTx.maxFeePerGas) {
+          isEIP1559 = true;
+          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          console.log('🫀 Detected EIP-1559 transaction from blockchain:', {
+            maxFeePerGas: onChainMaxFeePerGas?.toString(),
+            maxPriorityFeePerGas: onChainMaxPriorityFeePerGas?.toString()
+          });
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('🫀 Could not fetch original tx from blockchain:', fetchErr.message);
+      // Continue with what we have from history
     }
 
     // Create replacement transaction with same nonce, data, and gasLimit
@@ -1443,8 +1468,7 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
       to: originalTx.to,
       value: originalTx.value,
       data: originalTx.data || '0x',
-      nonce: originalTx.nonce,
-      gasPrice: newGasPrice
+      nonce: originalTx.nonce
     };
 
     // Include gasLimit if it was in the original transaction
@@ -1452,27 +1476,95 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
       replacementTx.gasLimit = originalTx.gasLimit;
     }
 
+    // For storing in history
+    let newGasPrice = null;
+    let newMaxFeePerGas = null;
+    let newMaxPriorityFeePerGas = null;
+
+    if (isEIP1559) {
+      // EIP-1559: Must bump BOTH maxFeePerGas and maxPriorityFeePerGas by at least 10%
+      // Using 12.5% bump to ensure acceptance (same as Ethereum default)
+      const bumpMultiplier = 1125n; // 112.5% = 1.125x
+      const bumpDivisor = 1000n;
+
+      // Use on-chain values if available (more accurate), otherwise fall back to history
+      const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+      const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+      if (customGasPrice) {
+        // Custom gas price: use it for maxFeePerGas, calculate priority fee
+        const customFee = BigInt(customGasPrice);
+        // Priority fee should be at least 12.5% higher than original
+        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        // Use at least 1 Gwei for priority fee if not set
+        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+        newMaxFeePerGas = customFee;
+        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+      } else {
+        // Calculate bumped fees (12.5% higher)
+        newMaxFeePerGas = (originalMaxFee * bumpMultiplier) / bumpDivisor;
+        newMaxPriorityFeePerGas = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+
+        // Ensure priority fee is at least 1 Gwei
+        if (newMaxPriorityFeePerGas < 1000000000n) {
+          newMaxPriorityFeePerGas = 1000000000n;
+        }
+      }
+
+      replacementTx.maxFeePerGas = newMaxFeePerGas;
+      replacementTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+
+      console.log('🫀 EIP-1559 speed-up:', {
+        originalMaxFee: originalMaxFee.toString(),
+        originalPriorityFee: originalPriorityFee.toString(),
+        newMaxFee: newMaxFeePerGas.toString(),
+        newPriorityFee: newMaxPriorityFeePerGas.toString()
+      });
+    } else {
+      // Legacy transaction: use gasPrice
+      if (customGasPrice) {
+        // Use custom gas price provided by user
+        newGasPrice = BigInt(customGasPrice);
+      } else {
+        // Calculate from multiplier (1.2x of original by default)
+        const originalGasPrice = BigInt(originalTx.gasPrice);
+        newGasPrice = (originalGasPrice * BigInt(Math.floor(gasPriceMultiplier * 100))) / BigInt(100);
+      }
+      replacementTx.gasPrice = newGasPrice;
+    }
+
     // Speeding up transaction
 
     // Send replacement transaction
     const tx = await wallet.sendTransaction(replacementTx);
 
-    // Save new transaction to history
-    await txHistory.addTxToHistory(address, {
+    // Save new transaction to history (include EIP-1559 fields if applicable)
+    const historyEntry = {
       hash: tx.hash,
       timestamp: Date.now(),
       from: address,
       to: originalTx.to,
       value: originalTx.value,
       data: originalTx.data || '0x',
-      gasPrice: newGasPrice.toString(),
+      gasPrice: newGasPrice ? newGasPrice.toString() : (newMaxFeePerGas ? newMaxFeePerGas.toString() : originalTx.gasPrice),
       gasLimit: originalTx.gasLimit,
       nonce: originalTx.nonce,
       network: network,
       status: txHistory.TX_STATUS.PENDING,
       blockNumber: null,
       type: originalTx.type
-    });
+    };
+
+    // Add EIP-1559 fields if this was an EIP-1559 transaction
+    if (newMaxFeePerGas) {
+      historyEntry.maxFeePerGas = newMaxFeePerGas.toString();
+    }
+    if (newMaxPriorityFeePerGas) {
+      historyEntry.maxPriorityFeePerGas = newMaxPriorityFeePerGas.toString();
+    }
+
+    await txHistory.addTxToHistory(address, historyEntry);
 
     // Mark original transaction as replaced/failed
     await txHistory.updateTxStatus(address, originalTxHash, txHistory.TX_STATUS.FAILED, null);
@@ -1557,15 +1649,23 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
     const provider = await rpc.getProvider(network);
     wallet = signer.connect(provider);
 
-    // Calculate new gas price
-    let newGasPrice;
-    if (customGasPrice) {
-      // Use custom gas price provided by user
-      newGasPrice = BigInt(customGasPrice);
-    } else {
-      // Calculate from original (1.2x of original to ensure it gets mined first)
-      const originalGasPrice = BigInt(originalTx.gasPrice);
-      newGasPrice = (originalGasPrice * BigInt(120)) / BigInt(100);
+    // Fetch the actual transaction from blockchain to check its type
+    let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+    let onChainMaxFeePerGas = null;
+    let onChainMaxPriorityFeePerGas = null;
+
+    try {
+      const onChainTx = await provider.getTransaction(originalTxHash);
+      if (onChainTx) {
+        if (onChainTx.type === 2 || onChainTx.maxFeePerGas) {
+          isEIP1559 = true;
+          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          console.log('🫀 Detected EIP-1559 transaction from blockchain for cancel');
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('🫀 Could not fetch original tx from blockchain:', fetchErr.message);
     }
 
     // Create cancellation transaction (send 0 to self with same nonce)
@@ -1574,9 +1674,60 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
       value: '0',   // Zero value
       data: '0x',   // Empty data
       nonce: originalTx.nonce,
-      gasPrice: newGasPrice,
       gasLimit: 21000  // Standard gas limit for simple ETH transfer
     };
+
+    // For storing in history
+    let newGasPrice = null;
+    let newMaxFeePerGas = null;
+    let newMaxPriorityFeePerGas = null;
+
+    if (isEIP1559) {
+      // EIP-1559: Must bump BOTH maxFeePerGas and maxPriorityFeePerGas by at least 10%
+      const bumpMultiplier = 1125n; // 112.5%
+      const bumpDivisor = 1000n;
+
+      // Use on-chain values if available
+      const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+      const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+      if (customGasPrice) {
+        // Custom gas price: use it for maxFeePerGas
+        const customFee = BigInt(customGasPrice);
+        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+        newMaxFeePerGas = customFee;
+        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+      } else {
+        // Calculate bumped fees
+        newMaxFeePerGas = (originalMaxFee * bumpMultiplier) / bumpDivisor;
+        newMaxPriorityFeePerGas = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+
+        if (newMaxPriorityFeePerGas < 1000000000n) {
+          newMaxPriorityFeePerGas = 1000000000n;
+        }
+      }
+
+      cancelTx.maxFeePerGas = newMaxFeePerGas;
+      cancelTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+
+      console.log('🫀 EIP-1559 cancel:', {
+        originalMaxFee: originalMaxFee.toString(),
+        originalPriorityFee: originalPriorityFee.toString(),
+        newMaxFee: newMaxFeePerGas.toString(),
+        newPriorityFee: newMaxPriorityFeePerGas.toString()
+      });
+    } else {
+      // Legacy transaction
+      if (customGasPrice) {
+        newGasPrice = BigInt(customGasPrice);
+      } else {
+        const originalGasPrice = BigInt(originalTx.gasPrice);
+        newGasPrice = (originalGasPrice * BigInt(120)) / BigInt(100);
+      }
+      cancelTx.gasPrice = newGasPrice;
+    }
 
     // Cancelling transaction
 
@@ -1584,21 +1735,30 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
     const tx = await wallet.sendTransaction(cancelTx);
 
     // Save cancellation transaction to history
-    await txHistory.addTxToHistory(address, {
+    const historyEntry = {
       hash: tx.hash,
       timestamp: Date.now(),
       from: address,
       to: address,
       value: '0',
       data: '0x',
-      gasPrice: newGasPrice.toString(),
+      gasPrice: newGasPrice ? newGasPrice.toString() : (newMaxFeePerGas ? newMaxFeePerGas.toString() : originalTx.gasPrice),
       gasLimit: '21000',
       nonce: originalTx.nonce,
       network: network,
       status: txHistory.TX_STATUS.PENDING,
       blockNumber: null,
       type: 'send'
-    });
+    };
+
+    if (newMaxFeePerGas) {
+      historyEntry.maxFeePerGas = newMaxFeePerGas.toString();
+    }
+    if (newMaxPriorityFeePerGas) {
+      historyEntry.maxPriorityFeePerGas = newMaxPriorityFeePerGas.toString();
+    }
+
+    await txHistory.addTxToHistory(address, historyEntry);
 
     // Mark original transaction as failed
     await txHistory.updateTxStatus(address, originalTxHash, txHistory.TX_STATUS.FAILED, null);
@@ -1640,14 +1800,25 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
 // Get current network gas price (for speed-up UI)
 async function getCurrentNetworkGasPrice(network) {
   try {
-    // Use safe gas price to prevent stuck transactions
-    const safeGasPriceHex = await rpc.getSafeGasPrice(network);
-    const safeGasPrice = BigInt(safeGasPriceHex);
+    // Get full gas price recommendations based on fee history
+    const recommendations = await rpc.getGasPriceRecommendations(network);
+
+    // Use "fast" tier as the recommended speed-up price
+    const fastPrice = BigInt(recommendations.fast.maxFeePerGas);
+    const instantPrice = BigInt(recommendations.instant.maxFeePerGas);
 
     return {
       success: true,
-      gasPrice: safeGasPrice.toString(),
-      gasPriceGwei: (Number(safeGasPrice) / 1e9).toFixed(2)
+      gasPrice: fastPrice.toString(),
+      gasPriceGwei: (Number(fastPrice) / 1e9).toFixed(2),
+      recommendations: {
+        slow: recommendations.slow.maxFeePerGas,
+        normal: recommendations.normal.maxFeePerGas,
+        fast: recommendations.fast.maxFeePerGas,
+        instant: recommendations.instant.maxFeePerGas
+      },
+      instantPrice: instantPrice.toString(),
+      instantPriceGwei: (Number(instantPrice) / 1e9).toFixed(2)
     };
   } catch (error) {
     console.error('🫀 Error fetching current gas price:', error);
@@ -1658,13 +1829,38 @@ async function getCurrentNetworkGasPrice(network) {
 // Refresh transaction status from blockchain
 async function refreshTransactionStatus(address, txHash, network) {
   try {
+    console.log(`🫀 Refreshing tx status: ${txHash} on ${network}`);
     const provider = await rpc.getProvider(network);
 
     // Get transaction receipt from blockchain
     const receipt = await provider.getTransactionReceipt(txHash);
+    console.log(`🫀 Receipt for ${txHash.slice(0, 10)}...:`, receipt ? 'found' : 'null');
 
     if (!receipt) {
-      // Transaction still pending (not mined yet)
+      // No receipt - check if transaction is still in mempool
+      const tx = await provider.getTransaction(txHash);
+      console.log(`🫀 Mempool tx for ${txHash.slice(0, 10)}...:`, tx ? 'found' : 'null');
+
+      if (!tx) {
+        // Transaction not in mempool and no receipt = dropped/evicted
+        console.log(`🫀 Transaction ${txHash.slice(0, 10)}... was DROPPED - marking as failed`);
+        // Mark as failed in local history
+        await txHistory.updateTxStatus(
+          address,
+          txHash,
+          txHistory.TX_STATUS.FAILED,
+          null
+        );
+
+        return {
+          success: true,
+          status: 'dropped',
+          message: 'Transaction was dropped from mempool (not confirmed, no longer pending)'
+        };
+      }
+
+      // Transaction exists in mempool, still pending
+      console.log(`🫀 Transaction ${txHash.slice(0, 10)}... still in mempool`);
       return {
         success: true,
         status: 'pending',
@@ -1703,55 +1899,152 @@ async function refreshTransactionStatus(address, txHash, network) {
   }
 }
 
-// Wait for transaction confirmation
-async function waitForConfirmation(tx, provider, address) {
+// Rebroadcast a pending transaction to all configured RPCs
+async function rebroadcastTransaction(txHash, network) {
   try {
-    // Waiting for confirmation
+    console.log(`🫀 Rebroadcasting transaction: ${txHash} to all ${network} RPCs`);
 
-    // Wait for 1 confirmation
-    const receipt = await provider.waitForTransaction(tx.hash, 1);
+    // First, try to get the raw transaction
+    let rawTx = await rpc.getRawTransaction(network, txHash);
 
-    if (receipt && receipt.status === 1) {
-      // Transaction confirmed
+    if (!rawTx) {
+      // If getRawTransaction not supported, we need to reconstruct from tx data
+      // Get the transaction details
+      const provider = await rpc.getProvider(network);
+      const tx = await provider.getTransaction(txHash);
 
-      // Update transaction status in history
+      if (!tx) {
+        return {
+          success: false,
+          error: 'Transaction not found in mempool - it may have been dropped or already confirmed'
+        };
+      }
+
+      // Get the raw serialized transaction from the provider
+      // ethers v6 doesn't expose raw tx directly, so we use a workaround
+      try {
+        // Try direct RPC call to get raw tx
+        const rawResult = await provider.send('eth_getRawTransactionByHash', [txHash]);
+        if (rawResult) {
+          rawTx = rawResult;
+        }
+      } catch (e) {
+        console.warn('Could not get raw transaction via RPC:', e.message);
+      }
+
+      if (!rawTx) {
+        return {
+          success: false,
+          error: 'Cannot get raw transaction data. The RPC nodes may not support this operation.'
+        };
+      }
+    }
+
+    // Broadcast to all RPCs
+    const results = await rpc.broadcastToAllRpcs(network, rawTx);
+
+    console.log(`🫀 Rebroadcast results - Successes: ${results.successes.length}, Failures: ${results.failures.length}`);
+
+    if (results.successes.length > 0) {
+      return {
+        success: true,
+        message: `Transaction broadcast to ${results.successes.length} RPC(s)`,
+        successes: results.successes,
+        failures: results.failures
+      };
+    } else {
+      return {
+        success: false,
+        error: 'Failed to broadcast to any RPC',
+        failures: results.failures
+      };
+    }
+
+  } catch (error) {
+    console.error('🫀 Error rebroadcasting transaction:', error);
+    return { success: false, error: sanitizeErrorMessage(error.message) };
+  }
+}
+
+// Track transactions being monitored to prevent duplicates
+const monitoringTransactions = new Set();
+
+// Wait for transaction confirmation with timeout and retry
+async function waitForConfirmation(tx, provider, address) {
+  const txHash = tx.hash;
+
+  // Prevent duplicate monitoring
+  if (monitoringTransactions.has(txHash)) {
+    console.log(`🫀 Transaction ${txHash.slice(0, 10)}... already being monitored`);
+    return;
+  }
+  monitoringTransactions.add(txHash);
+
+  const POLL_INTERVAL = 15 * 1000; // 15 seconds
+  const MAX_RETRIES = 40; // 40 * 15s = 10 minutes
+
+  try {
+    let receipt = null;
+    let retries = 0;
+
+    // Poll for receipt with timeout
+    while (!receipt && retries < MAX_RETRIES) {
+      try {
+        receipt = await provider.getTransactionReceipt(txHash);
+        if (receipt) break;
+      } catch (rpcError) {
+        console.warn(`🫀 RPC error checking tx ${txHash.slice(0, 10)}..., retrying:`, rpcError.message);
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      retries++;
+    }
+
+    if (!receipt) {
+      console.warn(`🫀 Transaction ${txHash.slice(0, 10)}... confirmation timed out after ${MAX_RETRIES} attempts`);
+      // Don't mark as failed - it might still be pending in mempool
+      return;
+    }
+
+    if (receipt.status === 1) {
+      // Transaction confirmed successfully
       await txHistory.updateTxStatus(
         address,
-        tx.hash,
+        txHash,
         txHistory.TX_STATUS.CONFIRMED,
         receipt.blockNumber
       );
 
-      // Send success notification
       chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
         title: 'Transaction Confirmed',
-        message: `Transaction confirmed on-chain!`,
+        message: `Transaction confirmed in block ${receipt.blockNumber}`,
         priority: 2
       });
     } else {
-      // Transaction failed
-
-      // Update transaction status in history
+      // Transaction reverted (status === 0)
       await txHistory.updateTxStatus(
         address,
-        tx.hash,
+        txHash,
         txHistory.TX_STATUS.FAILED,
-        receipt ? receipt.blockNumber : null
+        receipt.blockNumber
       );
 
-      // Send failure notification
       chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
         title: 'Transaction Failed',
-        message: 'Transaction was reverted or failed',
+        message: 'Transaction was reverted on-chain',
         priority: 2
       });
     }
   } catch (error) {
-    console.error('🫀 Error waiting for confirmation:', error);
+    console.error('🫀 Error in confirmation monitoring:', error);
+  } finally {
+    // Always clean up tracking
+    monitoringTransactions.delete(txHash);
   }
 }
 
@@ -2113,7 +2406,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
 
         case 'TRANSACTION_APPROVAL':
-          const txApprovalResult = await handleTransactionApproval(message.requestId, message.approved, message.sessionToken, message.gasPrice, message.customNonce, message.txHash);
+          const txApprovalResult = await handleTransactionApproval(message.requestId, message.approved, message.sessionToken, message.gasPrice, message.customNonce, message.txHash, message.txDetails);
           // Sending transaction approval response
           sendResponse(txApprovalResult);
           break;
@@ -2250,6 +2543,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(refreshResult);
           break;
 
+        case 'REBROADCAST_TX':
+          const rebroadcastResult = await rebroadcastTransaction(
+            message.txHash,
+            message.network
+          );
+          sendResponse(rebroadcastResult);
+          break;
+
         case 'SPEED_UP_TX':
           const speedUpResult = await handleSpeedUpTransaction(
             message.address,
@@ -2269,6 +2570,114 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             message.customGasPrice || null
           );
           sendResponse(cancelResult);
+          break;
+
+        case 'SPEED_UP_TX_COMPLETE':
+          // Transaction was already signed and broadcast in popup - just save to history
+          try {
+            const network = await getCurrentNetwork();
+
+            // Save new transaction to history
+            const historyEntry = {
+              hash: message.newTxHash,
+              timestamp: Date.now(),
+              from: message.address,
+              to: message.txDetails.to,
+              value: message.txDetails.value,
+              data: message.txDetails.data || '0x',
+              gasPrice: message.txDetails.gasPrice,
+              gasLimit: message.txDetails.gasLimit,
+              nonce: message.txDetails.nonce,
+              network: network,
+              status: txHistory.TX_STATUS.PENDING,
+              blockNumber: null,
+              type: txHistory.TX_TYPES.CONTRACT
+            };
+
+            if (message.txDetails.maxFeePerGas) {
+              historyEntry.maxFeePerGas = message.txDetails.maxFeePerGas;
+            }
+            if (message.txDetails.maxPriorityFeePerGas) {
+              historyEntry.maxPriorityFeePerGas = message.txDetails.maxPriorityFeePerGas;
+            }
+
+            await txHistory.addTxToHistory(message.address, historyEntry);
+
+            // Mark original transaction as replaced
+            await txHistory.updateTxStatus(message.address, message.originalTxHash, txHistory.TX_STATUS.FAILED, null);
+
+            // Start monitoring new transaction
+            const provider = await rpc.getProvider(network);
+            waitForConfirmation({ hash: message.newTxHash }, provider, message.address);
+
+            // Notification
+            chrome.notifications.create({
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+              title: 'Transaction Sped Up',
+              message: `New TX: ${message.newTxHash.slice(0, 20)}...`,
+              priority: 2
+            });
+
+            sendResponse({ success: true, txHash: message.newTxHash });
+          } catch (error) {
+            console.error('Error saving speed-up transaction:', error);
+            sendResponse({ success: false, error: error.message });
+          }
+          break;
+
+        case 'CANCEL_TX_COMPLETE':
+          // Cancellation transaction was already signed and broadcast in popup - just save to history
+          try {
+            const network = await getCurrentNetwork();
+
+            // Save cancellation transaction to history
+            const cancelHistoryEntry = {
+              hash: message.newTxHash,
+              timestamp: Date.now(),
+              from: message.address,
+              to: message.address,
+              value: '0',
+              data: '0x',
+              gasPrice: message.txDetails.gasPrice,
+              gasLimit: '21000',
+              nonce: message.txDetails.nonce,
+              network: network,
+              status: txHistory.TX_STATUS.PENDING,
+              blockNumber: null,
+              type: 'send'
+            };
+
+            if (message.txDetails.maxFeePerGas) {
+              cancelHistoryEntry.maxFeePerGas = message.txDetails.maxFeePerGas;
+            }
+            if (message.txDetails.maxPriorityFeePerGas) {
+              cancelHistoryEntry.maxPriorityFeePerGas = message.txDetails.maxPriorityFeePerGas;
+            }
+
+            await txHistory.addTxToHistory(message.address, cancelHistoryEntry);
+
+            // Mark original transaction as cancelled/failed
+            await txHistory.updateTxStatus(message.address, message.originalTxHash, txHistory.TX_STATUS.FAILED, null);
+
+            // Start monitoring cancellation transaction
+            const provider = await rpc.getProvider(network);
+            waitForConfirmation({ hash: message.newTxHash }, provider, message.address);
+
+            // Notification
+            chrome.notifications.create({
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
+              title: 'Transaction Cancelled',
+              message: 'Cancellation transaction sent',
+              priority: 2
+            });
+
+            sendResponse({ success: true, txHash: message.newTxHash });
+          } catch (error) {
+            console.error('Error saving cancel transaction:', error);
+            sendResponse({ success: false, error: error.message });
+          }
           break;
 
         case 'UPDATE_RPC_PRIORITIES':

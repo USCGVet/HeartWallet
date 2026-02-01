@@ -12,6 +12,7 @@ import { save, load } from './storage.js';
 import { isValidMnemonic, isValidPrivateKey, validatePasswordStrength } from './validation.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { argon2idAsync } from '@noble/hashes/argon2.js';
 import Argon2Worker from '../workers/argon2-worker.js?worker';
 
 // ===== SECURE MEMORY CLEANUP =====
@@ -399,37 +400,78 @@ async function deriveIndependentKeys(password, salt, params = null, onProgress =
   // Get parameters: use provided or get current year's recommendations
   const argonParams = params || getRecommendedArgon2Params();
 
-  // Step 1: Derive master key using Argon2id in Web Worker (prevents UI blocking)
-  const masterKeyBytes = await new Promise((resolve, reject) => {
-    // Create worker instance
-    const worker = new Argon2Worker();
+  // Step 1: Derive master key using Argon2id
+  // Try to use Web Worker (prevents UI blocking), fallback to main thread for service worker context
+  let masterKeyBytes;
 
-    worker.onmessage = (e) => {
-      const { type, progress, result, error } = e.data;
+  // Check if we can create a worker (service workers don't support nested workers)
+  let canUseWorker = true;
+  try {
+    // In service worker context, Argon2Worker constructor may throw or not work properly
+    if (typeof self !== 'undefined' && self.constructor && self.constructor.name === 'ServiceWorkerGlobalScope') {
+      canUseWorker = false;
+    }
+  } catch {
+    canUseWorker = false;
+  }
 
-      if (type === 'progress' && onProgress) {
-        onProgress(progress);
-      } else if (type === 'complete') {
-        worker.terminate();
-        resolve(new Uint8Array(result));
-      } else if (type === 'error') {
-        worker.terminate();
-        reject(new Error(error));
+  if (canUseWorker) {
+    try {
+      masterKeyBytes = await new Promise((resolve, reject) => {
+        // Create worker instance
+        const worker = new Argon2Worker();
+
+        worker.onmessage = (e) => {
+          const { type, progress, result, error } = e.data;
+
+          if (type === 'progress' && onProgress) {
+            onProgress(progress);
+          } else if (type === 'complete') {
+            worker.terminate();
+            resolve(new Uint8Array(result));
+          } else if (type === 'error') {
+            worker.terminate();
+            reject(new Error(error));
+          }
+        };
+
+        worker.onerror = (error) => {
+          worker.terminate();
+          reject(error);
+        };
+
+        // Send computation request to worker
+        worker.postMessage({
+          password,
+          salt: Array.from(salt),
+          params: argonParams
+        });
+      });
+    } catch (workerError) {
+      // Worker failed, fall back to main thread
+      console.warn('Web Worker unavailable, running Argon2id on main thread:', workerError.message);
+      canUseWorker = false;
+    }
+  }
+
+  // Fallback: Run Argon2id directly on main thread (for service worker context)
+  if (!canUseWorker || !masterKeyBytes) {
+    const encoder = new TextEncoder();
+    const passwordBytes = encoder.encode(password);
+
+    masterKeyBytes = await argon2idAsync(
+      passwordBytes,
+      salt,
+      {
+        m: argonParams.memory,
+        t: argonParams.iterations,
+        p: argonParams.parallelism || 1,
+        dkLen: 32,
+        asyncTick: 10, // Yield periodically to prevent timeout
+        onProgress: onProgress || undefined
       }
-    };
-
-    worker.onerror = (error) => {
-      worker.terminate();
-      reject(error);
-    };
-
-    // Send computation request to worker
-    worker.postMessage({
-      password,
-      salt: Array.from(salt),
-      params: argonParams
-    });
-  });
+    );
+  }
 
   // Step 2: Use HKDF to derive two cryptographically independent keys
   // Context strings ensure keys are different even with same input

@@ -87,7 +87,7 @@ export async function addTxToHistory(address, txData) {
   }
 
   // Add new transaction at beginning (newest first)
-  history[addressLower].transactions.unshift({
+  const txEntry = {
     hash: txData.hash,
     timestamp: txData.timestamp || Date.now(),
     from: txData.from.toLowerCase(),
@@ -101,7 +101,17 @@ export async function addTxToHistory(address, txData) {
     status: txData.status || TX_STATUS.PENDING,
     blockNumber: txData.blockNumber || null,
     type: txData.type || TX_TYPES.CONTRACT
-  });
+  };
+
+  // Store EIP-1559 fields if present (for proper speed-up/cancel)
+  if (txData.maxFeePerGas) {
+    txEntry.maxFeePerGas = txData.maxFeePerGas;
+  }
+  if (txData.maxPriorityFeePerGas) {
+    txEntry.maxPriorityFeePerGas = txData.maxPriorityFeePerGas;
+  }
+
+  history[addressLower].transactions.unshift(txEntry);
 
   // Enforce max limit (FIFO - remove oldest)
   if (history[addressLower].transactions.length > MAX_TXS_PER_ADDRESS) {

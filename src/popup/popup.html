@@ -569,7 +569,7 @@
 
           <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
             <div>Estimated Gas: <span id="send-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
-            <div>Max Fee: <span id="send-max-fee" style="color: var(--terminal-fg);">--</span></div>
+            <div>Max Fee: <span id="send-max-fee" style="color: var(--terminal-fg);">--</span> <span id="send-max-fee-usd" style="color: var(--terminal-info);"></span></div>
           </div>
         </div>
 
@@ -837,7 +837,7 @@
 
           <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
             <div>Estimated Gas: <span id="token-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
-            <div>Max Fee: <span id="token-max-fee" style="color: var(--terminal-fg);">--</span></div>
+            <div>Max Fee: <span id="token-max-fee" style="color: var(--terminal-fg);">--</span> <span id="token-max-fee-usd" style="color: var(--terminal-info);"></span></div>
           </div>
         </div>
 
@@ -1395,7 +1395,7 @@
 
         <div style="font-size: 10px; color: var(--terminal-fg-dim); margin-top: 8px;">
           <div>Estimated Gas: <span id="tx-estimated-gas" style="color: var(--terminal-fg);">--</span></div>
-          <div>Max Fee: <span id="tx-max-fee" style="color: var(--terminal-fg);">--</span></div>
+          <div>Max Fee: <span id="tx-max-fee" style="color: var(--terminal-fg);">--</span> <span id="tx-max-fee-usd" style="color: var(--terminal-info);"></span></div>
         </div>
       </div>
 
@@ -1726,8 +1726,13 @@
       </div>
 
       <!-- Refresh Status Button -->
-      <button id="btn-refresh-tx-status" class="btn-primary btn-small" style="width: 100%; margin-bottom: 12px;">
+      <button id="btn-refresh-tx-status" class="btn-primary btn-small" style="width: 100%; margin-bottom: 8px;">
         🔄 REFRESH STATUS FROM BLOCKCHAIN
+      </button>
+
+      <!-- Rebroadcast Button (for pending transactions) -->
+      <button id="btn-rebroadcast-tx" class="btn-secondary btn-small hidden" style="width: 100%; margin-bottom: 12px;">
+        📡 REBROADCAST TO ALL RPCS
       </button>
 
       <!-- Transaction Info -->
@@ -1856,6 +1861,10 @@
             <span style="font-size: 10px; color: var(--terminal-dim);">RECOMMENDED:</span>
             <span id="speed-up-recommended-gas" style="font-size: 11px; color: var(--terminal-success); font-weight: bold;">-- Gwei</span>
           </div>
+          <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">EST. COST:</span>
+            <span id="speed-up-estimated-cost" style="font-size: 11px; color: var(--terminal-info);">--</span>
+          </div>
           <div id="speed-up-comparison-message" class="mt-2" style="font-size: 9px; color: var(--terminal-warning); text-align: center;">
             <!-- Comparison message will appear here -->
           </div>
@@ -1915,6 +1924,10 @@
           <div style="display: flex; justify-content: space-between; border-top: 1px solid var(--terminal-dim); padding-top: 8px; margin-top: 8px;">
             <span style="font-size: 10px; color: var(--terminal-dim);">RECOMMENDED:</span>
             <span id="cancel-recommended-gas" style="font-size: 11px; color: var(--terminal-success); font-weight: bold;">-- Gwei</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+            <span style="font-size: 10px; color: var(--terminal-dim);">EST. COST:</span>
+            <span id="cancel-estimated-cost" style="font-size: 11px; color: var(--terminal-info);">--</span>
           </div>
           <div id="cancel-comparison-message" class="mt-2" style="font-size: 9px; color: var(--terminal-warning); text-align: center;">
             <!-- Comparison message will appear here -->
