@@ -1270,24 +1270,26 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
 /**
  * Exports private key for the active wallet
  * @param {string} password - User password
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0)
  * @returns {Promise<string>} Hex private key
  * @throws {Error} If password is incorrect
  */
-export async function exportPrivateKey(password) {
+export async function exportPrivateKey(password, onProgress = null) {
   // Skip upgrade when exporting (user just wants the key)
-  const { signer } = await unlockWallet(password, { skipUpgrade: true });
+  const { signer } = await unlockWallet(password, { skipUpgrade: true, onProgress });
   return signer.privateKey;
 }
 
 /**
  * Exports mnemonic for the active wallet
  * @param {string} password - User password
+ * @param {Function} onProgress - Optional progress callback (0.0 to 1.0)
  * @returns {Promise<string|null>} 12-word mnemonic or null if wallet was imported from private key
  * @throws {Error} If password is incorrect
  */
-export async function exportMnemonic(password) {
+export async function exportMnemonic(password, onProgress = null) {
   // Skip upgrade when exporting (user just wants the mnemonic)
-  const { signer } = await unlockWallet(password, { skipUpgrade: true });
+  const { signer } = await unlockWallet(password, { skipUpgrade: true, onProgress });
   return signer.mnemonic ? signer.mnemonic.phrase : null;
 }
 

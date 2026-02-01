@@ -931,9 +931,23 @@ async function handleSendTransaction(params, origin) {
 
   const txRequest = params[0];
 
-  // Load settings to get max gas price
-  const settings = await load('settings');
-  const maxGasPriceGwei = settings?.maxGasPriceGwei || 1000;
+  // Get current network from storage
+  const currentNetwork = await load('currentNetwork') || 'pulsechain';
+
+  // Dynamically fetch current gas price and use 3x as max (to allow for volatility)
+  let maxGasPriceGwei;
+  try {
+    const currentGasPrice = await rpc.getGasPrice(currentNetwork);
+    const currentGasPriceGwei = Number(BigInt(currentGasPrice)) / 1e9;
+    // Use 3x current price as max to allow for network volatility
+    maxGasPriceGwei = Math.ceil(currentGasPriceGwei * 3);
+    // Ensure minimum of 100 Gwei for very low gas networks
+    maxGasPriceGwei = Math.max(maxGasPriceGwei, 100);
+  } catch (error) {
+    console.warn('Failed to fetch gas price, using high default:', error);
+    // If we can't fetch gas price, use a very high default to avoid blocking transactions
+    maxGasPriceGwei = 10000000; // 10M Gwei - essentially no limit
+  }
 
   // SECURITY: Comprehensive transaction validation
   const validation = validateTransactionRequest(txRequest, maxGasPriceGwei);

@@ -931,17 +931,13 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label" for="setting-max-gas-price">Max gas price (Gwei)</label>
-          <input type="number" id="setting-max-gas-price" class="form-control"
-                 min="0.1" step="0.1" value="1000"
-                 placeholder="1000" style="width: 100%;" />
-          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">
-            Protects against excessive gas fees.
+          <label class="form-label">Current Network Gas Price</label>
+          <p style="font-size: 12px; margin-top: 4px;">
             <span id="current-gas-price-label" class="text-dim">Loading current price...</span>
           </p>
-          <button id="btn-use-current-gas-price" class="btn btn-small" style="margin-top: 4px; font-size: 10px;">
-            USE CURRENT NETWORK PRICE
-          </button>
+          <p class="text-dim" style="font-size: 10px; margin-top: 4px;">
+            Gas price protection is automatic. Transactions are validated against 3x the current network price to allow for volatility while protecting against excessive fees.
+          </p>
         </div>
         <div class="form-group" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
           <input type="checkbox" id="setting-privacy-mode" />

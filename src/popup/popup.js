@@ -110,7 +110,7 @@ let currentState = {
     showTestNetworks: true,
     decimalPlaces: 8,
     theme: 'professional',
-    maxGasPriceGwei: 1000, // Maximum gas price in Gwei (default 1000)
+    // Note: maxGasPriceGwei removed - now dynamically calculated as 3x current network price
     allowEthSign: false, // Allow dangerous eth_sign method (disabled by default for security)
     enableLedger: false, // Enable Ledger hardware wallet support (opt-in)
     enableTrezor: false, // Enable Trezor hardware wallet support (opt-in, not yet implemented)
@@ -414,24 +414,29 @@ function setupEventListeners() {
     updateNetworkDisplays();
   });
 
-  // Create wallet screen
-  document.getElementById('chk-saved-mnemonic')?.addEventListener('change', (e) => {
-    const passwordCreate = document.getElementById('password-create').value;
-    const passwordConfirm = document.getElementById('password-confirm').value;
+  // Create wallet screen - enable button when verification words and passwords are filled
+  function updateCreateWalletButton() {
+    const word1 = document.getElementById('verify-word-1')?.value.trim();
+    const word2 = document.getElementById('verify-word-2')?.value.trim();
+    const word3 = document.getElementById('verify-word-3')?.value.trim();
+    const passwordCreate = document.getElementById('password-create')?.value;
+    const passwordConfirm = document.getElementById('password-confirm')?.value;
     const btn = document.getElementById('btn-create-submit');
 
-    btn.disabled = !(e.target.checked && passwordCreate && passwordConfirm && passwordCreate === passwordConfirm);
+    // Enable button only when all verification words are filled and passwords match
+    const wordsComplete = word1 && word2 && word3;
+    const passwordsValid = passwordCreate && passwordConfirm && passwordCreate === passwordConfirm;
+    btn.disabled = !(wordsComplete && passwordsValid);
+  }
+
+  // Listen to verification word inputs
+  ['verify-word-1', 'verify-word-2', 'verify-word-3'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateCreateWalletButton);
   });
 
+  // Listen to password inputs
   ['password-create', 'password-confirm'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', () => {
-      const checked = document.getElementById('chk-saved-mnemonic').checked;
-      const passwordCreate = document.getElementById('password-create').value;
-      const passwordConfirm = document.getElementById('password-confirm').value;
-      const btn = document.getElementById('btn-create-submit');
-
-      btn.disabled = !(checked && passwordCreate && passwordConfirm && passwordCreate === passwordConfirm);
-    });
+    document.getElementById(id)?.addEventListener('input', updateCreateWalletButton);
   });
 
   document.getElementById('btn-create-submit')?.addEventListener('click', handleCreateWallet);
@@ -691,29 +696,7 @@ function setupEventListeners() {
     currentState.settings.autoLockMinutes = parseInt(e.target.value);
     saveSettings();
   });
-  document.getElementById('setting-max-gas-price')?.addEventListener('change', (e) => {
-    const value = parseFloat(e.target.value);
-    // Validate: must be positive number
-    if (isNaN(value) || value <= 0) {
-      alert('Gas price must be a positive number');
-      e.target.value = currentState.settings.maxGasPriceGwei || 1000;
-      return;
-    }
-    // Validate: reasonable maximum (100,000 Gwei = 0.0001 ETH per gas)
-    if (value > 100000) {
-      const confirmed = confirm(
-        'Warning: Setting max gas price above 100,000 Gwei is extremely high.\n\n' +
-        'This could allow massive transaction fees.\n\n' +
-        'Are you sure you want to set it to ' + value + ' Gwei?'
-      );
-      if (!confirmed) {
-        e.target.value = currentState.settings.maxGasPriceGwei || 1000;
-        return;
-      }
-    }
-    currentState.settings.maxGasPriceGwei = value;
-    saveSettings();
-  });
+  // Note: max gas price setting removed - now dynamically calculated from network price
   document.getElementById('setting-show-testnets')?.addEventListener('change', (e) => {
     currentState.settings.showTestNetworks = e.target.checked;
     saveSettings();
@@ -794,7 +777,7 @@ function setupEventListeners() {
   });
   document.getElementById('btn-view-seed')?.addEventListener('click', handleViewSeed);
   document.getElementById('btn-export-key')?.addEventListener('click', handleExportKey);
-  document.getElementById('btn-use-current-gas-price')?.addEventListener('click', handleUseCurrentGasPrice);
+  // Note: btn-use-current-gas-price removed - gas price protection now dynamic
 
   // Password prompt modal
   document.getElementById('btn-password-prompt-confirm')?.addEventListener('click', () => {
@@ -3732,13 +3715,12 @@ async function loadSettingsToUI() {
   document.getElementById('setting-decimals').value = currentState.settings.decimalPlaces;
   document.getElementById('setting-theme').value = currentState.settings.theme;
   document.getElementById('setting-show-testnets').checked = currentState.settings.showTestNetworks;
-  document.getElementById('setting-max-gas-price').value = currentState.settings.maxGasPriceGwei || 1000;
   document.getElementById('setting-allow-eth-sign').checked = currentState.settings.allowEthSign || false;
   document.getElementById('setting-enable-ledger').checked = currentState.settings.enableLedger || false;
   document.getElementById('setting-enable-trezor').checked = currentState.settings.enableTrezor || false;
   document.getElementById('setting-privacy-mode').checked = currentState.settings.privacyMode || false;
 
-  // Fetch and display current network gas price
+  // Fetch and display current network gas price (informational only)
   fetchCurrentGasPrice();
 
   // Update privacy PIN setup visibility (async)
@@ -3867,52 +3849,7 @@ async function fetchCurrentGasPrice() {
   }
 }
 
-/**
- * Handles "USE CURRENT NETWORK PRICE" button click
- */
-async function handleUseCurrentGasPrice() {
-  const inputEl = document.getElementById('setting-max-gas-price');
-  const labelEl = document.getElementById('current-gas-price-label');
-
-  if (!inputEl) return;
-
-  try {
-    // Get current gas price
-    const gasPrice = await rpc.getGasPrice(currentState.network);
-    const gasPriceGwei = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
-
-    // Add 20% buffer for safety (gas prices can spike)
-    const bufferedPrice = gasPriceGwei * 1.2;
-
-    // Round to reasonable precision
-    let roundedPrice;
-    if (bufferedPrice < 1) {
-      roundedPrice = Math.ceil(bufferedPrice * 1000) / 1000; // Round to 3 decimals
-    } else if (bufferedPrice < 10) {
-      roundedPrice = Math.ceil(bufferedPrice * 100) / 100; // Round to 2 decimals
-    } else {
-      roundedPrice = Math.ceil(bufferedPrice * 10) / 10; // Round to 1 decimal
-    }
-
-    // Ensure minimum of 0.1 Gwei
-    const finalPrice = Math.max(0.1, roundedPrice);
-
-    // Update input and settings
-    inputEl.value = finalPrice;
-    currentState.settings.maxGasPriceGwei = finalPrice;
-    saveSettings();
-
-    // Update label to show what was set
-    labelEl.textContent = `Set to ${finalPrice} Gwei (current + 20% buffer)`;
-    labelEl.style.color = 'var(--terminal-success)';
-
-    // Refresh display after 2 seconds
-    setTimeout(() => fetchCurrentGasPrice(), 2000);
-  } catch (error) {
-    console.error('Error setting gas price:', error);
-    alert('Failed to fetch current gas price. Please try again.');
-  }
-}
+// Note: handleUseCurrentGasPrice removed - gas price protection now dynamic
 
 // Network Settings
 const NETWORK_KEYS = ['pulsechainTestnet', 'pulsechain', 'ethereum', 'sepolia'];
@@ -4057,9 +3994,32 @@ async function handleViewSeed() {
   if (!password) return;
 
   const errorDiv = document.getElementById('password-prompt-error');
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const progressLabel = progressContainer.querySelector('.progress-label');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
 
   try {
-    const mnemonic = await exportMnemonic(password);
+    // Show progress indicator
+    progressLabel.textContent = 'Decrypting...';
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+    progressContainer.classList.remove('hidden');
+    buttonsContainer.classList.add('hidden');
+
+    // Progress callback to update the UI
+    const onProgress = (progress) => {
+      const percent = Math.round(progress * 100);
+      progressBar.style.width = `${percent}%`;
+      progressText.textContent = `${percent}%`;
+    };
+
+    const mnemonic = await exportMnemonic(password, onProgress);
+
+    // Hide progress and close modal
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     closePasswordPrompt();
 
     if (mnemonic) {
@@ -4068,6 +4028,9 @@ async function handleViewSeed() {
       alert('This wallet was imported using a private key and has no seed phrase.');
     }
   } catch (error) {
+    // Hide progress and show error
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
   }
@@ -4078,12 +4041,38 @@ async function handleExportKey() {
   if (!password) return;
 
   const errorDiv = document.getElementById('password-prompt-error');
+  const progressContainer = document.getElementById('password-prompt-progress-container');
+  const progressBar = document.getElementById('password-prompt-progress-bar');
+  const progressText = document.getElementById('password-prompt-progress-text');
+  const progressLabel = progressContainer.querySelector('.progress-label');
+  const buttonsContainer = document.getElementById('password-prompt-buttons');
 
   try {
-    const privateKey = await exportPrivateKey(password);
+    // Show progress indicator
+    progressLabel.textContent = 'Decrypting...';
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+    progressContainer.classList.remove('hidden');
+    buttonsContainer.classList.add('hidden');
+
+    // Progress callback to update the UI
+    const onProgress = (progress) => {
+      const percent = Math.round(progress * 100);
+      progressBar.style.width = `${percent}%`;
+      progressText.textContent = `${percent}%`;
+    };
+
+    const privateKey = await exportPrivateKey(password, onProgress);
+
+    // Hide progress and close modal
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     closePasswordPrompt();
     showSecretModal('Your Private Key', privateKey);
   } catch (error) {
+    // Hide progress and show error
+    progressContainer.classList.add('hidden');
+    buttonsContainer.classList.remove('hidden');
     errorDiv.textContent = error.message;
     errorDiv.classList.remove('hidden');
   }
