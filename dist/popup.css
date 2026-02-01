@@ -365,6 +365,39 @@ input:disabled, textarea:disabled, select:disabled {
   cursor: not-allowed;
 }
 
+/* Checkbox styling */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--terminal-border);
+  background: var(--terminal-bg);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+input[type="checkbox"]:checked {
+  background: var(--terminal-success);
+  border-color: var(--terminal-success);
+}
+
+input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--terminal-bg);
+  font-size: 14px;
+  font-weight: bold;
+}
+
+input[type="checkbox"]:focus {
+  box-shadow: 0 0 8px var(--terminal-glow);
+}
+
 /* Select dropdown options styling */
 select option {
   background: var(--terminal-bg);

@@ -1,4 +1,4 @@
-# HeartWallet v2.0.1
+# HeartWallet v2.0.2
 
 **Developer:** USCG_Vet
 **Contact:** uscg_vet@protonmail.com

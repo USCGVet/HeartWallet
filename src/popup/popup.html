@@ -8,10 +8,77 @@
 </head>
 <body>
 
+  <!-- Disclaimer Agreement Screen (First time users - must accept before setup) -->
+  <div id="screen-disclaimer" class="hidden">
+    <div class="container">
+      <h1 class="text-center glow"><img src="../../assets/icons/icon-16.png" alt="♥" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;"> HEARTWALLET</h1>
+      <p class="text-center text-warning mb-3" style="font-size: 14px; font-weight: bold;">SOFTWARE AGREEMENT</p>
+
+      <div class="panel" style="max-height: 320px; overflow-y: auto; border-color: var(--terminal-warning); font-size: 11px; line-height: 1.5;">
+        <p class="text-warning" style="font-weight: bold; margin-bottom: 12px;">IMPORTANT - PLEASE READ CAREFULLY BEFORE USING THIS SOFTWARE</p>
+
+        <p style="margin-bottom: 10px;"><strong>1. UNAUDITED SOFTWARE</strong></p>
+        <p style="margin-bottom: 10px;">This wallet has <strong>NOT</strong> been professionally audited by a third-party security firm. It may contain bugs, errors, or security vulnerabilities that could result in the partial or complete loss of your funds. Use at your own risk.</p>
+
+        <p style="margin-bottom: 10px;"><strong>2. NO WARRANTY</strong></p>
+        <p style="margin-bottom: 10px;">This software is provided "AS IS" without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.</p>
+
+        <p style="margin-bottom: 10px;"><strong>3. LIMITATION OF LIABILITY</strong></p>
+        <p style="margin-bottom: 10px;">The authors, developers, and contributors shall not be liable for any direct, indirect, incidental, special, consequential, or exemplary damages, including but not limited to loss of funds, data, or profits, arising from the use of this software.</p>
+
+        <p style="margin-bottom: 10px;"><strong>4. IRREVERSIBLE TRANSACTIONS</strong></p>
+        <p style="margin-bottom: 10px;">Blockchain transactions are <strong>permanent and irreversible</strong>. Once submitted, transactions cannot be cancelled, reversed, or refunded. You are solely responsible for verifying all transaction details before confirmation.</p>
+
+        <p style="margin-bottom: 10px;"><strong>5. SEED PHRASE & PRIVATE KEYS</strong></p>
+        <p style="margin-bottom: 10px;">Your seed phrase and private keys are the <strong>only way</strong> to access your funds. If lost, stolen, or forgotten, your funds will be <strong>permanently inaccessible</strong>. There is no recovery mechanism, customer support, or password reset.</p>
+
+        <p style="margin-bottom: 10px;"><strong>6. REGULATORY COMPLIANCE</strong></p>
+        <p style="margin-bottom: 10px;">Cryptocurrency may be regulated, restricted, or prohibited in your jurisdiction. You are solely responsible for determining whether your use of this software complies with applicable laws and regulations in your country or region.</p>
+
+        <p style="margin-bottom: 10px;"><strong>7. NO FINANCIAL ADVICE</strong></p>
+        <p style="margin-bottom: 10px;">This software does not provide financial, investment, tax, or legal advice. Any decisions you make using this software are your own. Consult qualified professionals before making financial decisions.</p>
+
+        <p style="margin-bottom: 10px;"><strong>8. THIRD-PARTY RISKS</strong></p>
+        <p style="margin-bottom: 10px;">This wallet interacts with third-party services including blockchain networks, RPC providers, and decentralized applications (dApps). We have no control over these services and accept no responsibility for their availability, security, or conduct.</p>
+
+        <p style="margin-bottom: 10px;"><strong>9. SECURITY RECOMMENDATIONS</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 12px;">
+          <li><strong>DO NOT</strong> store large amounts or life savings in software wallets</li>
+          <li>For significant holdings, use <strong>Ledger hardware wallet</strong> (built-in support)</li>
+          <li>Software wallets are recommended for testnet, learning, or small transactions only</li>
+          <li>Never share your seed phrase or private keys with anyone</li>
+          <li>Always verify addresses and transaction details before signing</li>
+        </ul>
+
+        <p style="margin-bottom: 10px;"><strong>10. AGE REQUIREMENT</strong></p>
+        <p style="margin-bottom: 10px;">You must be at least 18 years old or the age of legal majority in your jurisdiction to use this software.</p>
+
+        <p style="margin-bottom: 10px;"><strong>11. UPDATES & MODIFICATIONS</strong></p>
+        <p style="margin-bottom: 10px;">This software and these terms may be updated at any time. Continued use after updates constitutes acceptance of modified terms. You are responsible for keeping your software updated.</p>
+
+        <p style="margin-bottom: 10px;"><strong>12. OPEN SOURCE</strong></p>
+        <p style="margin-bottom: 10px;">This software is open source. You may inspect, modify, and distribute the code according to the license terms. See the project repository for details.</p>
+
+        <p class="text-dim" style="font-size: 10px; margin-top: 16px;">By checking the box below, you acknowledge that you have read, understood, and agree to all terms above. See SECURITY.md for additional security information and best practices.</p>
+      </div>
+
+      <div class="form-group" style="margin-top: 16px;">
+        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 11px;">
+          <input type="checkbox" id="disclaimer-checkbox" style="margin-top: 2px; width: 18px; height: 18px; cursor: pointer; flex-shrink: 0;" />
+          <span>I am at least 18 years old, I have read and understand all terms above, and I accept full responsibility for my use of this software including any losses that may occur.</span>
+        </label>
+      </div>
+
+      <div class="button-group">
+        <button id="btn-accept-disclaimer" class="btn-primary" disabled>I AGREE - CONTINUE</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Setup Screen (First time users) -->
   <div id="screen-setup" class="hidden">
     <div class="container">
-      <h1 class="text-center glow"><img src="../../assets/icons/icon-16.png" alt="♥" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;"> HEARTWALLET v2.0.1</h1>
+      <h1 class="text-center glow"><img src="../../assets/icons/icon-16.png" alt="♥" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;"> HEARTWALLET v2.0.2</h1>
       <p class="text-center text-dim mb-3">Independent. Secure. Simple.</p>
 
       <div class="button-group">
@@ -293,7 +360,7 @@
   <!-- Unlock Screen -->
   <div id="screen-unlock" class="hidden">
     <div class="container">
-      <h1 class="text-center glow mb-3"><img src="../../assets/icons/icon-16.png" alt="♥" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;"> HEARTWALLET v2.0.1</h1>
+      <h1 class="text-center glow mb-3"><img src="../../assets/icons/icon-16.png" alt="♥" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;"> HEARTWALLET v2.0.2</h1>
       <p class="text-center text-dim mb-3">Wallet Locked</p>
 
       <div class="form-group">
@@ -972,7 +1039,7 @@
 
       <div class="panel">
         <div class="panel-header">About</div>
-        <p>HeartWallet v2.0.0</p>
+        <p>HeartWallet v2.0.2</p>
         <p class="text-dim mt-1" style="font-size: 11px;">
           Independent cryptocurrency wallet for PulseChain & Ethereum
         </p>

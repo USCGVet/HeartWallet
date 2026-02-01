@@ -109,7 +109,7 @@ let currentState = {
     autoLockMinutes: 15,
     showTestNetworks: true,
     decimalPlaces: 8,
-    theme: 'high-contrast',
+    theme: 'professional',
     maxGasPriceGwei: 1000, // Maximum gas price in Gwei (default 1000)
     allowEthSign: false, // Allow dangerous eth_sign method (disabled by default for security)
     enableLedger: false, // Enable Ledger hardware wallet support (opt-in)
@@ -290,7 +290,19 @@ function showScreen(screenId) {
   }
 }
 
+// Version of the disclaimer - increment this to require re-acceptance after major changes
+const DISCLAIMER_VERSION = 1;
+
 async function checkWalletStatus() {
+  // Check disclaimer acceptance FIRST for all users (new and existing)
+  const disclaimerData = await load('disclaimerAccepted');
+  if (!disclaimerData || !disclaimerData.accepted || disclaimerData.version !== DISCLAIMER_VERSION) {
+    // Show disclaimer screen - user must accept before proceeding
+    showScreen('screen-disclaimer');
+    return;
+  }
+
+  // Disclaimer accepted - proceed with normal flow
   const exists = await walletExists();
 
   if (!exists) {
@@ -371,6 +383,18 @@ function applyTheme() {
 
 // ===== EVENT LISTENERS =====
 function setupEventListeners() {
+  // Disclaimer screen
+  document.getElementById('disclaimer-checkbox')?.addEventListener('change', (e) => {
+    const btn = document.getElementById('btn-accept-disclaimer');
+    btn.disabled = !e.target.checked;
+  });
+
+  document.getElementById('btn-accept-disclaimer')?.addEventListener('click', async () => {
+    await save('disclaimerAccepted', { accepted: true, version: DISCLAIMER_VERSION, timestamp: Date.now() });
+    // After accepting, check wallet status to go to appropriate screen
+    await checkWalletStatus();
+  });
+
   // Setup screen
   document.getElementById('btn-create-wallet')?.addEventListener('click', async () => {
     await generateNewMnemonic();
@@ -3893,28 +3917,59 @@ async function handleUseCurrentGasPrice() {
 // Network Settings
 const NETWORK_KEYS = ['pulsechainTestnet', 'pulsechain', 'ethereum', 'sepolia'];
 
+// Default network configuration
+const DEFAULT_RPCS = {
+  'pulsechainTestnet': 'https://rpc.v4.testnet.pulsechain.com',
+  'pulsechain': 'https://rpc.pulsechain.com',
+  'ethereum': 'https://eth.llamarpc.com',
+  'sepolia': 'https://rpc.sepolia.org'
+};
+
+const DEFAULT_EXPLORERS = {
+  'pulsechainTestnet': {
+    base: 'https://scan.v4.testnet.pulsechain.com',
+    tx: '/tx/{hash}',
+    addr: '/address/{address}'
+  },
+  'pulsechain': {
+    base: 'https://scan.mypinata.cloud/ipfs/bafybeienxyoyrhn5tswclvd3gdjy5mtkkwmu37aqtml6onbf7xnb3o22pe/',
+    tx: '#/tx/{hash}',
+    addr: '#/address/{address}'
+  },
+  'ethereum': {
+    base: 'https://etherscan.io',
+    tx: '/tx/{hash}',
+    addr: '/address/{address}'
+  },
+  'sepolia': {
+    base: 'https://sepolia.etherscan.io',
+    tx: '/tx/{hash}',
+    addr: '/address/{address}'
+  }
+};
+
 function loadNetworkSettingsToUI() {
   NETWORK_KEYS.forEach(network => {
-    // Load RPC endpoint
+    // Load RPC endpoint (use saved value or fall back to default)
     const rpcInput = document.getElementById(`rpc-${network}`);
     if (rpcInput) {
-      rpcInput.value = currentState.networkSettings?.[network]?.rpc || '';
+      rpcInput.value = currentState.networkSettings?.[network]?.rpc || DEFAULT_RPCS[network] || '';
     }
 
-    // Load Explorer settings
+    // Load Explorer settings (use saved value or fall back to default)
     const explorerInput = document.getElementById(`explorer-${network}`);
     if (explorerInput) {
-      explorerInput.value = currentState.networkSettings?.[network]?.explorerBase || '';
+      explorerInput.value = currentState.networkSettings?.[network]?.explorerBase || DEFAULT_EXPLORERS[network]?.base || '';
     }
 
     const txPathInput = document.getElementById(`explorer-tx-${network}`);
     if (txPathInput) {
-      txPathInput.value = currentState.networkSettings?.[network]?.explorerTxPath || '';
+      txPathInput.value = currentState.networkSettings?.[network]?.explorerTxPath || DEFAULT_EXPLORERS[network]?.tx || '';
     }
 
     const addrPathInput = document.getElementById(`explorer-addr-${network}`);
     if (addrPathInput) {
-      addrPathInput.value = currentState.networkSettings?.[network]?.explorerAddrPath || '';
+      addrPathInput.value = currentState.networkSettings?.[network]?.explorerAddrPath || DEFAULT_EXPLORERS[network]?.addr || '';
     }
   });
 }
@@ -3943,41 +3998,10 @@ async function saveNetworkSettings() {
 
 function resetNetworkSettingsToDefaults() {
   NETWORK_KEYS.forEach(network => {
-    // Reset to default RPC endpoints from rpc.js
-    const defaultRPCs = {
-      'pulsechainTestnet': 'https://rpc.v4.testnet.pulsechain.com',
-      'pulsechain': 'https://rpc.pulsechain.com',
-      'ethereum': 'https://eth.llamarpc.com',
-      'sepolia': 'https://rpc.sepolia.org'
-    };
-
-    const defaultExplorers = {
-      'pulsechainTestnet': {
-        base: 'https://scan.v4.testnet.pulsechain.com',
-        tx: '/tx/{hash}',
-        addr: '/address/{address}'
-      },
-      'pulsechain': {
-        base: 'https://scan.mypinata.cloud/ipfs/bafybeienxyoyrhn5tswclvd3gdjy5mtkkwmu37aqtml6onbf7xnb3o22pe/',
-        tx: '#/tx/{hash}',
-        addr: '#/address/{address}'
-      },
-      'ethereum': {
-        base: 'https://etherscan.io',
-        tx: '/tx/{hash}',
-        addr: '/address/{address}'
-      },
-      'sepolia': {
-        base: 'https://sepolia.etherscan.io',
-        tx: '/tx/{hash}',
-        addr: '/address/{address}'
-      }
-    };
-
-    document.getElementById(`rpc-${network}`).value = defaultRPCs[network] || '';
-    document.getElementById(`explorer-${network}`).value = defaultExplorers[network]?.base || '';
-    document.getElementById(`explorer-tx-${network}`).value = defaultExplorers[network]?.tx || '';
-    document.getElementById(`explorer-addr-${network}`).value = defaultExplorers[network]?.addr || '';
+    document.getElementById(`rpc-${network}`).value = DEFAULT_RPCS[network] || '';
+    document.getElementById(`explorer-${network}`).value = DEFAULT_EXPLORERS[network]?.base || '';
+    document.getElementById(`explorer-tx-${network}`).value = DEFAULT_EXPLORERS[network]?.tx || '';
+    document.getElementById(`explorer-addr-${network}`).value = DEFAULT_EXPLORERS[network]?.addr || '';
   });
 
   alert('Network settings reset to defaults. Click SAVE to apply.');
