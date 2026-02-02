@@ -462,44 +462,62 @@ export async function getGasPriceRecommendations(network) {
         }
       }
 
-      // Calculate median of each tier
-      const medianPriorityFees = {};
-      for (const tier of ['slow', 'normal', 'fast', 'instant']) {
-        const sorted = priorityFees[tier].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-        if (sorted.length > 0) {
+      // Check if we got enough valid data - if not, fall through to eth_gasPrice fallback
+      const hasValidData = priorityFees.slow.length > 0 && priorityFees.normal.length > 0 &&
+                           priorityFees.fast.length > 0 && priorityFees.instant.length > 0;
+
+      if (hasValidData) {
+        // Calculate median of each tier
+        const medianPriorityFees = {};
+        for (const tier of ['slow', 'normal', 'fast', 'instant']) {
+          const sorted = priorityFees[tier].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
           const mid = Math.floor(sorted.length / 2);
           medianPriorityFees[tier] = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2n;
-        } else {
-          medianPriorityFees[tier] = 0n;
         }
+
+        // Calculate next block base fee (can increase by up to 12.5% per block)
+        // To be safe, assume 2 blocks of 12.5% increase for fast transactions
+        const nextBaseFee = baseFeeWei * 1125n / 1000n; // +12.5%
+        const safeBaseFee = baseFeeWei * 1265n / 1000n; // +26.5% (2 blocks of increase)
+
+        // Calculate the recommended gas prices
+        const slowMaxFee = baseFeeWei + medianPriorityFees.slow;
+        const normalMaxFee = nextBaseFee + medianPriorityFees.normal;
+        const fastMaxFee = safeBaseFee + medianPriorityFees.fast;
+        const instantMaxFee = safeBaseFee * 125n / 100n + medianPriorityFees.instant;
+
+        // Sanity check: if computed prices are suspiciously low, fall back to eth_gasPrice
+        // This handles cases where fee history data is incomplete or base fee is near-zero
+        const gasPrice = await rpcCall(network, 'eth_gasPrice', []);
+        const gasPriceWei = BigInt(gasPrice);
+        const minReasonableGas = gasPriceWei / 2n; // At least half of eth_gasPrice
+
+        if (fastMaxFee >= minReasonableGas && instantMaxFee >= minReasonableGas) {
+          // maxFeePerGas = baseFee (with buffer) + priorityFee
+          return {
+            baseFee: baseFeeWei.toString(),
+            slow: {
+              maxFeePerGas: slowMaxFee.toString(),
+              maxPriorityFeePerGas: medianPriorityFees.slow.toString()
+            },
+            normal: {
+              maxFeePerGas: normalMaxFee.toString(),
+              maxPriorityFeePerGas: medianPriorityFees.normal.toString()
+            },
+            fast: {
+              maxFeePerGas: fastMaxFee.toString(),
+              maxPriorityFeePerGas: medianPriorityFees.fast.toString()
+            },
+            instant: {
+              maxFeePerGas: instantMaxFee.toString(),
+              maxPriorityFeePerGas: medianPriorityFees.instant.toString()
+            },
+            supportsEIP1559: true
+          };
+        }
+        // If prices are too low, fall through to eth_gasPrice fallback below
+        console.warn('Fee history prices too low, falling back to eth_gasPrice');
       }
-
-      // Calculate next block base fee (can increase by up to 12.5% per block)
-      // To be safe, assume 2 blocks of 12.5% increase for fast transactions
-      const nextBaseFee = baseFeeWei * 1125n / 1000n; // +12.5%
-      const safeBaseFee = baseFeeWei * 1265n / 1000n; // +26.5% (2 blocks of increase)
-
-      // maxFeePerGas = baseFee (with buffer) + priorityFee
-      return {
-        baseFee: baseFeeWei.toString(),
-        slow: {
-          maxFeePerGas: (baseFeeWei + medianPriorityFees.slow).toString(),
-          maxPriorityFeePerGas: medianPriorityFees.slow.toString()
-        },
-        normal: {
-          maxFeePerGas: (nextBaseFee + medianPriorityFees.normal).toString(),
-          maxPriorityFeePerGas: medianPriorityFees.normal.toString()
-        },
-        fast: {
-          maxFeePerGas: (safeBaseFee + medianPriorityFees.fast).toString(),
-          maxPriorityFeePerGas: medianPriorityFees.fast.toString()
-        },
-        instant: {
-          maxFeePerGas: (safeBaseFee * 125n / 100n + medianPriorityFees.instant).toString(),
-          maxPriorityFeePerGas: medianPriorityFees.instant.toString()
-        },
-        supportsEIP1559: true
-      };
     }
 
     // Fallback: Use eth_gasPrice with multipliers if feeHistory not available

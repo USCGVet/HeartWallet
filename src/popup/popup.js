@@ -102,18 +102,23 @@ async function hashPrivacyPin(pin) {
  * Formats gas price in Gwei with appropriate precision based on magnitude
  * PulseChain uses very high gas prices (millions of Gwei), Ethereum uses low (< 100 Gwei)
  * @param {bigint|string|number} weiValue - Gas price in wei
- * @returns {string} Formatted Gwei string
+ * @returns {string} Formatted Gwei string (always uses comma as thousand separator for consistent parsing)
  */
 function formatGweiSmart(weiValue) {
   const wei = typeof weiValue === 'bigint' ? weiValue : BigInt(weiValue);
   const gwei = Number(wei) / 1e9;
 
+  // Helper to format with commas as thousand separators (locale-independent)
+  const formatWithCommas = (num) => {
+    return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  };
+
   if (gwei >= 1000000) {
     // Millions of Gwei (PulseChain) - show no decimals
-    return Math.round(gwei).toLocaleString();
+    return formatWithCommas(gwei);
   } else if (gwei >= 1000) {
     // Thousands of Gwei - show no decimals
-    return Math.round(gwei).toLocaleString();
+    return formatWithCommas(gwei);
   } else if (gwei >= 1) {
     // Normal Gwei - show 2 decimals
     return gwei.toFixed(2);
@@ -2599,6 +2604,7 @@ async function handleSendTransaction() {
       // Hardware wallet - no password unlock needed
       // Signer will be created differently for Ledger
       errorEl.textContent = 'Please confirm transaction on your Ledger device...';
+      errorEl.style.color = 'var(--terminal-info)';
       errorEl.classList.remove('hidden');
     } else {
       // Software wallet - unlock with password and auto-upgrade if needed
@@ -3517,6 +3523,11 @@ async function handleTokenSend() {
 
     if (isHardwareWallet) {
       // Hardware wallet (Ledger) flow
+      // Show message to user before Ledger interaction
+      errorEl.textContent = 'Please confirm the transaction on your Ledger device...';
+      errorEl.style.color = 'var(--terminal-info)';
+      errorEl.classList.remove('hidden');
+
       const tokenContract = new ethers.Contract(
         tokenData.address,
         ['function transfer(address to, uint256 amount) returns (bool)'],
@@ -6931,6 +6942,11 @@ async function handleTypedDataSignApprovalScreen(requestId) {
     const { origin, method, signRequest } = response;
     const { typedData, address } = signRequest;
 
+    // Check if this is a hardware wallet
+    const activeWallet = await getActiveWallet();
+    const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
+    const isLedger = activeWallet && activeWallet.hardwareType === 'ledger';
+
     // Populate sign details
     document.getElementById('sign-typed-site-origin').textContent = origin;
     document.getElementById('sign-typed-address').textContent = address;
@@ -6959,17 +6975,25 @@ async function handleTypedDataSignApprovalScreen(requestId) {
     // Show the signing approval screen
     showScreen('screen-sign-typed-data');
 
+    // Hide/show password field based on wallet type
+    const passwordGroup = document.getElementById('sign-typed-password').closest('.form-group');
+    if (isHardwareWallet && isLedger) {
+      passwordGroup.classList.add('hidden');
+      // Show Ledger instruction message
+      const ledgerMsg = document.createElement('div');
+      ledgerMsg.className = 'panel';
+      ledgerMsg.id = 'sign-typed-ledger-msg';
+      ledgerMsg.style.cssText = 'border-color: var(--terminal-info); margin-bottom: 12px;';
+      ledgerMsg.innerHTML = '<p style="font-size: 11px; color: var(--terminal-info);">📱 Please confirm this signature on your Ledger device</p>';
+      passwordGroup.parentElement.insertBefore(ledgerMsg, passwordGroup);
+    } else {
+      passwordGroup.classList.remove('hidden');
+    }
+
     // Setup approve button
     document.getElementById('btn-approve-sign-typed').addEventListener('click', async () => {
       const approveBtn = document.getElementById('btn-approve-sign-typed');
-      const password = document.getElementById('sign-typed-password').value;
       const errorEl = document.getElementById('sign-typed-error');
-
-      if (!password) {
-        errorEl.textContent = 'Please enter your password';
-        errorEl.classList.remove('hidden');
-        return;
-      }
 
       // Disable button immediately to prevent double-clicking
       approveBtn.disabled = true;
@@ -6979,76 +7003,122 @@ async function handleTypedDataSignApprovalScreen(requestId) {
       try {
         errorEl.classList.add('hidden');
 
-        // Show progress bar and hide error
-        const progressContainer = document.getElementById('sign-typed-progress-container');
-        const progressBar = document.getElementById('sign-typed-progress-bar');
-        const progressText = document.getElementById('sign-typed-progress-text');
+        let signature;
 
-        progressContainer.classList.remove('hidden');
-        progressBar.style.width = '0%';
-        progressText.textContent = '0%';
+        if (isHardwareWallet && isLedger) {
+          // Ledger signing - sign directly in popup
+          approveBtn.textContent = 'WAITING FOR LEDGER...';
 
-        try {
-          // Validate password with progress tracking
-          let lastDisplayedPercentage = 0;
-          await unlockWallet(password, {
-            onProgress: (progress) => {
-              const percentage = Math.round(progress * 100);
-              if (percentage !== lastDisplayedPercentage) {
-                lastDisplayedPercentage = percentage;
-                if (progressBar) progressBar.style.width = `${percentage}%`;
-                if (progressText) progressText.textContent = `${percentage}%`;
-              }
-            }
-          });
+          try {
+            // Extract domain, types, and message for Ledger signing
+            const { domain, types, message, primaryType } = typedData;
 
-          // Password is valid! Hide progress bar
-          progressContainer.classList.add('hidden');
+            // Remove EIP712Domain from types if present (ethers handles this internally)
+            const typesWithoutDomain = { ...types };
+            delete typesWithoutDomain.EIP712Domain;
 
-          // Create a temporary session for this signing using the entered password
-          const activeWallet = await getActiveWallet();
-          const tempSessionResponse = await chrome.runtime.sendMessage({
-            type: 'CREATE_SESSION',
-            password,
-            walletId: activeWallet.id,
-            durationMs: 60000 // 1 minute temporary session
-          });
-
-          if (!tempSessionResponse.success) {
-            throw new Error('Failed to create session');
+            signature = await ledger.signTypedData(activeWallet.accountIndex, domain, typesWithoutDomain, message);
+          } catch (ledgerError) {
+            throw new Error(`Ledger signing failed: ${ledgerError.message}`);
           }
 
+          // Send pre-signed signature to service worker
           const response = await chrome.runtime.sendMessage({
-            type: 'SIGN_APPROVAL',
+            type: 'SIGN_APPROVAL_LEDGER',
             requestId,
             approved: true,
-            sessionToken: tempSessionResponse.sessionToken
+            signature // Pre-signed signature
           });
 
           if (response.success) {
-            // Close the popup window
             window.close();
           } else {
-            errorEl.textContent = response.error || 'Signing failed';
+            throw new Error(response.error || 'Signing failed');
+          }
+
+        } else {
+          // Software wallet signing - validate password with progress bar first
+          const password = document.getElementById('sign-typed-password').value;
+
+          if (!password) {
+            errorEl.textContent = 'Please enter your password';
             errorEl.classList.remove('hidden');
+            approveBtn.disabled = false;
+            approveBtn.style.opacity = '1';
+            approveBtn.style.cursor = 'pointer';
+            return;
+          }
+
+          // Show progress bar and hide error
+          const progressContainer = document.getElementById('sign-typed-progress-container');
+          const progressBar = document.getElementById('sign-typed-progress-bar');
+          const progressText = document.getElementById('sign-typed-progress-text');
+
+          progressContainer.classList.remove('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = '0%';
+
+          try {
+            // Validate password with progress tracking
+            let lastDisplayedPercentage = 0;
+            await unlockWallet(password, {
+              onProgress: (progress) => {
+                const percentage = Math.round(progress * 100);
+                if (percentage !== lastDisplayedPercentage) {
+                  lastDisplayedPercentage = percentage;
+                  if (progressBar) progressBar.style.width = `${percentage}%`;
+                  if (progressText) progressText.textContent = `${percentage}%`;
+                }
+              }
+            });
+
+            // Password is valid! Hide progress bar
+            progressContainer.classList.add('hidden');
+
+            // Create a temporary session for this signing using the entered password
+            const tempSessionResponse = await chrome.runtime.sendMessage({
+              type: 'CREATE_SESSION',
+              password,
+              walletId: activeWallet.id,
+              durationMs: 60000 // 1 minute temporary session
+            });
+
+            if (!tempSessionResponse.success) {
+              throw new Error('Failed to create session');
+            }
+
+            const response = await chrome.runtime.sendMessage({
+              type: 'SIGN_APPROVAL',
+              requestId,
+              approved: true,
+              sessionToken: tempSessionResponse.sessionToken
+            });
+
+            if (response.success) {
+              // Close the popup window
+              window.close();
+            } else {
+              errorEl.textContent = response.error || 'Signing failed';
+              errorEl.classList.remove('hidden');
+              // Re-enable button on error so user can try again
+              approveBtn.disabled = false;
+              approveBtn.style.opacity = '1';
+              approveBtn.style.cursor = 'pointer';
+            }
+          } catch (unlockError) {
+            // Hide progress bar on error
+            progressContainer.classList.add('hidden');
+
+            // Show error message
+            errorEl.textContent = unlockError.message || 'Incorrect password';
+            errorEl.classList.remove('hidden');
+
             // Re-enable button on error so user can try again
             approveBtn.disabled = false;
             approveBtn.style.opacity = '1';
             approveBtn.style.cursor = 'pointer';
+            throw unlockError; // Re-throw to trigger outer catch
           }
-        } catch (unlockError) {
-          // Hide progress bar on error
-          progressContainer.classList.add('hidden');
-
-          // Show error message
-          errorEl.textContent = unlockError.message || 'Incorrect password';
-          errorEl.classList.remove('hidden');
-
-          // Re-enable button on error so user can try again
-          approveBtn.disabled = false;
-          approveBtn.style.opacity = '1';
-          approveBtn.style.cursor = 'pointer';
-          throw unlockError; // Re-throw to trigger outer catch
         }
       } catch (error) {
         errorEl.textContent = error.message;
@@ -7057,6 +7127,7 @@ async function handleTypedDataSignApprovalScreen(requestId) {
         approveBtn.disabled = false;
         approveBtn.style.opacity = '1';
         approveBtn.style.cursor = 'pointer';
+        approveBtn.textContent = 'SIGN';
       }
     });
 
@@ -7677,146 +7748,272 @@ async function confirmSpeedUp() {
     // Close speed-up modal
     document.getElementById('modal-speed-up-tx').classList.add('hidden');
 
-    // Get password
-    const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to confirm speed-up');
-    if (!password) return;
+    // Check if this is a hardware wallet
+    const activeWallet = await getActiveWallet();
+    const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
 
-    // Show progress bar in password prompt
-    const progressContainer = document.getElementById('password-prompt-progress-container');
-    const progressBar = document.getElementById('password-prompt-progress-bar');
-    const progressText = document.getElementById('password-prompt-progress-text');
-    const progressLabel = progressContainer.querySelector('.progress-label');
-    const buttonsContainer = document.getElementById('password-prompt-buttons');
-
-    progressLabel.textContent = 'Decrypting wallet...';
-    progressContainer.classList.remove('hidden');
-    buttonsContainer.classList.add('hidden');
-    progressBar.style.width = '0%';
-    progressText.textContent = '0%';
-
-    try {
-      // Unlock wallet with progress tracking
-      let lastDisplayedPercentage = 0;
-      const unlockResult = await unlockWallet(password, {
-        onProgress: (progress) => {
-          const percentage = Math.round(progress * 100);
-          if (percentage !== lastDisplayedPercentage) {
-            lastDisplayedPercentage = percentage;
-            if (progressBar) progressBar.style.width = `${percentage}%`;
-            if (progressText) progressText.textContent = `${percentage}%`;
-          }
-        }
-      });
-
-      progressLabel.textContent = 'Signing transaction...';
-      progressText.textContent = '100%';
-
-      const signer = unlockResult.signer;
-      const provider = await rpc.getProvider(speedUpModalState.network);
-      const connectedSigner = signer.connect(provider);
-
-      // Get original transaction from history
-      const txResponse = await chrome.runtime.sendMessage({
-        type: 'GET_TX_BY_HASH',
-        address: speedUpModalState.address,
-        txHash: speedUpModalState.txHash
-      });
-
-      if (!txResponse.success || !txResponse.transaction) {
-        throw new Error('Original transaction not found');
-      }
-
-      const originalTx = txResponse.transaction;
-
-      // Fetch on-chain transaction to detect EIP-1559
-      let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
-      let onChainMaxFeePerGas = null;
-      let onChainMaxPriorityFeePerGas = null;
-
+    if (isHardwareWallet) {
+      // Hardware wallet flow - use Ledger signing
       try {
-        const onChainTx = await provider.getTransaction(speedUpModalState.txHash);
-        if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
-          isEIP1559 = true;
-          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
-          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+        alert('Please confirm the transaction on your Ledger device...');
+
+        const provider = await rpc.getProvider(speedUpModalState.network);
+
+        // Get original transaction from history
+        const txResponse = await chrome.runtime.sendMessage({
+          type: 'GET_TX_BY_HASH',
+          address: speedUpModalState.address,
+          txHash: speedUpModalState.txHash
+        });
+
+        if (!txResponse.success || !txResponse.transaction) {
+          throw new Error('Original transaction not found');
         }
-      } catch (fetchErr) {
-        console.warn('Could not fetch on-chain tx:', fetchErr.message);
-      }
 
-      // Build replacement transaction
-      const replacementTx = {
-        to: originalTx.to,
-        value: originalTx.value,
-        data: originalTx.data || '0x',
-        nonce: originalTx.nonce
-      };
+        const originalTx = txResponse.transaction;
 
-      if (originalTx.gasLimit) {
-        replacementTx.gasLimit = originalTx.gasLimit;
-      }
+        // Fetch on-chain transaction to detect EIP-1559
+        let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+        let onChainMaxFeePerGas = null;
+        let onChainMaxPriorityFeePerGas = null;
 
-      let newMaxFeePerGas = null;
-      let newMaxPriorityFeePerGas = null;
+        try {
+          const onChainTx = await provider.getTransaction(speedUpModalState.txHash);
+          if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+            isEIP1559 = true;
+            onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+            onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          }
+        } catch (fetchErr) {
+          console.warn('Could not fetch on-chain tx:', fetchErr.message);
+        }
 
-      if (isEIP1559) {
-        const bumpMultiplier = 1125n;
-        const bumpDivisor = 1000n;
-        const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
-        const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
-
-        const customFee = BigInt(gasPriceToUse);
-        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
-        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
-
-        newMaxFeePerGas = customFee;
-        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
-
-        replacementTx.maxFeePerGas = newMaxFeePerGas;
-        replacementTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
-      } else {
-        replacementTx.gasPrice = BigInt(gasPriceToUse);
-      }
-
-      // Sign and send
-      const txResult = await connectedSigner.sendTransaction(replacementTx);
-
-      // Hide progress and close modal
-      progressContainer.classList.add('hidden');
-      buttonsContainer.classList.remove('hidden');
-      document.getElementById('modal-password-prompt').classList.add('hidden');
-
-      // Notify service worker to save to history
-      await chrome.runtime.sendMessage({
-        type: 'SPEED_UP_TX_COMPLETE',
-        address: speedUpModalState.address,
-        originalTxHash: speedUpModalState.txHash,
-        newTxHash: txResult.hash,
-        txDetails: {
+        // Build replacement transaction
+        const replacementTx = {
           to: originalTx.to,
           value: originalTx.value,
           data: originalTx.data || '0x',
-          gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
-          gasLimit: originalTx.gasLimit,
-          nonce: originalTx.nonce,
-          maxFeePerGas: newMaxFeePerGas?.toString(),
-          maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          nonce: originalTx.nonce
+        };
+
+        // Set gas limit - use original if available, otherwise default to 21000 for simple transfers
+        if (originalTx.gasLimit) {
+          replacementTx.gasLimit = originalTx.gasLimit;
+        } else {
+          // Default gas limit: 21000 for simple transfers, higher for contract interactions
+          replacementTx.gasLimit = (originalTx.data && originalTx.data !== '0x') ? 100000 : 21000;
         }
-      });
 
-      alert(`Transaction sped up!\nNew TX: ${txResult.hash.slice(0, 20)}...`);
-      showTransactionDetails(txResult.hash);
+        // Add chain ID for Ledger signing
+        const chainIdMap = {
+          'pulsechain': 369,
+          'pulsechainTestnet': 943,
+          'ethereum': 1,
+          'sepolia': 11155111
+        };
+        replacementTx.chainId = chainIdMap[speedUpModalState.network] || 943;
 
-    } catch (unlockError) {
-      // Hide progress and show buttons again
-      progressContainer.classList.add('hidden');
-      buttonsContainer.classList.remove('hidden');
-      document.getElementById('modal-password-prompt').classList.add('hidden');
+        let newMaxFeePerGas = null;
+        let newMaxPriorityFeePerGas = null;
 
-      if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
-        alert('Incorrect password');
-      } else {
-        alert('Error speeding up transaction: ' + unlockError.message);
+        if (isEIP1559) {
+          const bumpMultiplier = 1125n;
+          const bumpDivisor = 1000n;
+          const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+          const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+          const customFee = BigInt(gasPriceToUse);
+          const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+          const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+          newMaxFeePerGas = customFee;
+          newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+          replacementTx.maxFeePerGas = newMaxFeePerGas;
+          replacementTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+        } else {
+          replacementTx.gasPrice = BigInt(gasPriceToUse);
+        }
+
+        // Sign with Ledger and broadcast
+        const signedTx = await ledger.signTransaction(activeWallet.accountIndex, replacementTx);
+        const txResult = await provider.broadcastTransaction(signedTx);
+
+        // Notify service worker to save to history
+        await chrome.runtime.sendMessage({
+          type: 'SPEED_UP_TX_COMPLETE',
+          address: speedUpModalState.address,
+          originalTxHash: speedUpModalState.txHash,
+          newTxHash: txResult.hash,
+          txDetails: {
+            to: originalTx.to,
+            value: originalTx.value,
+            data: originalTx.data || '0x',
+            gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+            gasLimit: originalTx.gasLimit,
+            nonce: originalTx.nonce,
+            maxFeePerGas: newMaxFeePerGas?.toString(),
+            maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          }
+        });
+
+        alert(`Transaction sped up!\nNew TX: ${txResult.hash.slice(0, 20)}...`);
+        showTransactionDetails(txResult.hash);
+
+      } catch (ledgerError) {
+        console.error('Ledger signing error:', ledgerError);
+        if (ledgerError.message.includes('rejected')) {
+          alert('Transaction rejected on Ledger device');
+        } else {
+          alert('Error speeding up transaction: ' + ledgerError.message);
+        }
+      }
+    } else {
+      // Software wallet flow - use password
+      const password = await showPasswordPrompt('Speed Up Transaction', 'Enter your password to confirm speed-up');
+      if (!password) return;
+
+      // Show progress bar in password prompt
+      const progressContainer = document.getElementById('password-prompt-progress-container');
+      const progressBar = document.getElementById('password-prompt-progress-bar');
+      const progressText = document.getElementById('password-prompt-progress-text');
+      const progressLabel = progressContainer.querySelector('.progress-label');
+      const buttonsContainer = document.getElementById('password-prompt-buttons');
+
+      progressLabel.textContent = 'Decrypting wallet...';
+      progressContainer.classList.remove('hidden');
+      buttonsContainer.classList.add('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+
+      try {
+        // Unlock wallet with progress tracking
+        let lastDisplayedPercentage = 0;
+        const unlockResult = await unlockWallet(password, {
+          onProgress: (progress) => {
+            const percentage = Math.round(progress * 100);
+            if (percentage !== lastDisplayedPercentage) {
+              lastDisplayedPercentage = percentage;
+              if (progressBar) progressBar.style.width = `${percentage}%`;
+              if (progressText) progressText.textContent = `${percentage}%`;
+            }
+          }
+        });
+
+        progressLabel.textContent = 'Signing transaction...';
+        progressText.textContent = '100%';
+
+        const signer = unlockResult.signer;
+        const provider = await rpc.getProvider(speedUpModalState.network);
+        const connectedSigner = signer.connect(provider);
+
+        // Get original transaction from history
+        const txResponse = await chrome.runtime.sendMessage({
+          type: 'GET_TX_BY_HASH',
+          address: speedUpModalState.address,
+          txHash: speedUpModalState.txHash
+        });
+
+        if (!txResponse.success || !txResponse.transaction) {
+          throw new Error('Original transaction not found');
+        }
+
+        const originalTx = txResponse.transaction;
+
+        // Fetch on-chain transaction to detect EIP-1559
+        let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+        let onChainMaxFeePerGas = null;
+        let onChainMaxPriorityFeePerGas = null;
+
+        try {
+          const onChainTx = await provider.getTransaction(speedUpModalState.txHash);
+          if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+            isEIP1559 = true;
+            onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+            onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          }
+        } catch (fetchErr) {
+          console.warn('Could not fetch on-chain tx:', fetchErr.message);
+        }
+
+        // Build replacement transaction
+        const replacementTx = {
+          to: originalTx.to,
+          value: originalTx.value,
+          data: originalTx.data || '0x',
+          nonce: originalTx.nonce
+        };
+
+        // Set gas limit - use original if available, otherwise default to 21000 for simple transfers
+        if (originalTx.gasLimit) {
+          replacementTx.gasLimit = originalTx.gasLimit;
+        } else {
+          // Default gas limit: 21000 for simple transfers, higher for contract interactions
+          replacementTx.gasLimit = (originalTx.data && originalTx.data !== '0x') ? 100000 : 21000;
+        }
+
+        let newMaxFeePerGas = null;
+        let newMaxPriorityFeePerGas = null;
+
+        if (isEIP1559) {
+          const bumpMultiplier = 1125n;
+          const bumpDivisor = 1000n;
+          const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+          const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+          const customFee = BigInt(gasPriceToUse);
+          const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+          const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+          newMaxFeePerGas = customFee;
+          newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+          replacementTx.maxFeePerGas = newMaxFeePerGas;
+          replacementTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+        } else {
+          replacementTx.gasPrice = BigInt(gasPriceToUse);
+        }
+
+        // Sign and send
+        const txResult = await connectedSigner.sendTransaction(replacementTx);
+
+        // Hide progress and close modal
+        progressContainer.classList.add('hidden');
+        buttonsContainer.classList.remove('hidden');
+        document.getElementById('modal-password-prompt').classList.add('hidden');
+
+        // Notify service worker to save to history
+        await chrome.runtime.sendMessage({
+          type: 'SPEED_UP_TX_COMPLETE',
+          address: speedUpModalState.address,
+          originalTxHash: speedUpModalState.txHash,
+          newTxHash: txResult.hash,
+          txDetails: {
+            to: originalTx.to,
+            value: originalTx.value,
+            data: originalTx.data || '0x',
+            gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+            gasLimit: originalTx.gasLimit,
+            nonce: originalTx.nonce,
+            maxFeePerGas: newMaxFeePerGas?.toString(),
+            maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          }
+        });
+
+        alert(`Transaction sped up!\nNew TX: ${txResult.hash.slice(0, 20)}...`);
+        showTransactionDetails(txResult.hash);
+
+      } catch (unlockError) {
+        // Hide progress and show buttons again
+        progressContainer.classList.add('hidden');
+        buttonsContainer.classList.remove('hidden');
+        document.getElementById('modal-password-prompt').classList.add('hidden');
+
+        if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
+          alert('Incorrect password');
+        } else {
+          alert('Error speeding up transaction: ' + unlockError.message);
+        }
       }
     }
 
@@ -7933,139 +8130,250 @@ async function confirmCancelTransaction() {
     // Close cancel modal
     document.getElementById('modal-cancel-tx').classList.add('hidden');
 
-    // Get password
-    const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to confirm cancellation');
-    if (!password) return;
+    // Check if this is a hardware wallet
+    const activeWallet = await getActiveWallet();
+    const isHardwareWallet = activeWallet && activeWallet.isHardwareWallet;
 
-    // Show progress bar in password prompt
-    const progressContainer = document.getElementById('password-prompt-progress-container');
-    const progressBar = document.getElementById('password-prompt-progress-bar');
-    const progressText = document.getElementById('password-prompt-progress-text');
-    const progressLabel = progressContainer.querySelector('.progress-label');
-    const buttonsContainer = document.getElementById('password-prompt-buttons');
+    if (isHardwareWallet) {
+      // Hardware wallet flow - use Ledger signing
+      try {
+        alert('Please confirm the cancellation on your Ledger device...');
 
-    progressLabel.textContent = 'Decrypting wallet...';
-    progressContainer.classList.remove('hidden');
-    buttonsContainer.classList.add('hidden');
-    progressBar.style.width = '0%';
-    progressText.textContent = '0%';
+        const provider = await rpc.getProvider(cancelModalState.network);
 
-    try {
-      // Unlock wallet with progress tracking
-      let lastDisplayedPercentage = 0;
-      const unlockResult = await unlockWallet(password, {
-        onProgress: (progress) => {
-          const percentage = Math.round(progress * 100);
-          if (percentage !== lastDisplayedPercentage) {
-            lastDisplayedPercentage = percentage;
-            if (progressBar) progressBar.style.width = `${percentage}%`;
-            if (progressText) progressText.textContent = `${percentage}%`;
-          }
+        // Get original transaction from history
+        const txResponse = await chrome.runtime.sendMessage({
+          type: 'GET_TX_BY_HASH',
+          address: cancelModalState.address,
+          txHash: cancelModalState.txHash
+        });
+
+        if (!txResponse.success || !txResponse.transaction) {
+          throw new Error('Original transaction not found');
         }
-      });
 
-      progressLabel.textContent = 'Signing cancellation...';
-      progressText.textContent = '100%';
+        const originalTx = txResponse.transaction;
 
-      const signer = unlockResult.signer;
-      const provider = await rpc.getProvider(cancelModalState.network);
-      const connectedSigner = signer.connect(provider);
+        // Fetch on-chain transaction to detect EIP-1559
+        let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+        let onChainMaxFeePerGas = null;
+        let onChainMaxPriorityFeePerGas = null;
 
-      // Get original transaction from history
-      const txResponse = await chrome.runtime.sendMessage({
-        type: 'GET_TX_BY_HASH',
-        address: cancelModalState.address,
-        txHash: cancelModalState.txHash
-      });
+        try {
+          const onChainTx = await provider.getTransaction(cancelModalState.txHash);
+          if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+            isEIP1559 = true;
+            onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+            onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          }
+        } catch (fetchErr) {
+          console.warn('Could not fetch on-chain tx:', fetchErr.message);
+        }
 
-      if (!txResponse.success || !txResponse.transaction) {
-        throw new Error('Original transaction not found');
+        // Build cancellation transaction (send 0 to self with same nonce)
+        const cancelTx = {
+          to: cancelModalState.address,
+          value: '0',
+          data: '0x',
+          nonce: originalTx.nonce,
+          gasLimit: 21000
+        };
+
+        // Add chain ID for Ledger signing
+        const chainIdMap = {
+          'pulsechain': 369,
+          'pulsechainTestnet': 943,
+          'ethereum': 1,
+          'sepolia': 11155111
+        };
+        cancelTx.chainId = chainIdMap[cancelModalState.network] || 943;
+
+        let newMaxFeePerGas = null;
+        let newMaxPriorityFeePerGas = null;
+
+        if (isEIP1559) {
+          const bumpMultiplier = 1125n;
+          const bumpDivisor = 1000n;
+          const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+          const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+          const customFee = BigInt(gasPriceToUse);
+          const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+          const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+          newMaxFeePerGas = customFee;
+          newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+          cancelTx.maxFeePerGas = newMaxFeePerGas;
+          cancelTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+        } else {
+          cancelTx.gasPrice = BigInt(gasPriceToUse);
+        }
+
+        // Sign with Ledger and broadcast
+        const signedTx = await ledger.signTransaction(activeWallet.accountIndex, cancelTx);
+        const txResult = await provider.broadcastTransaction(signedTx);
+
+        // Notify service worker to save to history
+        await chrome.runtime.sendMessage({
+          type: 'CANCEL_TX_COMPLETE',
+          address: cancelModalState.address,
+          originalTxHash: cancelModalState.txHash,
+          newTxHash: txResult.hash,
+          txDetails: {
+            gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+            nonce: originalTx.nonce,
+            maxFeePerGas: newMaxFeePerGas?.toString(),
+            maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          }
+        });
+
+        alert(`Transaction cancelled!\nCancellation TX: ${txResult.hash.slice(0, 20)}...`);
+        showTransactionDetails(txResult.hash);
+
+      } catch (ledgerError) {
+        console.error('Ledger signing error:', ledgerError);
+        if (ledgerError.message.includes('rejected')) {
+          alert('Cancellation rejected on Ledger device');
+        } else {
+          alert('Error cancelling transaction: ' + ledgerError.message);
+        }
       }
+    } else {
+      // Software wallet flow - use password
+      const password = await showPasswordPrompt('Cancel Transaction', 'Enter your password to confirm cancellation');
+      if (!password) return;
 
-      const originalTx = txResponse.transaction;
+      // Show progress bar in password prompt
+      const progressContainer = document.getElementById('password-prompt-progress-container');
+      const progressBar = document.getElementById('password-prompt-progress-bar');
+      const progressText = document.getElementById('password-prompt-progress-text');
+      const progressLabel = progressContainer.querySelector('.progress-label');
+      const buttonsContainer = document.getElementById('password-prompt-buttons');
 
-      // Fetch on-chain transaction to detect EIP-1559
-      let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
-      let onChainMaxFeePerGas = null;
-      let onChainMaxPriorityFeePerGas = null;
+      progressLabel.textContent = 'Decrypting wallet...';
+      progressContainer.classList.remove('hidden');
+      buttonsContainer.classList.add('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
 
       try {
-        const onChainTx = await provider.getTransaction(cancelModalState.txHash);
-        if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
-          isEIP1559 = true;
-          onChainMaxFeePerGas = onChainTx.maxFeePerGas;
-          onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+        // Unlock wallet with progress tracking
+        let lastDisplayedPercentage = 0;
+        const unlockResult = await unlockWallet(password, {
+          onProgress: (progress) => {
+            const percentage = Math.round(progress * 100);
+            if (percentage !== lastDisplayedPercentage) {
+              lastDisplayedPercentage = percentage;
+              if (progressBar) progressBar.style.width = `${percentage}%`;
+              if (progressText) progressText.textContent = `${percentage}%`;
+            }
+          }
+        });
+
+        progressLabel.textContent = 'Signing cancellation...';
+        progressText.textContent = '100%';
+
+        const signer = unlockResult.signer;
+        const provider = await rpc.getProvider(cancelModalState.network);
+        const connectedSigner = signer.connect(provider);
+
+        // Get original transaction from history
+        const txResponse = await chrome.runtime.sendMessage({
+          type: 'GET_TX_BY_HASH',
+          address: cancelModalState.address,
+          txHash: cancelModalState.txHash
+        });
+
+        if (!txResponse.success || !txResponse.transaction) {
+          throw new Error('Original transaction not found');
         }
-      } catch (fetchErr) {
-        console.warn('Could not fetch on-chain tx:', fetchErr.message);
-      }
 
-      // Build cancellation transaction (send 0 to self with same nonce)
-      const cancelTx = {
-        to: cancelModalState.address,
-        value: '0',
-        data: '0x',
-        nonce: originalTx.nonce,
-        gasLimit: 21000
-      };
+        const originalTx = txResponse.transaction;
 
-      let newMaxFeePerGas = null;
-      let newMaxPriorityFeePerGas = null;
+        // Fetch on-chain transaction to detect EIP-1559
+        let isEIP1559 = originalTx.maxFeePerGas || originalTx.maxPriorityFeePerGas;
+        let onChainMaxFeePerGas = null;
+        let onChainMaxPriorityFeePerGas = null;
 
-      if (isEIP1559) {
-        const bumpMultiplier = 1125n;
-        const bumpDivisor = 1000n;
-        const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
-        const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+        try {
+          const onChainTx = await provider.getTransaction(cancelModalState.txHash);
+          if (onChainTx && (onChainTx.type === 2 || onChainTx.maxFeePerGas)) {
+            isEIP1559 = true;
+            onChainMaxFeePerGas = onChainTx.maxFeePerGas;
+            onChainMaxPriorityFeePerGas = onChainTx.maxPriorityFeePerGas;
+          }
+        } catch (fetchErr) {
+          console.warn('Could not fetch on-chain tx:', fetchErr.message);
+        }
 
-        const customFee = BigInt(gasPriceToUse);
-        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
-        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
-
-        newMaxFeePerGas = customFee;
-        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
-
-        cancelTx.maxFeePerGas = newMaxFeePerGas;
-        cancelTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
-      } else {
-        cancelTx.gasPrice = BigInt(gasPriceToUse);
-      }
-
-      // Sign and send
-      const txResult = await connectedSigner.sendTransaction(cancelTx);
-
-      // Hide progress and close modal
-      progressContainer.classList.add('hidden');
-      buttonsContainer.classList.remove('hidden');
-      document.getElementById('modal-password-prompt').classList.add('hidden');
-
-      // Notify service worker to save to history
-      await chrome.runtime.sendMessage({
-        type: 'CANCEL_TX_COMPLETE',
-        address: cancelModalState.address,
-        originalTxHash: cancelModalState.txHash,
-        newTxHash: txResult.hash,
-        txDetails: {
-          gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+        // Build cancellation transaction (send 0 to self with same nonce)
+        const cancelTx = {
+          to: cancelModalState.address,
+          value: '0',
+          data: '0x',
           nonce: originalTx.nonce,
-          maxFeePerGas: newMaxFeePerGas?.toString(),
-          maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          gasLimit: 21000
+        };
+
+        let newMaxFeePerGas = null;
+        let newMaxPriorityFeePerGas = null;
+
+        if (isEIP1559) {
+          const bumpMultiplier = 1125n;
+          const bumpDivisor = 1000n;
+          const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
+          const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
+
+          const customFee = BigInt(gasPriceToUse);
+          const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+          const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+
+          newMaxFeePerGas = customFee;
+          newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+
+          cancelTx.maxFeePerGas = newMaxFeePerGas;
+          cancelTx.maxPriorityFeePerGas = newMaxPriorityFeePerGas;
+        } else {
+          cancelTx.gasPrice = BigInt(gasPriceToUse);
         }
-      });
 
-      alert(`Transaction cancelled!\nCancellation TX: ${txResult.hash.slice(0, 20)}...`);
-      showTransactionDetails(txResult.hash);
+        // Sign and send
+        const txResult = await connectedSigner.sendTransaction(cancelTx);
 
-    } catch (unlockError) {
-      // Hide progress and show buttons again
-      progressContainer.classList.add('hidden');
-      buttonsContainer.classList.remove('hidden');
-      document.getElementById('modal-password-prompt').classList.add('hidden');
+        // Hide progress and close modal
+        progressContainer.classList.add('hidden');
+        buttonsContainer.classList.remove('hidden');
+        document.getElementById('modal-password-prompt').classList.add('hidden');
 
-      if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
-        alert('Incorrect password');
-      } else {
-        alert('Error cancelling transaction: ' + unlockError.message);
+        // Notify service worker to save to history
+        await chrome.runtime.sendMessage({
+          type: 'CANCEL_TX_COMPLETE',
+          address: cancelModalState.address,
+          originalTxHash: cancelModalState.txHash,
+          newTxHash: txResult.hash,
+          txDetails: {
+            gasPrice: isEIP1559 ? newMaxFeePerGas.toString() : gasPriceToUse,
+            nonce: originalTx.nonce,
+            maxFeePerGas: newMaxFeePerGas?.toString(),
+            maxPriorityFeePerGas: newMaxPriorityFeePerGas?.toString()
+          }
+        });
+
+        alert(`Transaction cancelled!\nCancellation TX: ${txResult.hash.slice(0, 20)}...`);
+        showTransactionDetails(txResult.hash);
+
+      } catch (unlockError) {
+        // Hide progress and show buttons again
+        progressContainer.classList.add('hidden');
+        buttonsContainer.classList.remove('hidden');
+        document.getElementById('modal-password-prompt').classList.add('hidden');
+
+        if (unlockError.message.includes('incorrect password') || unlockError.message.includes('Incorrect password')) {
+          alert('Incorrect password');
+        } else {
+          alert('Error cancelling transaction: ' + unlockError.message);
+        }
       }
     }
 
