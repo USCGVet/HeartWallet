@@ -871,19 +871,23 @@ function validateAndUseApprovalToken(approvalToken) {
     console.warn('🫀 No approval token provided');
     return false;
   }
-  
+
   const approval = processedApprovals.get(approvalToken);
-  
+
   if (!approval) {
     console.warn('🫀 Unknown approval token');
     return false;
   }
-  
+
+  // Mark as used IMMEDIATELY to prevent race conditions.
+  // Any concurrent call will see used=true and bail out.
   if (approval.used) {
     console.warn('🫀 Approval token already used - preventing replay attack');
     return false;
   }
-  
+  approval.used = true;
+  approval.usedAt = Date.now();
+
   // Check if approval has expired
   const age = Date.now() - approval.timestamp;
   if (age > REPLAY_PROTECTION_CONFIG.APPROVAL_TIMEOUT) {
@@ -891,12 +895,9 @@ function validateAndUseApprovalToken(approvalToken) {
     processedApprovals.delete(approvalToken);
     return false;
   }
-  
-  // Mark as used
-  approval.used = true;
-  approval.usedAt = Date.now();
+
   console.log('🫀 Approval token validated and marked as used');
-  
+
   return true;
 }
 

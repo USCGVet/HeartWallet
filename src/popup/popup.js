@@ -3264,7 +3264,7 @@ async function showTokenDetails(symbol, isDefault, customAddress = null) {
   const logoContainer = document.getElementById('token-details-logo-container');
   if (tokenData.logo) {
     const logoUrl = chrome.runtime.getURL(`assets/logos/${tokenData.logo}`);
-    logoContainer.innerHTML = `<img src="${logoUrl}" alt="${symbol}" style="width: 48px; height: 48px; border-radius: 50%;" />`;
+    logoContainer.innerHTML = `<img src="${logoUrl}" alt="${escapeHtml(symbol)}" style="width: 48px; height: 48px; border-radius: 50%;" />`;
   } else {
     logoContainer.innerHTML = '<div style="width: 48px; height: 48px; background: var(--terminal-border); border-radius: 50%;"></div>';
   }
@@ -5987,8 +5987,9 @@ function formatParameterValue(value, type) {
 
     // Handle addresses
     if (type === 'address') {
-      const shortAddr = `${value.slice(0, 6)}...${value.slice(-4)}`;
-      return `<span title="${value}" style="cursor: help;">${shortAddr}</span>`;
+      const escaped = escapeHtml(value);
+      const shortAddr = `${escapeHtml(value.slice(0, 6))}...${escapeHtml(value.slice(-4))}`;
+      return `<span title="${escaped}" style="cursor: help;">${shortAddr}</span>`;
     }
 
     // Handle numbers (uint/int)
@@ -6019,31 +6020,32 @@ function formatParameterValue(value, type) {
     // Handle bytes
     if (type === 'bytes' || type.startsWith('bytes')) {
       if (typeof value === 'string') {
+        const escaped = escapeHtml(value);
         if (value.length > 66) {
-          return `${value.slice(0, 66)}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
+          return `${escapeHtml(value.slice(0, 66))}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
         }
-        return value;
+        return escaped;
       }
     }
 
     // Handle strings
     if (type === 'string') {
       if (value.length > 50) {
-        return `${value.slice(0, 50)}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
+        return `${escapeHtml(value.slice(0, 50))}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
       }
-      return value;
+      return escapeHtml(value);
     }
 
     // Default: convert to string
     if (typeof value === 'object' && value !== null) {
       const jsonStr = JSON.stringify(value, null, 2);
       if (jsonStr.length > 100) {
-        return `<pre style="font-size: 9px; overflow-x: auto;">${jsonStr.slice(0, 100)}...</pre>`;
+        return `<pre style="font-size: 9px; overflow-x: auto;">${escapeHtml(jsonStr.slice(0, 100))}...</pre>`;
       }
-      return `<pre style="font-size: 9px;">${jsonStr}</pre>`;
+      return `<pre style="font-size: 9px;">${escapeHtml(jsonStr)}</pre>`;
     }
 
-    return String(value);
+    return escapeHtml(String(value));
   } catch (error) {
     console.error('Error formatting parameter value:', error);
     return String(value);
