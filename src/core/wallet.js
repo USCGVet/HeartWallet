@@ -1018,18 +1018,13 @@ export async function deleteWallet(walletId, password, options = {}) {
 
   const walletToDelete = walletsData.walletList[walletIndex];
 
-  // Only verify password for software wallets
-  // Hardware wallets don't have encrypted keystores, so no password verification needed
-  if (!walletToDelete.isHardwareWallet) {
-    // Find a software wallet to verify password with
-    const softwareWallet = walletsData.walletList.find(w => !w.isHardwareWallet);
-
-    if (softwareWallet) {
-      // Verify password by trying to unlock a software wallet
-      await unlockSpecificWallet(softwareWallet.id, password, options);
-    }
-    // If there are no software wallets (only hardware), skip password verification
+  // Verify password by unlocking any software wallet (proves user knows the password)
+  const softwareWallet = walletsData.walletList.find(w => !w.isHardwareWallet);
+  if (softwareWallet) {
+    await unlockSpecificWallet(softwareWallet.id, password, options);
   }
+  // If there are no software wallets (only hardware), skip password verification
+  // since there is no encrypted keystore to verify against
 
   // Remove wallet from list
   walletsData.walletList.splice(walletIndex, 1);

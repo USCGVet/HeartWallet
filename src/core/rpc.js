@@ -658,6 +658,9 @@ export async function broadcastToAllRpcs(network, rawTx) {
     failures: []
   };
 
+  // Compute expected txHash from signed raw transaction for validation
+  const expectedHash = ethers.keccak256(rawTx);
+
   // Broadcast to all endpoints in parallel
   const promises = endpoints.map(async (endpoint) => {
     try {
@@ -683,7 +686,12 @@ export async function broadcastToAllRpcs(network, rawTx) {
           results.failures.push({ endpoint, error: errorMsg });
         }
       } else if (data.result) {
-        results.successes.push({ endpoint, result: data.result });
+        // Verify returned txHash matches expected hash
+        if (data.result.toLowerCase() !== expectedHash.toLowerCase()) {
+          results.failures.push({ endpoint, error: 'Returned txHash does not match expected hash' });
+        } else {
+          results.successes.push({ endpoint, result: data.result });
+        }
       } else {
         results.failures.push({ endpoint, error: 'No result returned' });
       }

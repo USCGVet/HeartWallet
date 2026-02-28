@@ -21,7 +21,6 @@ class HeartWalletProvider {
 
     // Event emitter
     this._events = {};
-    this._nextRequestId = 1;
     this._pendingRequests = new Map();
 
     // Listen for responses from content script
@@ -41,7 +40,7 @@ class HeartWalletProvider {
 
     // Create promise for this request
     return new Promise((resolve, reject) => {
-      const requestId = this._nextRequestId++;
+      const requestId = crypto.randomUUID();
 
       // Store promise callbacks
       this._pendingRequests.set(requestId, { resolve, reject });

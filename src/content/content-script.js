@@ -57,13 +57,17 @@ window.addEventListener('message', async (event) => {
       console.warn('🫀 HeartWallet extension was reloaded. Please refresh this page to reconnect.');
     }
 
+    // SECURITY: Sanitize error message before forwarding to page context
+    const rawMsg = error.message || 'Unknown error';
+    const sanitizedMsg = rawMsg.replace(/<[^>]*>/g, '').slice(0, 200);
+
     // SECURITY: Send error back to inpage provider with specific origin
     window.postMessage({
       target: 'heartwallet-inpage',
       requestId,
       method,
       error: {
-        message: error.message || 'Unknown error',
+        message: sanitizedMsg,
         code: -32603
       }
     }, window.location.origin);

@@ -375,7 +375,7 @@ async function handleRequestAccounts(origin, tab) {
 
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
-    const requestId = Date.now().toString();
+    const requestId = crypto.randomUUID();
     pendingConnections.set(requestId, { resolve, reject, origin, tabId: tab?.id });
 
     // Open approval popup
@@ -970,8 +970,8 @@ async function handleSendTransaction(params, origin) {
 
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
-    const requestId = Date.now().toString();
-    
+    const requestId = crypto.randomUUID();
+
     // SECURITY: Generate one-time approval token for replay protection
     const approvalToken = generateApprovalToken();
     processedApprovals.set(approvalToken, {
@@ -1001,6 +1001,7 @@ async function handleSendTransaction(params, origin) {
     setTimeout(() => {
       if (pendingTransactions.has(requestId)) {
         pendingTransactions.delete(requestId);
+        decrementPendingCount(origin);
         reject(new Error('Transaction request timeout'));
       }
     }, 300000);
@@ -1338,7 +1339,7 @@ async function handleWatchAsset(params, origin, tab) {
 
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
-    const requestId = Date.now().toString() + '_token';
+    const requestId = crypto.randomUUID();
     pendingTokenRequests.set(requestId, { resolve, reject, origin, tokenInfo });
 
     // Open approval popup
@@ -2104,7 +2105,7 @@ async function handlePersonalSign(params, origin, method) {
 
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
-    const requestId = Date.now().toString() + '_sign';
+    const requestId = crypto.randomUUID();
 
     // Generate one-time approval token for replay protection
     const approvalToken = generateApprovalToken();
@@ -2175,7 +2176,7 @@ async function handleSignTypedData(params, origin, method) {
 
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
-    const requestId = Date.now().toString() + '_signTyped';
+    const requestId = crypto.randomUUID();
 
     // Generate one-time approval token for replay protection
     const approvalToken = generateApprovalToken();
