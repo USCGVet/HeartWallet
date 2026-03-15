@@ -28,7 +28,8 @@ const PULSEX_PAIRS = {
     'HXR_PLS': '0xD5A8de033c8697cEaa844CA596cc7583c4f8F612',
     'TKR_PLS': '0x205C6d44d84E82606E4E921f87b51b71ba85F0f0',
     'JDAI_PLS': '0x70658Ce6D6C09acdE646F6ea9C57Ba64f4Dc350f',
-    'Ricky_PLS': '0xbfe5ae40bbca74878419ad7d7e115a30ccfc62f1'
+    'Ricky_PLS': '0xbfe5ae40bbca74878419ad7d7e115a30ccfc62f1',
+    'PRVX_USDC': '0x7f681a5ad615238357ba148c281e2eaefd2de55a'
   }
 };
 
@@ -44,7 +45,9 @@ const TOKEN_ADDRESSES = {
     HXR: { address: '0xCfCb89f00576A775d9f81961A37ba7DCf12C7d9B', decimals: 18 },
     TKR: { address: '0xd9e59020089916A8EfA7Dd0B605d55219D72dB7B', decimals: 18 },
     JDAI: { address: '0x1610E75C9b48BF550137820452dE4049bB22bB72', decimals: 18 },
-    Ricky: { address: '0x79FC0E1d3EC00d81E5423DcC01A617b0e1245c2B', decimals: 18 }
+    Ricky: { address: '0x79FC0E1d3EC00d81E5423DcC01A617b0e1245c2B', decimals: 18 },
+    PRVX: { address: '0xF6f8Db0aBa00007681F8fAF16A0FDa1c9B030b11', decimals: 18 },
+    USDC: { address: '0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07', decimals: 6 }
   }
 };
 
@@ -206,6 +209,38 @@ async function getTokenPriceInPLS(provider, pairAddress, tokenAddress, tokenDeci
 }
 
 /**
+ * Get token price in USD from a USDC pair
+ * Returns: USD price of 1 token
+ */
+async function getTokenPriceInUSDC(provider, pairAddress, tokenAddress, tokenDecimals) {
+  const reserves = await getPairReserves(provider, pairAddress);
+
+  if (!reserves) return null;
+
+  const usdcAddress = TOKEN_ADDRESSES.pulsechain.USDC.address.toLowerCase();
+  const targetToken = tokenAddress.toLowerCase();
+
+  let tokenReserve, usdcReserve;
+  if (reserves.token0 === targetToken) {
+    tokenReserve = reserves.reserve0;
+    usdcReserve = reserves.reserve1;
+  } else if (reserves.token1 === targetToken) {
+    tokenReserve = reserves.reserve1;
+    usdcReserve = reserves.reserve0;
+  } else {
+    console.error('Token not found in USDC pair:', tokenAddress, pairAddress);
+    return null;
+  }
+
+  const tokenReserveFormatted = parseFloat(ethers.formatUnits(tokenReserve, tokenDecimals));
+  const usdcReserveFormatted = parseFloat(ethers.formatUnits(usdcReserve, 6)); // USDC has 6 decimals
+
+  if (tokenReserveFormatted === 0) return 0;
+
+  return usdcReserveFormatted / tokenReserveFormatted;
+}
+
+/**
  * Fetch all token prices in USD
  * Returns: { PLS: price, HEX: price, PLSX: price, INC: price, ... }
  */
@@ -295,6 +330,13 @@ export async function fetchTokenPrices(provider, network = 'pulsechain') {
     if (rickyPriceInPls) {
       prices.Ricky = rickyPriceInPls * plsUsdPrice;
       // Ricky price calculated
+    }
+
+    // PRVX price (paired with USDC, so calculate directly in USD)
+    const prvxUsdPrice = await getTokenPriceInUSDC(provider, pairs.PRVX_USDC, tokens.PRVX.address, tokens.PRVX.decimals);
+    if (prvxUsdPrice) {
+      prices.PRVX = prvxUsdPrice;
+      // PRVX price calculated
     }
 
     // Update cache

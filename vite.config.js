@@ -70,6 +70,7 @@ export default defineConfig({
         copyFileSync('assets/logos/tkr.svg', 'dist/assets/logos/tkr.svg');
         copyFileSync('assets/logos/jdai.svg', 'dist/assets/logos/jdai.svg');
         copyFileSync('assets/logos/ricky.jpg', 'dist/assets/logos/ricky.jpg');
+        copyFileSync('assets/logos/prvx.webp', 'dist/assets/logos/prvx.webp');
       }
     }
   ]

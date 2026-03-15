@@ -295,10 +295,10 @@ async function handleWalletRequest(message, sender) {
         return { result: parseInt(chainId.result, 16).toString() };
 
       case 'wallet_switchEthereumChain':
-        return await handleSwitchChain(params);
+        return await handleSwitchChain(params, origin);
 
       case 'wallet_addEthereumChain':
-        return await handleAddChain(params);
+        return await handleAddChain(params, origin);
 
       case 'wallet_watchAsset':
         return await handleWatchAsset(params, origin, sender.tab);
@@ -328,7 +328,7 @@ async function handleWalletRequest(message, sender) {
         return await handleSendTransaction(params, origin);
 
       case 'eth_sendRawTransaction':
-        return await handleSendRawTransaction(params);
+        return await handleSendRawTransaction(params, origin);
 
       case 'eth_getTransactionReceipt':
         return await handleGetTransactionReceipt(params);
@@ -416,9 +416,14 @@ async function handleChainId() {
 }
 
 // Handle wallet_switchEthereumChain - Switch to a different network
-async function handleSwitchChain(params) {
+async function handleSwitchChain(params, origin) {
   if (!params || !params[0] || !params[0].chainId) {
     return { error: { code: -32602, message: 'Invalid params' } };
+  }
+
+  // SECURITY: Require site connection before allowing chain switch
+  if (origin && !(await isSiteConnected(origin))) {
+    return { error: { code: 4100, message: 'Unauthorized: site not connected. Call eth_requestAccounts first.' } };
   }
 
   const requestedChainId = params[0].chainId;
@@ -466,9 +471,14 @@ async function handleSwitchChain(params) {
 }
 
 // Handle wallet_addEthereumChain - Add a new network (simplified version)
-async function handleAddChain(params) {
+async function handleAddChain(params, origin) {
   if (!params || !params[0] || !params[0].chainId) {
     return { error: { code: -32602, message: 'Invalid params' } };
+  }
+
+  // SECURITY: Require site connection before allowing chain add/switch
+  if (origin && !(await isSiteConnected(origin))) {
+    return { error: { code: 4100, message: 'Unauthorized: site not connected. Call eth_requestAccounts first.' } };
   }
 
   const chainInfo = params[0];
@@ -487,7 +497,7 @@ async function handleAddChain(params) {
 
   if (supportedChains[chainInfo.chainId]) {
     // Chain is already supported, just switch to it
-    return await handleSwitchChain([{ chainId: chainInfo.chainId }]);
+    return await handleSwitchChain([{ chainId: chainInfo.chainId }], origin);
   }
 
   // Custom chains not supported yet
@@ -652,9 +662,14 @@ async function handleCall(params) {
 }
 
 // Handle eth_sendRawTransaction - Send a pre-signed transaction
-async function handleSendRawTransaction(params) {
+async function handleSendRawTransaction(params, origin) {
   if (!params || !params[0]) {
     return { error: { code: -32602, message: 'Missing signed transaction parameter' } };
+  }
+
+  // SECURITY: Require site connection before allowing raw transaction broadcast
+  if (origin && !(await isSiteConnected(origin))) {
+    return { error: { code: 4100, message: 'Unauthorized: site not connected. Call eth_requestAccounts first.' } };
   }
 
   try {
@@ -2373,6 +2388,26 @@ function getSignRequest(requestId) {
 // Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Received message
+
+  // SECURITY: Define message types that are privileged (popup-only).
+  // These must NOT be callable from content scripts (which run on arbitrary web pages).
+  // Extension popup/pages have no sender.tab; content scripts always have sender.tab.
+  const PRIVILEGED_MESSAGES = new Set([
+    'CONNECTION_APPROVAL', 'TRANSACTION_APPROVAL', 'SIGN_APPROVAL', 'SIGN_APPROVAL_LEDGER',
+    'TOKEN_ADD_APPROVAL', 'CREATE_SESSION', 'INVALIDATE_SESSION', 'INVALIDATE_ALL_SESSIONS',
+    'DISCONNECT_SITE', 'SAVE_TX', 'SAVE_AND_MONITOR_TX', 'CLEAR_TX_HISTORY',
+    'SPEED_UP_TX', 'CANCEL_TX', 'SPEED_UP_TX_COMPLETE', 'CANCEL_TX_COMPLETE',
+    'GET_SIGNING_AUDIT_LOG', 'GET_TX_HISTORY', 'GET_PENDING_TX_COUNT', 'GET_PENDING_TXS',
+    'GET_TX_BY_HASH', 'REFRESH_TX_STATUS', 'REBROADCAST_TX', 'GET_CURRENT_GAS_PRICE',
+    'GET_CONNECTION_REQUEST', 'GET_CONNECTED_SITES', 'GET_TRANSACTION_REQUEST',
+    'GET_SIGN_REQUEST', 'GET_TOKEN_ADD_REQUEST'
+  ]);
+
+  if (PRIVILEGED_MESSAGES.has(message.type) && sender.tab) {
+    console.warn('🫀 SECURITY: Blocked privileged message from content script:', message.type, sender.url);
+    sendResponse({ success: false, error: 'Unauthorized: privileged messages must come from extension pages' });
+    return true;
+  }
 
   (async () => {
     try {

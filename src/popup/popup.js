@@ -5994,15 +5994,15 @@ function formatParameterValue(value, type) {
 
     // Handle numbers (uint/int)
     if (type.startsWith('uint') || type.startsWith('int')) {
-      const valueStr = value.toString();
+      const valueStr = escapeHtml(value.toString());
 
       // For large numbers, try to show both raw and formatted
       if (valueStr.length > 18) {
         try {
-          const etherValue = ethers.formatEther(valueStr);
+          const etherValue = ethers.formatEther(value.toString());
           // Only show ether conversion if it makes sense (> 0.000001)
           if (parseFloat(etherValue) > 0.000001) {
-            return `${valueStr}<br><span style="color: var(--terminal-dim); font-size: 9px;">(≈ ${parseFloat(etherValue).toFixed(6)} tokens)</span>`;
+            return `${valueStr}<br><span style="color: var(--terminal-dim); font-size: 9px;">(≈ ${escapeHtml(parseFloat(etherValue).toFixed(6))} tokens)</span>`;
           }
         } catch (e) {
           // If conversion fails, just show raw
@@ -6048,7 +6048,7 @@ function formatParameterValue(value, type) {
     return escapeHtml(String(value));
   } catch (error) {
     console.error('Error formatting parameter value:', error);
-    return String(value);
+    return escapeHtml(String(value));
   }
 }
 
@@ -6154,8 +6154,8 @@ async function handleTransactionApprovalScreen(requestId) {
             paramsHTML += `
               <div style="margin-bottom: 12px; padding: 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); border-radius: 4px;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                  <span style="font-size: 10px; color: var(--terminal-dim);">${param.name}</span>
-                  <span style="font-size: 9px; color: var(--terminal-dim); font-family: var(--font-mono);">${param.type}</span>
+                  <span style="font-size: 10px; color: var(--terminal-dim);">${escapeHtml(param.name)}</span>
+                  <span style="font-size: 9px; color: var(--terminal-dim); font-family: var(--font-mono);">${escapeHtml(param.type)}</span>
                 </div>
                 <div style="font-size: 10px; font-family: var(--font-mono); word-break: break-all;">
                   ${valueDisplay}

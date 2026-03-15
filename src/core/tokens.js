@@ -84,6 +84,15 @@ export const DEFAULT_TOKENS = {
       logo: 'ricky.jpg',
       homeUrl: 'https://truthbehindrichardheart.com/',
       dexScreenerUrl: 'https://dexscreener.com/pulsechain/0xbfe5ae40bbca74878419ad7d7e115a30ccfc62f1'
+    },
+    'PRVX': {
+      name: 'ProveX',
+      symbol: 'PRVX',
+      address: '0xF6f8Db0aBa00007681F8fAF16A0FDa1c9B030b11',
+      decimals: 18,
+      logo: 'prvx.webp',
+      homeUrl: 'https://provex.com',
+      dexScreenerUrl: 'https://dexscreener.com/pulsechain/0x7f681a5ad615238357ba148c281e2eaefd2de55a'
     }
   },
   pulsechainTestnet: {
