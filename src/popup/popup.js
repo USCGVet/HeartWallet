@@ -330,6 +330,14 @@ function showScreen(screenId) {
     screen.classList.remove('hidden');
     // Scroll to top when showing new screen
     window.scrollTo(0, 0);
+
+    // Auto-focus password field on unlock screen
+    if (screenId === 'screen-unlock') {
+      setTimeout(() => {
+        const passwordField = document.getElementById('password-unlock');
+        if (passwordField) passwordField.focus();
+      }, 50);
+    }
   }
 }
 
@@ -987,28 +995,6 @@ function setupEventListeners() {
     currentRenameWalletId = null;
   });
 
-  // Transaction success modal
-  document.getElementById('btn-close-tx-success')?.addEventListener('click', () => {
-    document.getElementById('modal-tx-success').classList.add('hidden');
-  });
-  document.getElementById('btn-ok-tx-success')?.addEventListener('click', () => {
-    document.getElementById('modal-tx-success').classList.add('hidden');
-  });
-  document.getElementById('btn-copy-tx-hash')?.addEventListener('click', async () => {
-    try {
-      const txHash = document.getElementById('tx-success-hash').textContent;
-      await navigator.clipboard.writeText(txHash);
-      const btn = document.getElementById('btn-copy-tx-hash');
-      const originalText = btn.textContent;
-      btn.textContent = 'Copied!';
-      setTimeout(() => {
-        btn.textContent = originalText;
-      }, 2000);
-    } catch (error) {
-      alert('Failed to copy transaction hash');
-    }
-  });
-
   // Transaction Status Buttons (in approval popup)
   document.getElementById('btn-tx-status-explorer')?.addEventListener('click', () => {
     if (!txStatusCurrentHash) return;
@@ -1103,6 +1089,27 @@ function setupEventListeners() {
   document.addEventListener('click', resetActivityTimer);
   document.addEventListener('keypress', resetActivityTimer);
   document.addEventListener('scroll', resetActivityTimer);
+
+  // Ctrl+L keyboard shortcut to lock wallet
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'l' && currentState.isUnlocked) {
+      e.preventDefault();
+      handleLock();
+    }
+  });
+
+  // Send amount USD value update (native token)
+  document.getElementById('send-amount')?.addEventListener('input', (e) => {
+    updateSendAmountUSD(e.target.value, null);
+  });
+
+  // Send amount USD value update (token)
+  document.getElementById('token-details-amount')?.addEventListener('input', (e) => {
+    updateSendAmountUSD(e.target.value, currentState.currentTokenDetails);
+  });
+
+  // CSV export
+  document.getElementById('btn-export-tx-csv')?.addEventListener('click', handleExportTxCSV);
 }
 
 // ===== WALLET CREATION =====
@@ -2866,49 +2873,6 @@ This allows your Ledger to sign smart contract transactions (token transfers, sw
     sendBtn.disabled = false;
     sendBtn.style.opacity = '1';
     sendBtn.style.cursor = 'pointer';
-  }
-}
-
-function showTransactionSuccessModal(txHash) {
-  document.getElementById('tx-success-hash').textContent = txHash;
-  document.getElementById('modal-tx-success').classList.remove('hidden');
-}
-
-async function waitForTransactionConfirmation(txHash, amount, symbol) {
-  try {
-    const provider = await rpc.getProvider(currentState.network);
-
-    // Wait for transaction to be mined (1 confirmation)
-    const receipt = await provider.waitForTransaction(txHash, 1);
-
-    if (receipt && receipt.status === 1) {
-      // Transaction confirmed successfully
-      if (chrome.notifications) {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
-          title: 'Transaction Confirmed',
-          message: `${amount} ${symbol} transfer confirmed on-chain!`,
-          priority: 2
-        });
-      }
-
-      // Auto-refresh balance
-      await fetchBalance();
-    } else {
-      // Transaction failed
-      if (chrome.notifications) {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: chrome.runtime.getURL('assets/icons/icon-128.png'),
-          title: 'Transaction Failed',
-          message: 'Transaction was reverted or failed on-chain',
-          priority: 2
-        });
-      }
-    }
-  } catch (error) {
-    console.error('Error waiting for confirmation:', error);
   }
 }
 
@@ -6152,6 +6116,12 @@ async function handleTransactionApprovalScreen(requestId) {
     document.getElementById('tx-from-address').textContent = wallet?.address || '0x0000...0000';
     document.getElementById('tx-to-address').textContent = txRequest.to || 'Contract Creation';
 
+    // Show network badge
+    const networkBadge = document.getElementById('tx-approval-network-badge');
+    if (networkBadge) {
+      networkBadge.textContent = NETWORK_NAMES[network] || network;
+    }
+
     // Format value
     const symbols = {
       'pulsechainTestnet': 'tPLS',
@@ -6788,6 +6758,12 @@ async function handleMessageSignApprovalScreen(requestId) {
     document.getElementById('sign-site-origin').textContent = origin;
     document.getElementById('sign-address').textContent = address;
 
+    // Show network badge
+    const signNetworkBadge = document.getElementById('sign-network-badge');
+    if (signNetworkBadge) {
+      signNetworkBadge.textContent = NETWORK_NAMES[currentState.network] || currentState.network;
+    }
+
     // Show DANGER warning if this is eth_sign
     const ethSignWarning = document.getElementById('eth-sign-danger-warning');
     if (method === 'eth_sign') {
@@ -7023,6 +6999,12 @@ async function handleTypedDataSignApprovalScreen(requestId) {
     // Populate sign details
     document.getElementById('sign-typed-site-origin').textContent = origin;
     document.getElementById('sign-typed-address').textContent = address;
+
+    // Show network badge
+    const signTypedNetworkBadge = document.getElementById('sign-typed-network-badge');
+    if (signTypedNetworkBadge) {
+      signTypedNetworkBadge.textContent = NETWORK_NAMES[currentState.network] || currentState.network;
+    }
 
     // Populate domain information
     if (typedData.domain) {
@@ -8709,13 +8691,116 @@ function getNetworkName(network) {
 async function handleCopyAddress() {
   try {
     await navigator.clipboard.writeText(currentState.address);
-    const btn = document.getElementById('btn-copy-address');
-    const originalText = btn.textContent;
-    btn.textContent = 'COPIED!';
-    setTimeout(() => {
-      btn.textContent = originalText;
-    }, 2000);
+    const label = document.getElementById('copy-address-label');
+    if (label) {
+      const originalText = label.textContent;
+      label.textContent = 'COPIED!';
+      setTimeout(() => {
+        label.textContent = originalText;
+      }, 2000);
+    }
   } catch (error) {
     alert('Failed to copy address');
+  }
+}
+
+/**
+ * Updates the USD value display below the send amount input.
+ * @param {string} amountStr - The amount entered by the user
+ * @param {object|null} tokenDetails - Token details (null for native token)
+ */
+function updateSendAmountUSD(amountStr, tokenDetails) {
+  const elId = tokenDetails ? 'token-send-amount-usd' : 'send-amount-usd';
+  const usdEl = document.getElementById(elId);
+  if (!usdEl) return;
+
+  const amount = parseFloat(amountStr);
+  if (!amountStr || isNaN(amount) || amount <= 0) {
+    usdEl.style.display = 'none';
+    return;
+  }
+
+  if (!currentState.tokenPrices) {
+    usdEl.style.display = 'none';
+    return;
+  }
+
+  let usdValue = null;
+  if (tokenDetails) {
+    // Token send - look up token price
+    const symbol = tokenDetails.symbol;
+    if (currentState.tokenPrices[symbol]) {
+      usdValue = amount * currentState.tokenPrices[symbol];
+    }
+  } else {
+    // Native token send
+    const nativeSymbol = getNativeTokenSymbol(currentState.network);
+    if (currentState.tokenPrices[nativeSymbol]) {
+      usdValue = amount * currentState.tokenPrices[nativeSymbol];
+    }
+  }
+
+  if (usdValue !== null) {
+    usdEl.textContent = `~${formatUSD(usdValue)}`;
+    usdEl.style.display = 'block';
+  } else {
+    usdEl.style.display = 'none';
+  }
+}
+
+/**
+ * Exports transaction history as CSV file
+ */
+async function handleExportTxCSV() {
+  if (!currentState.address) return;
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_TX_HISTORY',
+      address: currentState.address
+    });
+
+    if (!response.success || !response.transactions || response.transactions.length === 0) {
+      alert('No transactions to export');
+      return;
+    }
+
+    const transactions = response.transactions;
+    const csvRows = ['Date,Status,Hash,From,To,Value,Gas Price (Gwei),Nonce,Network'];
+
+    for (const tx of transactions) {
+      const date = new Date(tx.timestamp).toISOString();
+      const valueEth = ethers.formatEther(tx.value || '0');
+      const gasGwei = ethers.formatUnits(tx.gasPrice || '0', 'gwei');
+      const network = getNetworkSymbol(tx.network);
+
+      // Escape fields that might contain commas
+      csvRows.push([
+        date,
+        tx.status,
+        tx.hash,
+        tx.from || '',
+        tx.to || '',
+        valueEth,
+        gasGwei,
+        tx.nonce,
+        network
+      ].join(','));
+    }
+
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `heartwallet-tx-${currentState.address.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Error exporting CSV:', error);
+    alert('Failed to export transactions');
   }
 }
