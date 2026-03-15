@@ -23,11 +23,28 @@ const CHAIN_IDS = {
   'sepolia': '0xAA36A7' // 11155111
 };
 
+const NETWORK_NAMES = {
+  'pulsechainTestnet': 'PulseChain Testnet V4',
+  'pulsechain': 'PulseChain Mainnet',
+  'ethereum': 'Ethereum Mainnet',
+  'sepolia': 'Sepolia Testnet'
+};
+
+const CHAIN_ID_TO_NETWORK = {
+  '0x3af': 'pulsechainTestnet',
+  '0x171': 'pulsechain',
+  '0x1': 'ethereum',
+  '0xaa36a7': 'sepolia'
+};
+
 // Storage keys
 const CONNECTED_SITES_KEY = 'connected_sites';
 
 // Pending connection requests (origin -> { resolve, reject, tabId })
 const pendingConnections = new Map();
+
+// Pending chain switch requests (requestId -> { resolve, reject, origin, networkKey, chainId, approvalToken })
+const pendingChainSwitches = new Map();
 
 // ===== SIGNING AUDIT LOG =====
 // Stores recent signing operations for security auditing (in-memory, cleared on service worker restart)
@@ -240,18 +257,55 @@ async function getConnectedSites() {
   return sites || {};
 }
 
+// Get a connected site entry
+async function getConnectedSite(origin) {
+  const sites = await getConnectedSites();
+  return sites[origin] || null;
+}
+
+// Get the currently authorized account for a site
+async function getAuthorizedAccounts(origin) {
+  const site = await getConnectedSite(origin);
+  const wallet = await getActiveWallet();
+
+  if (!site || !wallet?.address) {
+    return [];
+  }
+
+  const authorizedAccounts = Array.isArray(site.accounts) ? site.accounts : [];
+  const activeAddress = wallet.address.toLowerCase();
+  const isAuthorized = authorizedAccounts.some(
+    account => typeof account === 'string' && account.toLowerCase() === activeAddress
+  );
+
+  return isAuthorized ? [wallet.address] : [];
+}
+
 // Check if a site is connected
 async function isSiteConnected(origin) {
-  const sites = await getConnectedSites();
-  return !!sites[origin];
+  const accounts = await getAuthorizedAccounts(origin);
+  return accounts.length > 0;
 }
 
 // Add a connected site
 async function addConnectedSite(origin, accounts) {
   const sites = await getConnectedSites();
+  const existingAccounts = Array.isArray(sites[origin]?.accounts) ? sites[origin].accounts : [];
+  const mergedAccounts = [...existingAccounts];
+
+  for (const account of accounts || []) {
+    if (
+      typeof account === 'string' &&
+      !mergedAccounts.some(existing => existing.toLowerCase() === account.toLowerCase())
+    ) {
+      mergedAccounts.push(account);
+    }
+  }
+
   sites[origin] = {
-    accounts,
-    connectedAt: Date.now()
+    accounts: mergedAccounts,
+    connectedAt: sites[origin]?.connectedAt || Date.now(),
+    lastConnectedAt: Date.now()
   };
   await save(CONNECTED_SITES_KEY, sites);
 }
@@ -261,6 +315,57 @@ async function removeConnectedSite(origin) {
   const sites = await getConnectedSites();
   delete sites[origin];
   await save(CONNECTED_SITES_KEY, sites);
+}
+
+// Notify tabs when the active authorized account changes
+async function notifyAccountsChanged() {
+  const sites = await getConnectedSites();
+  const wallet = await getActiveWallet();
+  const activeAddress = wallet?.address || null;
+
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach((tab) => {
+      if (!tab.id || !tab.url) {
+        return;
+      }
+
+      let origin;
+      try {
+        origin = new URL(tab.url).origin;
+      } catch {
+        return;
+      }
+
+      const site = sites[origin];
+      const accounts = (
+        site &&
+        activeAddress &&
+        Array.isArray(site.accounts) &&
+        site.accounts.some(account => typeof account === 'string' && account.toLowerCase() === activeAddress.toLowerCase())
+      ) ? [activeAddress] : [];
+
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'ACCOUNTS_CHANGED',
+        accounts
+      }).catch(() => {
+        // Tab might not have content script, ignore error
+      });
+    });
+  });
+}
+
+// Notify tabs when the network changes
+function notifyChainChanged(chainId) {
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'CHAIN_CHANGED',
+        chainId
+      }).catch(() => {
+        // Tab might not have content script, ignore error
+      });
+    });
+  });
 }
 
 // Get current network chain ID
@@ -367,9 +472,9 @@ async function handleWalletRequest(message, sender) {
 async function handleRequestAccounts(origin, tab) {
   // Check if already connected
   if (await isSiteConnected(origin)) {
-    const wallet = await getActiveWallet();
-    if (wallet && wallet.address) {
-      return { result: [wallet.address] };
+    const accounts = await getAuthorizedAccounts(origin);
+    if (accounts.length > 0) {
+      return { result: accounts };
     }
   }
 
@@ -399,11 +504,9 @@ async function handleRequestAccounts(origin, tab) {
 // Handle eth_accounts - Get connected accounts
 async function handleAccounts(origin) {
   // Only return accounts if site is connected
-  if (await isSiteConnected(origin)) {
-    const wallet = await getActiveWallet();
-    if (wallet && wallet.address) {
-      return { result: [wallet.address] };
-    }
+  const accounts = await getAuthorizedAccounts(origin);
+  if (accounts.length > 0) {
+    return { result: accounts };
   }
 
   return { result: [] };
@@ -426,20 +529,8 @@ async function handleSwitchChain(params, origin) {
     return { error: { code: 4100, message: 'Unauthorized: site not connected. Call eth_requestAccounts first.' } };
   }
 
-  const requestedChainId = params[0].chainId;
-  // Switching chain
-
-  // Find matching network
-  const networkMap = {
-    '0x3af': 'pulsechainTestnet',
-    '0x3AF': 'pulsechainTestnet',
-    '0x171': 'pulsechain',
-    '0x1': 'ethereum',
-    '0xaa36a7': 'sepolia',
-    '0xAA36A7': 'sepolia'
-  };
-
-  const networkKey = networkMap[requestedChainId];
+  const requestedChainId = String(params[0].chainId).toLowerCase();
+  const networkKey = CHAIN_ID_TO_NETWORK[requestedChainId];
 
   if (!networkKey) {
     // Chain not supported - return error code 4902 so dApp can call wallet_addEthereumChain
@@ -451,23 +542,45 @@ async function handleSwitchChain(params, origin) {
     };
   }
 
-  // Update current network
-  await save('currentNetwork', networkKey);
+  const currentNetwork = await getCurrentNetwork();
+  if (currentNetwork === networkKey) {
+    return { result: null };
+  }
 
-  // Notify all tabs about chain change
-  const newChainId = CHAIN_IDS[networkKey];
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'CHAIN_CHANGED',
-        chainId: newChainId
-      }).catch(() => {
-        // Tab might not have content script, ignore error
-      });
+  // Need user approval before switching networks
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const approvalToken = generateApprovalToken();
+
+    processedApprovals.set(approvalToken, {
+      timestamp: Date.now(),
+      requestId,
+      used: false
     });
-  });
 
-  return { result: null };
+    pendingChainSwitches.set(requestId, {
+      resolve,
+      reject,
+      origin,
+      networkKey,
+      chainId: CHAIN_IDS[networkKey],
+      approvalToken
+    });
+
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`src/popup/popup.html?action=switchChain&requestId=${requestId}`),
+      type: 'popup',
+      width: 400,
+      height: 520
+    });
+
+    setTimeout(() => {
+      if (pendingChainSwitches.has(requestId)) {
+        pendingChainSwitches.delete(requestId);
+        reject(new Error('Chain switch request timeout'));
+      }
+    }, 300000);
+  });
 }
 
 // Handle wallet_addEthereumChain - Add a new network (simplified version)
@@ -523,6 +636,7 @@ async function handleConnectionApproval(requestId, approved) {
     if (wallet && wallet.address) {
       // Save connected site
       await addConnectedSite(origin, [wallet.address]);
+      await notifyAccountsChanged();
 
       // Resolve the pending promise
       resolve({ result: [wallet.address] });
@@ -545,6 +659,52 @@ function getConnectionRequest(requestId) {
     return { success: true, origin };
   }
   return { success: false, error: 'Request not found' };
+}
+
+// Handle chain switch approval from popup
+async function handleChainSwitchApproval(requestId, approved) {
+  if (!pendingChainSwitches.has(requestId)) {
+    return { success: false, error: 'Request not found or expired' };
+  }
+
+  const { resolve, reject, networkKey, chainId, approvalToken } = pendingChainSwitches.get(requestId);
+
+  if (!validateAndUseApprovalToken(approvalToken)) {
+    pendingChainSwitches.delete(requestId);
+    reject(new Error('Invalid or already used approval token - possible replay attack'));
+    return { success: false, error: 'Invalid approval token' };
+  }
+
+  pendingChainSwitches.delete(requestId);
+
+  if (!approved) {
+    reject(new Error('User rejected chain switch'));
+    return { success: false, error: 'User rejected' };
+  }
+
+  await save('currentNetwork', networkKey);
+  notifyChainChanged(chainId);
+  resolve({ result: null });
+  return { success: true, chainId, networkName: NETWORK_NAMES[networkKey] };
+}
+
+// Get chain switch request details for popup
+async function getChainSwitchRequest(requestId) {
+  if (!pendingChainSwitches.has(requestId)) {
+    return { success: false, error: 'Request not found' };
+  }
+
+  const { origin, networkKey, chainId } = pendingChainSwitches.get(requestId);
+  const currentNetwork = await getCurrentNetwork();
+
+  return {
+    success: true,
+    origin,
+    chainId,
+    networkKey,
+    networkName: NETWORK_NAMES[networkKey] || networkKey,
+    currentNetworkName: NETWORK_NAMES[currentNetwork] || currentNetwork
+  };
 }
 
 // Get current network key
@@ -2394,13 +2554,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Extension popup/pages have no sender.tab; content scripts always have sender.tab.
   const PRIVILEGED_MESSAGES = new Set([
     'CONNECTION_APPROVAL', 'TRANSACTION_APPROVAL', 'SIGN_APPROVAL', 'SIGN_APPROVAL_LEDGER',
-    'TOKEN_ADD_APPROVAL', 'CREATE_SESSION', 'INVALIDATE_SESSION', 'INVALIDATE_ALL_SESSIONS',
+    'TOKEN_ADD_APPROVAL', 'CHAIN_SWITCH_APPROVAL', 'CREATE_SESSION', 'INVALIDATE_SESSION', 'INVALIDATE_ALL_SESSIONS',
     'DISCONNECT_SITE', 'SAVE_TX', 'SAVE_AND_MONITOR_TX', 'CLEAR_TX_HISTORY',
     'SPEED_UP_TX', 'CANCEL_TX', 'SPEED_UP_TX_COMPLETE', 'CANCEL_TX_COMPLETE',
     'GET_SIGNING_AUDIT_LOG', 'GET_TX_HISTORY', 'GET_PENDING_TX_COUNT', 'GET_PENDING_TXS',
-    'GET_TX_BY_HASH', 'REFRESH_TX_STATUS', 'REBROADCAST_TX', 'GET_CURRENT_GAS_PRICE',
+    'GET_TX_BY_HASH', 'REFRESH_TX_STATUS', 'REBROADCAST_TX', 'GET_CURRENT_GAS_PRICE', 'ACTIVE_WALLET_CHANGED',
     'GET_CONNECTION_REQUEST', 'GET_CONNECTED_SITES', 'GET_TRANSACTION_REQUEST',
-    'GET_SIGN_REQUEST', 'GET_TOKEN_ADD_REQUEST'
+    'GET_SIGN_REQUEST', 'GET_TOKEN_ADD_REQUEST', 'GET_CHAIN_SWITCH_REQUEST'
   ]);
 
   if (PRIVILEGED_MESSAGES.has(message.type) && sender.tab) {
@@ -2438,7 +2598,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'DISCONNECT_SITE':
           await removeConnectedSite(message.origin);
+          await notifyAccountsChanged();
           // Sending disconnect confirmation
+          sendResponse({ success: true });
+          break;
+
+        case 'ACTIVE_WALLET_CHANGED':
+          await notifyAccountsChanged();
           sendResponse({ success: true });
           break;
 
@@ -2479,6 +2645,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(tokenApprovalResult);
           break;
 
+        case 'CHAIN_SWITCH_APPROVAL':
+          const chainSwitchResult = await handleChainSwitchApproval(message.requestId, message.approved);
+          sendResponse(chainSwitchResult);
+          break;
+
         case 'SIGN_APPROVAL':
           const signApprovalResult = await handleSignApproval(
             message.requestId,
@@ -2509,6 +2680,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tokenRequestInfo = getTokenAddRequest(message.requestId);
           console.log('🫀 Sending token add request info:', tokenRequestInfo);
           sendResponse(tokenRequestInfo);
+          break;
+
+        case 'GET_CHAIN_SWITCH_REQUEST':
+          const chainSwitchInfo = await getChainSwitchRequest(message.requestId);
+          sendResponse(chainSwitchInfo);
           break;
 
         // Signing Audit Log

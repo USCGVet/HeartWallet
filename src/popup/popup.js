@@ -240,6 +240,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  if (action === 'switchChain' && requestId) {
+    // Show chain switch approval screen
+    await handleChainSwitchApprovalScreen(requestId);
+    return;
+  }
+
   if (action === 'transaction' && requestId) {
     // Show transaction approval screen
     setupEventListeners(); // Set up event listeners first
@@ -584,6 +590,7 @@ function setupEventListeners() {
     if (selectedWalletId) {
       try {
         await setActiveWallet(selectedWalletId);
+        await notifyActiveWalletChanged();
         const wallet = await getActiveWallet();
         currentState.address = wallet.address;
         await updateDashboard();
@@ -4835,6 +4842,7 @@ async function handleImportKeyMulti() {
 async function handleSwitchWallet(walletId) {
   try {
     await setActiveWallet(walletId);
+    await notifyActiveWalletChanged();
 
     // Refresh wallet list to show new active wallet
     await renderWalletList();
@@ -5086,6 +5094,69 @@ async function handleConnectionApprovalScreen(origin, requestId) {
       window.close();
     }
   });
+}
+
+async function notifyActiveWalletChanged() {
+  try {
+    await chrome.runtime.sendMessage({ type: 'ACTIVE_WALLET_CHANGED' });
+  } catch (error) {
+    console.warn('Could not notify background of wallet change:', error);
+  }
+}
+
+async function handleChainSwitchApprovalScreen(requestId) {
+  await loadSettings();
+  applyTheme();
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_CHAIN_SWITCH_REQUEST',
+      requestId
+    });
+
+    if (!response.success) {
+      alert('Chain switch request not found or expired');
+      window.close();
+      return;
+    }
+
+    document.getElementById('chain-switch-site-origin').textContent = response.origin;
+    document.getElementById('chain-switch-current-network').textContent = response.currentNetworkName;
+    document.getElementById('chain-switch-network-name').textContent = response.networkName;
+    document.getElementById('chain-switch-chain-id').textContent = response.chainId;
+
+    showScreen('screen-chain-switch-approval');
+
+    document.getElementById('btn-approve-chain-switch').addEventListener('click', async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'CHAIN_SWITCH_APPROVAL',
+          requestId,
+          approved: true
+        });
+        window.close();
+      } catch (error) {
+        alert('Error approving network switch: ' + sanitizeError(error.message));
+      }
+    });
+
+    document.getElementById('btn-reject-chain-switch').addEventListener('click', async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'CHAIN_SWITCH_APPROVAL',
+          requestId,
+          approved: false
+        });
+        window.close();
+      } catch (error) {
+        alert('Error rejecting network switch: ' + sanitizeError(error.message));
+        window.close();
+      }
+    });
+  } catch (error) {
+    alert('Error loading network switch request: ' + sanitizeError(error.message));
+    window.close();
+  }
 }
 
 // ===== TRANSACTION APPROVAL =====

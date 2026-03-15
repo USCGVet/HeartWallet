@@ -141,6 +141,8 @@ I-Love-PulseChain-369-Forever!      (Better - 30 chars)
 - **Origin validation**: Secure postMessage with specific origins
 - **One-time approval tokens**: Each approval can only be used once
 - **Clear transaction display**: Shows recipient, amount, gas fees before approval
+- **Account-specific dApp access**: Sites only see wallets you explicitly approved
+- **Quick network switch confirmation**: Supported chain changes use a simple approval prompt
 
 ### 7. **Auto-Lock Timer**
 - Automatically locks wallet after inactivity (configurable: 5, 15, 30, or 60 minutes)

@@ -1262,6 +1262,46 @@
     </div>
   </div>
 
+  <!-- Chain Switch Approval Screen -->
+  <div id="screen-chain-switch-approval" class="hidden">
+    <div class="container">
+      <div class="text-center mb-3">
+        <h1>Network Switch</h1>
+      </div>
+
+      <div class="panel" style="border-color: var(--terminal-warning);">
+        <p class="text-center mb-2" style="font-size: 13px;">
+          <strong id="chain-switch-site-origin">website.com</strong>
+        </p>
+        <p class="text-center text-dim" style="font-size: 11px;">
+          wants to switch your wallet network
+        </p>
+      </div>
+
+      <div class="panel">
+        <p class="text-dim mb-1" style="font-size: 11px;">Current Network:</p>
+        <p style="font-size: 13px; margin-bottom: 12px;" id="chain-switch-current-network">
+          PulseChain Testnet V4
+        </p>
+
+        <p class="text-dim mb-1" style="font-size: 11px;">Requested Network:</p>
+        <p style="font-size: 14px; font-weight: bold; margin-bottom: 8px;" id="chain-switch-network-name">
+          Ethereum Mainnet
+        </p>
+
+        <p class="text-dim mb-1" style="font-size: 11px;">Chain ID:</p>
+        <p style="font-family: var(--font-mono); font-size: 11px; word-break: break-all;" id="chain-switch-chain-id">
+          0x1
+        </p>
+      </div>
+
+      <div class="button-group mt-3">
+        <button id="btn-approve-chain-switch" class="btn-primary">SWITCH NETWORK</button>
+        <button id="btn-reject-chain-switch" class="btn-danger">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Transaction Approval Screen -->
   <div id="screen-transaction-approval" class="hidden">
     <div class="container">
