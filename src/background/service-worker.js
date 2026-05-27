@@ -2551,7 +2551,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // SECURITY: Define message types that are privileged (popup-only).
   // These must NOT be callable from content scripts (which run on arbitrary web pages).
-  // Extension popup/pages have no sender.tab; content scripts always have sender.tab.
+  // Approval popups are opened via chrome.windows.create, so they do have sender.tab —
+  // distinguish them from content scripts by checking sender.url against our extension origin.
   const PRIVILEGED_MESSAGES = new Set([
     'CONNECTION_APPROVAL', 'TRANSACTION_APPROVAL', 'SIGN_APPROVAL', 'SIGN_APPROVAL_LEDGER',
     'TOKEN_ADD_APPROVAL', 'CHAIN_SWITCH_APPROVAL', 'CREATE_SESSION', 'INVALIDATE_SESSION', 'INVALIDATE_ALL_SESSIONS',
@@ -2563,7 +2564,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'GET_SIGN_REQUEST', 'GET_TOKEN_ADD_REQUEST', 'GET_CHAIN_SWITCH_REQUEST'
   ]);
 
-  if (PRIVILEGED_MESSAGES.has(message.type) && sender.tab) {
+  const extensionOrigin = `chrome-extension://${chrome.runtime.id}/`;
+  const isFromExtensionPage = typeof sender.url === 'string' && sender.url.startsWith(extensionOrigin);
+
+  if (PRIVILEGED_MESSAGES.has(message.type) && !isFromExtensionPage) {
     console.warn('🫀 SECURITY: Blocked privileged message from content script:', message.type, sender.url);
     sendResponse({ success: false, error: 'Unauthorized: privileged messages must come from extension pages' });
     return true;
