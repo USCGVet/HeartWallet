@@ -2678,9 +2678,12 @@ async function handleSendTransaction() {
         value: ethers.parseEther(amount)
       };
 
-      // Add gas price if selected
-      if (gasPrice) {
-        tx.gasPrice = gasPrice;
+      // EIP-1559 fees with a robust cap so volatile base fees can't strand the tx
+      // (only the actual base fee + tip is charged); honors any UI selection as a floor.
+      {
+        const fees = await rpc.getEip1559Fees(currentState.network, gasPrice || null);
+        tx.maxFeePerGas = fees.maxFeePerGas;
+        tx.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
       }
 
       // Add custom nonce if provided
@@ -2741,10 +2744,12 @@ async function handleSendTransaction() {
 
       const amountWei = erc20.parseTokenAmount(amount, token.decimals);
 
-      // For token transfers, we need to pass gas options to the transfer function
+      // For token transfers, pass EIP-1559 gas options (robust cap; only base + tip charged)
       const txOptions = {};
-      if (gasPrice) {
-        txOptions.gasPrice = gasPrice;
+      {
+        const fees = await rpc.getEip1559Fees(currentState.network, gasPrice || null);
+        txOptions.maxFeePerGas = fees.maxFeePerGas;
+        txOptions.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
       }
       if (customNonce !== null) {
         txOptions.nonce = customNonce;
@@ -3521,9 +3526,11 @@ async function handleTokenSend() {
       };
       tx.chainId = chainIdMap[currentState.network] || 943;
 
-      // Add gas price
-      if (gasPrice) {
-        tx.gasPrice = gasPrice;
+      // EIP-1559 fees with a robust cap (only the actual base fee + tip is charged)
+      {
+        const fees = await rpc.getEip1559Fees(currentState.network, gasPrice || null);
+        tx.maxFeePerGas = fees.maxFeePerGas;
+        tx.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
       }
 
       // Get nonce if not custom
@@ -3605,8 +3612,10 @@ async function handleTokenSend() {
       );
 
       const txOptions = {};
-      if (gasPrice) {
-        txOptions.gasPrice = gasPrice;
+      {
+        const fees = await rpc.getEip1559Fees(currentState.network, gasPrice || null);
+        txOptions.maxFeePerGas = fees.maxFeePerGas;
+        txOptions.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
       }
       if (customNonce !== null) {
         txOptions.nonce = customNonce;

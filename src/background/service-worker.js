@@ -1364,24 +1364,21 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       // Using provided gas limit
     }
 
-    // Apply user-selected gas price if provided, or use safe network gas price
-    if (gasPrice) {
-      // Use user-selected gas price from UI
-      txToSend.gasPrice = gasPrice;
-      // Using custom gas price
-    } else {
-      // Fallback: Fetch safe gas price (base fee * 2) to prevent stuck transactions
-      try {
-        const safeGasPriceHex = await rpc.getSafeGasPrice(network);
-        txToSend.gasPrice = BigInt(safeGasPriceHex);
-        // Using safe gas price from base fee
-      } catch (error) {
-        console.warn('Error getting safe gas price, using provider fallback:', error);
-        // Last resort fallback to provider
-        const networkGasPrice = await provider.getFeeData();
-        if (networkGasPrice.gasPrice) {
-          txToSend.gasPrice = networkGasPrice.gasPrice;
-        }
+    // EIP-1559 fees: use a generous maxFeePerGas cap so PulseChain's volatile base fee
+    // cannot strand the transaction (only the actual base fee + tip is charged, so the
+    // high cap costs nothing extra). Any UI-selected `gasPrice` is honored as a floor.
+    try {
+      const fees = await rpc.getEip1559Fees(network, gasPrice || null);
+      txToSend.maxFeePerGas = fees.maxFeePerGas;
+      txToSend.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
+    } catch (error) {
+      console.warn('EIP-1559 fee calc failed, falling back to provider fee data:', error);
+      const fd = await provider.getFeeData();
+      if (fd.maxFeePerGas) {
+        txToSend.maxFeePerGas = fd.maxFeePerGas;
+        txToSend.maxPriorityFeePerGas = fd.maxPriorityFeePerGas ?? (fd.maxFeePerGas / 10n);
+      } else if (fd.gasPrice) {
+        txToSend.gasPrice = fd.gasPrice;
       }
     }
 
@@ -1398,7 +1395,9 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       to: txRequest.to || null,
       value: txRequest.value || '0',
       data: tx.data || '0x',
-      gasPrice: tx.gasPrice ? tx.gasPrice.toString() : '0',
+      gasPrice: tx.gasPrice ? tx.gasPrice.toString() : (tx.maxFeePerGas ? tx.maxFeePerGas.toString() : '0'),
+      maxFeePerGas: tx.maxFeePerGas ? tx.maxFeePerGas.toString() : undefined,
+      maxPriorityFeePerGas: tx.maxPriorityFeePerGas ? tx.maxPriorityFeePerGas.toString() : undefined,
       gasLimit: tx.gasLimit ? tx.gasLimit.toString() : null,
       nonce: tx.nonce,
       network: network,

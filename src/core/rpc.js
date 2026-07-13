@@ -403,6 +403,56 @@ export async function getSafeGasPrice(network) {
 }
 
 /**
+ * Computes robust EIP-1559 fees for a transaction.
+ *
+ * Returns a GENEROUS maxFeePerGas cap so a volatile base fee (PulseChain can move the
+ * base fee several-fold within a minute) cannot leave the transaction stranded — while
+ * the network still only charges the ACTUAL base fee + tip, so the high cap costs nothing
+ * extra. This replaces the old legacy fixed-gasPrice approach, which both overpaid and
+ * got stuck whenever the base fee rose above the fixed price.
+ *
+ * @param {string} network - Network key
+ * @param {string|bigint|null} preferredMaxFee - optional UI/user-selected max fee (wei); honored as a floor
+ * @param {number} bufferMultiplier - base-fee multiplier for the cap (default 4 ≈ 11 blocks of max +12.5%/block growth)
+ * @returns {Promise<{maxFeePerGas: bigint, maxPriorityFeePerGas: bigint}>}
+ */
+export function computeEip1559Fees(baseFeeWei, priorityWei, preferredMaxFee = null, bufferMultiplier = 4) {
+  const baseFee = BigInt(baseFeeWei);
+
+  // Priority tip floor: if none supplied, use 5% of the base fee so the tx isn't starved.
+  let priority = priorityWei && BigInt(priorityWei) > 0n ? BigInt(priorityWei) : baseFee / 20n;
+
+  // Generous cap = baseFee * bufferMultiplier + tip. Only base + tip is actually charged.
+  let maxFeePerGas = baseFee * BigInt(bufferMultiplier) + priority;
+
+  // Honor a higher UI/user-selected cap if one was provided.
+  if (preferredMaxFee != null && preferredMaxFee !== '') {
+    const pref = BigInt(preferredMaxFee);
+    if (pref > maxFeePerGas) maxFeePerGas = pref;
+  }
+
+  // Invariant: maxPriorityFeePerGas must never exceed maxFeePerGas.
+  if (priority > maxFeePerGas) priority = maxFeePerGas;
+
+  return { maxFeePerGas, maxPriorityFeePerGas: priority };
+}
+
+// Async wrapper: fetches the base fee + market priority tip, then computes robust fees.
+export async function getEip1559Fees(network, preferredMaxFee = null, bufferMultiplier = 4) {
+  const baseFee = await getBaseFee(network);
+  let priority = 0n;
+  try {
+    const recs = await getGasPriceRecommendations(network);
+    if (recs && recs.fast && recs.fast.maxPriorityFeePerGas) {
+      priority = BigInt(recs.fast.maxPriorityFeePerGas);
+    }
+  } catch (error) {
+    console.warn('Could not fetch priority fee, using base-fee fraction:', error);
+  }
+  return computeEip1559Fees(baseFee, priority, preferredMaxFee, bufferMultiplier);
+}
+
+/**
  * Gets fee history from recent blocks for accurate gas price estimation
  * Uses eth_feeHistory to analyze what priority fees were actually paid
  * @param {string} network - Network key
