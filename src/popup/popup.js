@@ -35,9 +35,10 @@ import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD, getNativeTokenPrice, getNativeTokenSymbol } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
-import { escapeHtml, sanitizeError, replaceChildren } from './lib/html.js';
+import { escapeHtml, sanitizeError, h, replaceChildren } from './lib/html.js';
 import { tokenRow, emptyTokenList } from './render/tokenRow.js';
 import { txParamsList } from './render/txParams.js';
+import { walletCard } from './render/walletCard.js';
 import { formatGweiSmart, formatBalanceWithCommas } from './lib/format.js';
 import { hashPrivacyPin } from './lib/crypto.js';
 import {
@@ -2200,14 +2201,19 @@ async function showSendScreen() {
     'sepolia': 'SEP'
   };
 
-  let options = `<option value="native">Native (${symbols[currentState.network] || 'TOKEN'})</option>`;
+  const options = [
+    h('option', {
+      value: 'native',
+      text: `Native (${symbols[currentState.network] || 'TOKEN'})`
+    })
+  ];
 
   const allTokens = await tokens.getAllTokens(currentState.network);
   for (const token of allTokens) {
-    options += `<option value="${escapeHtml(token.address)}">${escapeHtml(token.symbol)}</option>`;
+    options.push(h('option', { value: token.address, text: token.symbol }));
   }
 
-  assetSelect.innerHTML = options;
+  replaceChildren(assetSelect, options);
 
   // Set initial balance with formatting
   const balanceEl = document.getElementById('send-available-balance');
@@ -4207,66 +4213,14 @@ async function renderWalletList() {
   walletListDiv.innerHTML = '';
 
   walletsData.walletList.forEach(wallet => {
-    const isActive = wallet.id === walletsData.activeWalletId;
-    const walletCard = document.createElement('div');
-    walletCard.className = 'panel mb-2';
-    if (isActive) {
-      walletCard.style.borderColor = 'var(--terminal-success)';
-      walletCard.style.borderWidth = '2px';
-    }
-
-    walletCard.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
-        <div style="flex: 1;">
-          <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">
-            ${isActive ? '✓ ' : ''}${escapeHtml(wallet.nickname || 'Unnamed Wallet')}
-            ${isActive ? '<span class="text-success" style="font-size: 11px; margin-left: 8px;">[ACTIVE]</span>' : ''}
-          </div>
-          <div class="text-dim" style="font-size: 11px; font-family: var(--font-mono); word-break: break-all;">
-            ${escapeHtml(wallet.address || 'Address not loaded')}
-          </div>
-          <div class="text-dim" style="font-size: 10px; margin-top: 4px;">
-            ${wallet.isHardwareWallet ? `🔐 ${wallet.hardwareType.toUpperCase()} Hardware Wallet` : (wallet.importMethod === 'create' ? 'Created' : 'Imported')} • ${new Date(wallet.createdAt).toLocaleDateString()}
-          </div>
-        </div>
-      </div>
-      <div class="button-group" style="gap: 6px;">
-        ${!isActive ? `<button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="switch">SWITCH</button>` : ''}
-        ${wallet.isHardwareWallet ? `<button class="btn btn-small" style="border-color: var(--terminal-info); color: var(--terminal-info); white-space: nowrap;" data-wallet-id="${wallet.id}" data-action="reconnect">CONNECT</button>` : ''}
-        <button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="rename">RENAME</button>
-        ${!wallet.isHardwareWallet ? `<button class="btn btn-small" data-wallet-id="${wallet.id}" data-action="export">EXPORT</button>` : ''}
-        <button class="btn btn-danger btn-small" data-wallet-id="${wallet.id}" data-action="delete">DELETE</button>
-      </div>
-    `;
-
-    // Add event listeners for buttons
-    const buttons = walletCard.querySelectorAll('button');
-    buttons.forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const walletId = btn.dataset.walletId;
-        const action = btn.dataset.action;
-
-        switch (action) {
-          case 'switch':
-            await handleSwitchWallet(walletId);
-            break;
-          case 'reconnect':
-            handleReconnectLedger(walletId, wallet);
-            break;
-          case 'rename':
-            handleRenameWalletPrompt(walletId, wallet.nickname);
-            break;
-          case 'export':
-            await handleExportForWallet(walletId);
-            break;
-          case 'delete':
-            await handleDeleteWalletMulti(walletId);
-            break;
-        }
-      });
-    });
-
-    walletListDiv.appendChild(walletCard);
+    walletListDiv.appendChild(walletCard(wallet, {
+      isActive: wallet.id === walletsData.activeWalletId,
+      onSwitch: handleSwitchWallet,
+      onReconnect: handleReconnectLedger,
+      onRename: handleRenameWalletPrompt,
+      onExport: handleExportForWallet,
+      onDelete: handleDeleteWalletMulti
+    }));
   });
 }
 
