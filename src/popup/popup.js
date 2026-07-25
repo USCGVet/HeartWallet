@@ -37,6 +37,7 @@ import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
 import { escapeHtml, sanitizeError, replaceChildren } from './lib/html.js';
 import { tokenRow, emptyTokenList } from './render/tokenRow.js';
+import { txParamsList } from './render/txParams.js';
 import { formatGweiSmart, formatBalanceWithCommas } from './lib/format.js';
 import { hashPrivacyPin } from './lib/crypto.js';
 import {
@@ -5756,90 +5757,6 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
   };
 }
 
-/**
- * Format parameter value for display based on type
- */
-function formatParameterValue(value, type) {
-  try {
-    // Handle arrays
-    if (type.includes('[]')) {
-      if (Array.isArray(value)) {
-        const elementType = type.replace('[]', '');
-        const formattedElements = value.map((v, i) => {
-          const formattedValue = formatParameterValue(v, elementType);
-          return `[${i}]: ${formattedValue}`;
-        });
-        return formattedElements.join('<br>');
-      }
-    }
-
-    // Handle addresses
-    if (type === 'address') {
-      const escaped = escapeHtml(value);
-      const shortAddr = `${escapeHtml(value.slice(0, 6))}...${escapeHtml(value.slice(-4))}`;
-      return `<span title="${escaped}" style="cursor: help;">${shortAddr}</span>`;
-    }
-
-    // Handle numbers (uint/int)
-    if (type.startsWith('uint') || type.startsWith('int')) {
-      const valueStr = escapeHtml(value.toString());
-
-      // For large numbers, try to show both raw and formatted
-      if (valueStr.length > 18) {
-        try {
-          const etherValue = ethers.formatEther(value.toString());
-          // Only show ether conversion if it makes sense (> 0.000001)
-          if (parseFloat(etherValue) > 0.000001) {
-            return `${valueStr}<br><span style="color: var(--terminal-dim); font-size: 9px;">(≈ ${escapeHtml(parseFloat(etherValue).toFixed(6))} tokens)</span>`;
-          }
-        } catch (e) {
-          // If conversion fails, just show raw
-        }
-      }
-
-      return valueStr;
-    }
-
-    // Handle booleans
-    if (type === 'bool') {
-      return value ? '<span style="color: var(--terminal-success);">true</span>' : '<span style="color: var(--terminal-warning);">false</span>';
-    }
-
-    // Handle bytes
-    if (type === 'bytes' || type.startsWith('bytes')) {
-      if (typeof value === 'string') {
-        const escaped = escapeHtml(value);
-        if (value.length > 66) {
-          return `${escapeHtml(value.slice(0, 66))}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
-        }
-        return escaped;
-      }
-    }
-
-    // Handle strings
-    if (type === 'string') {
-      if (value.length > 50) {
-        return `${escapeHtml(value.slice(0, 50))}...<br><span style="color: var(--terminal-dim); font-size: 9px;">(${value.length} chars)</span>`;
-      }
-      return escapeHtml(value);
-    }
-
-    // Default: convert to string
-    if (typeof value === 'object' && value !== null) {
-      const jsonStr = JSON.stringify(value, null, 2);
-      if (jsonStr.length > 100) {
-        return `<pre style="font-size: 9px; overflow-x: auto;">${escapeHtml(jsonStr.slice(0, 100))}...</pre>`;
-      }
-      return `<pre style="font-size: 9px;">${escapeHtml(jsonStr)}</pre>`;
-    }
-
-    return escapeHtml(String(value));
-  } catch (error) {
-    console.error('Error formatting parameter value:', error);
-    return escapeHtml(String(value));
-  }
-}
-
 async function handleTransactionApprovalScreen(requestId) {
   // Load settings for theme
   await loadSettings();
@@ -5942,22 +5859,7 @@ async function handleTransactionApprovalScreen(requestId) {
           const paramsList = document.getElementById('tx-params-list');
           paramsSection.classList.remove('hidden');
 
-          let paramsHTML = '';
-          for (const param of decodedTx.params) {
-            const valueDisplay = formatParameterValue(param.value, param.type);
-            paramsHTML += `
-              <div style="margin-bottom: 12px; padding: 8px; background: var(--terminal-bg); border: 1px solid var(--terminal-border); border-radius: 4px;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                  <span style="font-size: 10px; color: var(--terminal-dim);">${escapeHtml(param.name)}</span>
-                  <span style="font-size: 9px; color: var(--terminal-dim); font-family: var(--font-mono);">${escapeHtml(param.type)}</span>
-                </div>
-                <div style="font-size: 10px; font-family: var(--font-mono); word-break: break-all;">
-                  ${valueDisplay}
-                </div>
-              </div>
-            `;
-          }
-          paramsList.innerHTML = paramsHTML;
+          replaceChildren(paramsList, txParamsList(decodedTx.params));
         } else {
           document.getElementById('tx-params-section').classList.add('hidden');
         }
