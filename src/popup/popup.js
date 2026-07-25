@@ -35,111 +35,15 @@ import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD, getNativeTokenPrice, getNativeTokenSymbol } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
-
-// ============================================================================
-// SECURITY UTILITIES
-// ============================================================================
-
-/**
- * Escapes HTML special characters to prevent XSS attacks
- *
- * SECURITY: Escapes quotes as well as angle brackets. The previous
- * textContent -> innerHTML round-trip only escaped & < >, because the HTML
- * serializer does not escape quotes inside text nodes. That left every
- * `attr="${escapeHtml(x)}"` interpolation open to attribute injection.
- * Safe in text positions too: &quot;/&#39; render as " and '.
- *
- * @param {string} text - Text to escape
- * @returns {string} HTML-safe text, usable in both text and quoted-attribute contexts
- */
-function escapeHtml(text) {
-  if (typeof text !== 'string') return '';
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Sanitizes error messages for safe display in alerts and UI
- * Removes HTML tags, scripts, and limits length
- * @param {string} message - Error message to sanitize
- * @returns {string} Sanitized message
- */
-function sanitizeError(message) {
-  if (typeof message !== 'string') return 'Unknown error';
-  
-  // Remove null bytes and control characters (except newlines and tabs)
-  let sanitized = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  
-  // Remove HTML tags
-  sanitized = sanitized.replace(/<[^>]*>/g, '');
-  
-  // Remove script-like content
-  sanitized = sanitized.replace(/javascript:/gi, '');
-  sanitized = sanitized.replace(/on\w+\s*=/gi, '');
-  
-  // Limit length to prevent DoS
-  if (sanitized.length > 300) {
-    sanitized = sanitized.substring(0, 297) + '...';
-  }
-  
-  return sanitized || 'Unknown error';
-}
-
-/**
- * Hash a privacy PIN using SHA-256
- * Note: This is for view-only protection, not for securing private keys.
- * The actual wallet encryption uses Argon2id which is much stronger.
- * @param {string} pin - The PIN to hash
- * @returns {Promise<string>} Hex-encoded hash
- */
-async function hashPrivacyPin(pin) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(pin + 'HeartWallet-PrivacyMode-Salt');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-// ============================================================================
-// GAS PRICE HELPERS
-// ============================================================================
-
-/**
- * Formats gas price in Gwei with appropriate precision based on magnitude
- * PulseChain uses very high gas prices (millions of Gwei), Ethereum uses low (< 100 Gwei)
- * @param {bigint|string|number} weiValue - Gas price in wei
- * @returns {string} Formatted Gwei string (always uses comma as thousand separator for consistent parsing)
- */
-function formatGweiSmart(weiValue) {
-  const wei = typeof weiValue === 'bigint' ? weiValue : BigInt(weiValue);
-  const gwei = Number(wei) / 1e9;
-
-  // Helper to format with commas as thousand separators (locale-independent)
-  const formatWithCommas = (num) => {
-    return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  };
-
-  if (gwei >= 1000000) {
-    // Millions of Gwei (PulseChain) - show no decimals
-    return formatWithCommas(gwei);
-  } else if (gwei >= 1000) {
-    // Thousands of Gwei - show no decimals
-    return formatWithCommas(gwei);
-  } else if (gwei >= 1) {
-    // Normal Gwei - show 2 decimals
-    return gwei.toFixed(2);
-  } else if (gwei >= 0.001) {
-    // Sub-Gwei - show 3 decimals
-    return gwei.toFixed(3);
-  } else {
-    // Very low - show 6 decimals
-    return gwei.toFixed(6);
-  }
-}
+import { escapeHtml, sanitizeError } from './lib/html.js';
+import { formatGweiSmart, formatBalanceWithCommas } from './lib/format.js';
+import { hashPrivacyPin } from './lib/crypto.js';
+import {
+  NETWORK_NAMES,
+  getExplorerUrl,
+  getNetworkSymbol,
+  getNetworkName
+} from './lib/networks.js';
 
 // ============================================================================
 // STATE
@@ -183,58 +87,6 @@ let autoLockTimer = null;
 const RATE_LIMIT_KEY = 'password_attempts';
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-
-// Network names for display
-const NETWORK_NAMES = {
-  'pulsechainTestnet': 'PulseChain Testnet V4',
-  'pulsechain': 'PulseChain Mainnet',
-  'ethereum': 'Ethereum Mainnet',
-  'sepolia': 'Sepolia Testnet'
-};
-
-const BLOCK_EXPLORERS = {
-  'pulsechainTestnet': {
-    base: 'https://scan.v4.testnet.pulsechain.com',
-    tx: '/tx/{hash}',
-    address: '/address/{address}',
-    token: '/token/{address}'
-  },
-  'pulsechain': {
-    base: 'https://scan.mypinata.cloud/ipfs/bafybeienxyoyrhn5tswclvd3gdjy5mtkkwmu37aqtml6onbf7xnb3o22pe/',
-    tx: '#/tx/{hash}',
-    address: '#/address/{address}',
-    token: '#/token/{address}'
-  },
-  'ethereum': {
-    base: 'https://etherscan.io',
-    tx: '/tx/{hash}',
-    address: '/address/{address}',
-    token: '/token/{address}'
-  },
-  'sepolia': {
-    base: 'https://sepolia.etherscan.io',
-    tx: '/tx/{hash}',
-    address: '/address/{address}',
-    token: '/token/{address}'
-  }
-};
-
-/**
- * Build explorer URL for a specific type
- * @param {string} network - Network key
- * @param {string} type - URL type ('tx', 'address', 'token')
- * @param {string} value - The hash or address value
- * @returns {string} Complete explorer URL
- */
-function getExplorerUrl(network, type, value) {
-  const explorer = BLOCK_EXPLORERS[network];
-  if (!explorer) return '';
-
-  const pattern = explorer[type];
-  if (!pattern) return '';
-
-  return explorer.base + pattern.replace(`{${type === 'tx' ? 'hash' : 'address'}}`, value);
-}
 
 // ===== INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2199,29 +2051,6 @@ async function fetchBalance() {
  * @param {number} fullDecimals - Full precision decimals (default 18)
  * @returns {{display: string, tooltip: string}}
  */
-function formatBalanceWithCommas(balanceString, fullDecimals = 18) {
-  const balance = parseFloat(balanceString);
-  if (isNaN(balance)) {
-    return { display: balanceString, tooltip: balanceString };
-  }
-
-  // Display value (keep current decimals, add commas)
-  const parts = balanceString.split('.');
-  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const displayValue = parts.join('.');
-
-  // Full precision value with commas
-  const fullPrecision = balance.toFixed(fullDecimals);
-  const fullParts = fullPrecision.split('.');
-  fullParts[0] = fullParts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const fullValue = fullParts.join('.');
-
-  return {
-    display: displayValue,
-    tooltip: `Full precision: ${fullValue}`
-  };
-}
-
 function updateBalanceDisplay() {
   const balanceEl = document.getElementById('balance-amount');
   if (balanceEl) {
@@ -8684,26 +8513,6 @@ async function showTransactionStatus(txHash, address, requestId) {
 
   // Poll every 3 seconds
   txStatusPollInterval = setInterval(updateStatus, 3000);
-}
-
-function getNetworkSymbol(network) {
-  const symbols = {
-    'pulsechain': 'PLS',
-    'pulsechainTestnet': 'tPLS',
-    'ethereum': 'ETH',
-    'sepolia': 'SepoliaETH'
-  };
-  return symbols[network] || 'ETH';
-}
-
-function getNetworkName(network) {
-  const names = {
-    'pulsechain': 'PulseChain Mainnet',
-    'pulsechainTestnet': 'PulseChain Testnet V4',
-    'ethereum': 'Ethereum Mainnet',
-    'sepolia': 'Sepolia Testnet'
-  };
-  return names[network] || network;
 }
 
 // ===== UTILITIES =====
