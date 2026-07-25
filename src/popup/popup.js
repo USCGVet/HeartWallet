@@ -39,6 +39,7 @@ import { escapeHtml, sanitizeError, h, replaceChildren } from './lib/html.js';
 import { tokenRow, emptyTokenList } from './render/tokenRow.js';
 import { txParamsList } from './render/txParams.js';
 import { walletCard } from './render/walletCard.js';
+import { txHistoryRow } from './render/txHistoryRow.js';
 import { formatGweiSmart, formatBalanceWithCommas } from './lib/format.js';
 import { hashPrivacyPin } from './lib/crypto.js';
 import {
@@ -6940,39 +6941,7 @@ async function renderTransactionHistory(filter = 'all') {
       return;
     }
 
-    let html = '';
-    for (const tx of transactions) {
-      const statusIcon = tx.status === 'pending' ? '⏳' :
-                        tx.status === 'confirmed' ? '✅' : '❌';
-      const statusColor = tx.status === 'pending' ? 'var(--terminal-warning)' :
-                         tx.status === 'confirmed' ? '#44ff44' : '#ff4444';
-
-      const date = new Date(tx.timestamp).toLocaleString();
-      const valueEth = ethers.formatEther(tx.value || '0');
-      const gasGwei = ethers.formatUnits(tx.gasPrice || '0', 'gwei');
-
-      // Add refresh button for pending transactions
-      const refreshButton = tx.status === 'pending'
-        ? `<button class="btn-small" style="font-size: 9px; padding: 4px 8px; margin-left: 8px;" data-refresh-tx="${tx.hash}">🔄 Refresh</button>`
-        : '';
-
-      html += `
-        <div class="panel mb-2" style="padding: 12px; cursor: pointer; border-color: ${statusColor};" data-tx-hash="${tx.hash}">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <div style="display: flex; align-items: center;">
-              <span style="color: ${statusColor}; font-size: 14px;">${statusIcon} ${tx.status.toUpperCase()}</span>
-              ${refreshButton}
-            </div>
-            <span class="text-dim" style="font-size: 10px;">${date}</span>
-          </div>
-          <p class="text-dim" style="font-size: 10px; margin-bottom: 4px;">Hash: ${tx.hash.slice(0, 20)}...</p>
-          <p class="text-dim" style="font-size: 10px; margin-bottom: 4px;">Value: ${valueEth} ${getNetworkSymbol(tx.network)}</p>
-          <p class="text-dim" style="font-size: 10px;">Gas: ${gasGwei} Gwei • Nonce: ${tx.nonce}</p>
-        </div>
-      `;
-    }
-
-    listEl.innerHTML = html;
+    replaceChildren(listEl, transactions.map(txHistoryRow));
 
     // Event delegation is set up once in setupTransactionHistoryEventDelegation()
     // No need to add individual listeners here
