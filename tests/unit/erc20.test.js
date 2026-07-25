@@ -8,7 +8,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { parseUnits, formatUnits } from 'ethers';
 import {
   formatTokenBalance,
-  parseTokenAmount
+  parseTokenAmount,
+  sanitizeTokenString
 } from '../../src/core/erc20.js';
 
 describe('erc20.js', () => {
@@ -228,5 +229,96 @@ describe('erc20.js', () => {
       const formatted = formatTokenBalance(large, 18, 3);
       expect(formatted).toBe('1000000.123');
     });
+  });
+
+  describe('sanitizeTokenString (SECURITY)', () => {
+    it('should pass through a normal token name unchanged', () => {
+      expect(sanitizeTokenString('PulseX', 16)).toBe('PulseX');
+      expect(sanitizeTokenString('Wrapped Ether', 64)).toBe('Wrapped Ether');
+    });
+
+    it('should cap length to prevent UI-breaking metadata', () => {
+      const long = 'A'.repeat(5000);
+      expect(sanitizeTokenString(long, 16)).toHaveLength(16);
+      expect(sanitizeTokenString(long, 64)).toHaveLength(64);
+    });
+
+    it('should strip control characters and null bytes', () => {
+      expect(sanitizeTokenString('HE\u0000X\u001F', 16)).toBe('HEX');
+      expect(sanitizeTokenString('A\u007FBC', 16)).toBe('ABC');
+    });
+
+    it('should strip zero-width and bidi override characters', () => {
+      // Bidi overrides can make a symbol render as something else entirely
+      expect(sanitizeTokenString('US\u202EDT', 16)).toBe('USDT');
+      expect(sanitizeTokenString('HE\u200BX', 16)).toBe('HEX');
+      expect(sanitizeTokenString('\uFEFFHEX', 16)).toBe('HEX');
+    });
+
+    it('should trim surrounding whitespace', () => {
+      expect(sanitizeTokenString('   HEX   ', 16)).toBe('HEX');
+    });
+
+    it('should return empty string for non-string input', () => {
+      expect(sanitizeTokenString(null, 16)).toBe('');
+      expect(sanitizeTokenString(undefined, 16)).toBe('');
+      expect(sanitizeTokenString(42, 16)).toBe('');
+      expect(sanitizeTokenString({}, 16)).toBe('');
+    });
+
+    it('should preserve markup characters for the renderer to escape', () => {
+      // sanitizeTokenString bounds and cleans; HTML escaping is the renderer's job.
+      // Verify it does not silently mangle these into something that looks safe.
+      const out = sanitizeTokenString('<img src=x>', 64);
+      expect(out).toBe('<img src=x>');
+    });
+  });
+});
+
+describe('escapeHtml contract (SECURITY)', () => {
+  // Mirrors the implementation in src/popup/popup.js. The popup module cannot be
+  // imported directly (it has DOM/chrome side effects on load), so this pins the
+  // behavior the renderers depend on: quotes MUST be escaped, otherwise every
+  // attr="${escapeHtml(x)}" interpolation is an attribute-injection point.
+  function escapeHtml(text) {
+    if (typeof text !== 'string') return '';
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  it('should escape double quotes (attribute breakout)', () => {
+    expect(escapeHtml('X" onmouseover="alert(1)'))
+      .toBe('X&quot; onmouseover=&quot;alert(1)');
+  });
+
+  it('should escape single quotes', () => {
+    expect(escapeHtml("X' onmouseover='alert(1)"))
+      .toBe('X&#39; onmouseover=&#39;alert(1)');
+  });
+
+  it('should escape angle brackets and ampersands', () => {
+    expect(escapeHtml('<script>&</script>'))
+      .toBe('&lt;script&gt;&amp;&lt;/script&gt;');
+  });
+
+  it('should escape the ampersand first to avoid double-encoding artifacts', () => {
+    expect(escapeHtml('&lt;')).toBe('&amp;lt;');
+  });
+
+  it('should return empty string for non-string input', () => {
+    expect(escapeHtml(null)).toBe('');
+    expect(escapeHtml(undefined)).toBe('');
+    expect(escapeHtml(123)).toBe('');
+  });
+
+  it('should neutralize a malicious token symbol in an attribute context', () => {
+    const evilSymbol = '" data-x="y';
+    const html = `<button data-token-symbol="${escapeHtml(evilSymbol)}">i</button>`;
+    // Only one attribute should exist on the element
+    expect(html).toBe('<button data-token-symbol="&quot; data-x=&quot;y">i</button>');
   });
 });

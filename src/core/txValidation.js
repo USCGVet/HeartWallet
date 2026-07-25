@@ -10,7 +10,10 @@ import { ethers } from 'ethers';
 /**
  * Validates a transaction request from a dApp
  * @param {Object} txRequest - Transaction request object
- * @param {number} maxGasPriceGwei - Maximum allowed gas price in Gwei (default 1000)
+ * @param {number|null} maxGasPriceGwei - Maximum allowed gas price in Gwei (default 1000).
+ *        Pass null to skip the gas price bound entirely - only appropriate when the
+ *        caller genuinely cannot determine the network price, since the alternative is
+ *        an arbitrary invented constant.
  * @returns {{ valid: boolean, errors: string[], sanitized: Object }}
  */
 export function validateTransactionRequest(txRequest, maxGasPriceGwei = 1000) {
@@ -130,10 +133,10 @@ export function validateTransactionRequest(txRequest, maxGasPriceGwei = 1000) {
     } else {
       try {
         const gasPrice = BigInt(txRequest.gasPrice);
-        const maxGasPriceWei = BigInt(maxGasPriceGwei) * BigInt('1000000000'); // Convert Gwei to Wei
         if (gasPrice < 0n) {
           errors.push('Invalid transaction: "gasPrice" cannot be negative');
-        } else if (gasPrice > maxGasPriceWei) {
+        } else if (maxGasPriceGwei !== null &&
+                   gasPrice > BigInt(maxGasPriceGwei) * BigInt('1000000000')) {
           errors.push(`Invalid transaction: "gasPrice" exceeds maximum of ${maxGasPriceGwei} Gwei`);
         } else {
           sanitized.gasPrice = txRequest.gasPrice;

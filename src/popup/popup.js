@@ -42,14 +42,24 @@ import * as ledger from '../core/ledger.js';
 
 /**
  * Escapes HTML special characters to prevent XSS attacks
+ *
+ * SECURITY: Escapes quotes as well as angle brackets. The previous
+ * textContent -> innerHTML round-trip only escaped & < >, because the HTML
+ * serializer does not escape quotes inside text nodes. That left every
+ * `attr="${escapeHtml(x)}"` interpolation open to attribute injection.
+ * Safe in text positions too: &quot;/&#39; render as " and '.
+ *
  * @param {string} text - Text to escape
- * @returns {string} HTML-safe text
+ * @returns {string} HTML-safe text, usable in both text and quoted-attribute contexts
  */
 function escapeHtml(text) {
   if (typeof text !== 'string') return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -3023,8 +3033,8 @@ async function renderDefaultTokens(network) {
           <p style="font-size: 15px; font-weight: bold;">${escapeHtml(token.symbol)}</p>
           <p class="text-dim ${token.dexScreenerUrl ? 'token-name-link' : ''}" style="font-size: 13px; ${token.dexScreenerUrl ? 'cursor: pointer; text-decoration: underline;' : ''}" ${token.dexScreenerUrl ? `data-url="${token.dexScreenerUrl}" title="View ${escapeHtml(token.name)} on DexScreener"` : ''}>${escapeHtml(token.name)}</p>
           <p class="text-dim" style="font-size: 11px; font-family: var(--font-mono); display: flex; align-items: center; gap: 4px;">
-            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${token.address}</span>
-            <button class="copy-address-btn" data-address="${token.address}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
+            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(token.address)}</span>
+            <button class="copy-address-btn" data-address="${escapeHtml(token.address)}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
           </p>
           ${isEnabled ? `
             <p class="text-dim" style="font-size: 13px; cursor: help;" title="${balanceTooltip}">Balance: ${balanceText}</p>
@@ -3130,15 +3140,15 @@ async function renderCustomTokens(network) {
           <p style="font-size: 15px; font-weight: bold;">${escapeHtml(token.symbol)}</p>
           <p class="text-dim ${token.dexScreenerUrl ? 'token-name-link' : ''}" style="font-size: 13px; ${token.dexScreenerUrl ? 'cursor: pointer; text-decoration: underline;' : ''}" ${token.dexScreenerUrl ? `data-url="${token.dexScreenerUrl}" title="View ${escapeHtml(token.name)} on DexScreener"` : ''}>${escapeHtml(token.name)}</p>
           <p class="text-dim" style="font-size: 11px; font-family: var(--font-mono); display: flex; align-items: center; gap: 4px;">
-            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${token.address}</span>
-            <button class="copy-address-btn" data-address="${token.address}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
+            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(token.address)}</span>
+            <button class="copy-address-btn" data-address="${escapeHtml(token.address)}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
           </p>
           <p class="text-dim" style="font-size: 13px; cursor: help;" title="${balanceTooltip}">Balance: ${balanceText}</p>
           ${usdValue !== null ? `<p class="text-dim" style="font-size: 12px; margin-top: 2px;">${formatUSD(usdValue)}</p>` : ''}
         </div>
         <div style="display: flex; flex-direction: column; gap: 6px; align-items: center; margin-left: 8px; min-width: 80px;">
-          <button class="view-token-details-btn" data-token-symbol="${token.symbol}" data-is-default="false" data-token-address="${token.address}" style="background: var(--terminal-accent); border: none; color: #000; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px;" title="View token details">ℹ️</button>
-          <button class="btn-danger btn-small remove-token-btn" data-token-address="${token.address}" style="width: 100%; font-size: 9px; padding: 2px 4px;">REMOVE</button>
+          <button class="view-token-details-btn" data-token-symbol="${escapeHtml(token.symbol)}" data-is-default="false" data-token-address="${escapeHtml(token.address)}" style="background: var(--terminal-accent); border: none; color: #000; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px;" title="View token details">ℹ️</button>
+          <button class="btn-danger btn-small remove-token-btn" data-token-address="${escapeHtml(token.address)}" style="width: 100%; font-size: 9px; padding: 2px 4px;">REMOVE</button>
         </div>
       </div>
     `;

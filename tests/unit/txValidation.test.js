@@ -232,6 +232,36 @@ describe('txValidation.js', () => {
       expect(result.valid).toBe(false);
     });
 
+    it('should skip the gas price bound when maxGasPriceGwei is null', () => {
+      // null means "caller has no basis for a bound" (RPC unreachable and nothing
+      // cached). It must skip the check cleanly rather than throwing or rejecting -
+      // a dApp gasPrice is discarded before signing regardless.
+      const gasPriceWei = BigInt(10_000_000) * BigInt('1000000000');
+      const result = validateTransactionRequest({
+        to: VALID_ADDRESS,
+        gasPrice: '0x' + gasPriceWei.toString(16)
+      }, null);
+      expect(result.valid).toBe(true);
+      expect(result.sanitized.gasPrice).toBe('0x' + gasPriceWei.toString(16));
+    });
+
+    it('should still reject a negative gasPrice when the bound is skipped', () => {
+      // Skipping the ceiling must not skip the other gasPrice checks
+      const result = validateTransactionRequest({
+        to: VALID_ADDRESS,
+        gasPrice: '-0x1'
+      }, null);
+      expect(result.valid).toBe(false);
+    });
+
+    it('should still reject a malformed gasPrice when the bound is skipped', () => {
+      const result = validateTransactionRequest({
+        to: VALID_ADDRESS,
+        gasPrice: 'not-hex'
+      }, null);
+      expect(result.valid).toBe(false);
+    });
+
     // ===== NONCE VALIDATION =====
 
     it('should reject unreasonably high nonce', () => {

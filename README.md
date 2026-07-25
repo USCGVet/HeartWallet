@@ -45,6 +45,13 @@ HeartWallet is a lightweight, secure Chrome extension wallet built for the Pulse
 - **Gas limit protection** - Maximum 10M gas (prevents fee scam attacks)
 - **Transaction validation** - All parameters checked before signing
 - **Origin validation** - Secure postMessage with specific origins
+- **Connection required for chain access** - Sites you haven't approved cannot read
+  chain data through your wallet, so they can't use it as a free RPC proxy or learn
+  your RPC endpoint. Only `eth_chainId`, `net_version` and `eth_accounts` are public
+  (needed for wallet detection)
+- **Untrusted token metadata is sanitized** - A token contract's `name()`/`symbol()`
+  are attacker-controlled, so they're stripped of control and bidi characters, length
+  bounded, and HTML-escaped before display
 
 ### 🌐 Web3 & DApp Features
 - **Full EIP-1193 provider** - Compatible with all Web3 DApps
@@ -195,6 +202,24 @@ npm run build && npm test
 
 Both options show live network gas prices to help you make informed decisions.
 
+### Gas & Fees
+
+HeartWallet sends **EIP-1559** transactions (type 2) on all networks.
+
+- **The wallet computes the fee, not the dApp.** A `gasPrice` supplied in a dApp's
+  `eth_sendTransaction` request is validated and then discarded — the fee actually
+  used is derived by the wallet from the network's current base fee. This means a
+  dApp cannot talk the wallet into an inflated fee.
+- **`maxFeePerGas` is deliberately generous** (`baseFee * 4 + tip`). PulseChain's base
+  fee can move several-fold within a minute, and a tight cap gets transactions
+  stranded — un-includable once the base fee rises above it. The network only ever
+  charges the actual base fee plus the tip, so a high cap costs nothing extra.
+- **A dApp's requested gas price is sanity-bounded** at 3x the live network price
+  (floor of 100 Gwei). If the RPC is unreachable, the bound falls back to 6x the last
+  price observed on that network rather than switching off.
+- **Gas limit is capped at 10,000,000** per transaction, which blocks fee-drain scams
+  that request an absurd limit. Most transfers need 21k–200k; complex DeFi 200k–1M.
+
 ### Hardware Wallet Support
 
 HeartWallet supports **Ledger Nano S, Ledger Nano X, and Ledger Nano S Plus** via WebHID.
@@ -218,12 +243,17 @@ HeartWallet supports **Ledger Nano S, Ledger Nano X, and Ledger Nano S Plus** vi
 
 Access settings from the dashboard (⚙ icon):
 - **Auto-lock**: Set timeout (5, 15, 30, or 60 minutes)
+- **Privacy mode**: Require a PIN to view the dashboard (hides balances/addresses)
 - **Decimal places**: Choose display precision (2, 4, 6, 8, or 18)
 - **Theme**: Select visual theme
-- **Max Gas Price**: Set maximum allowed gas price (protects from fee scams)
 - **Show test networks**: Toggle testnet visibility
 - **Allow eth_sign**: Enable dangerous blind signing (disabled by default)
+- **Enable Ledger / Trezor**: Opt in to hardware wallet support (Trezor not yet implemented)
 - **Export seed/key**: View your seed phrase or private key
+
+**Note:** There is no manual "Max Gas Price" setting. The gas price a dApp is allowed
+to request is bounded automatically at 3x the current network price (see
+[Gas & Fees](#gas--fees) below), so there is no number for you to tune.
 
 ## Themes
 

@@ -38,6 +38,31 @@ export async function getTokenContract(network, tokenAddress) {
   return new ethers.Contract(tokenAddress, ERC20_ABI, provider);
 }
 
+// SECURITY: name()/symbol() are attacker-controlled strings - a malicious token
+// contract can return arbitrary text (markup, control characters, megabytes of it).
+// These values get persisted and rendered in the wallet UI, so bound and clean them
+// at the point of ingestion rather than trusting every downstream render site.
+const MAX_TOKEN_NAME_LENGTH = 64;
+const MAX_TOKEN_SYMBOL_LENGTH = 16;
+
+/**
+ * Cleans a contract-supplied metadata string: strips control characters
+ * (including bidi overrides used for display spoofing) and caps the length.
+ * @param {any} value - Raw value returned by the contract
+ * @param {number} maxLength - Maximum allowed length
+ * @returns {string} Safe, bounded string
+ */
+export function sanitizeTokenString(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  return value
+    // C0 controls + DEL + C1 controls
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    // zero-width / bidi overrides / invisible formatting (display-spoofing chars)
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
 /**
  * Fetches token metadata (name, symbol, decimals)
  * @param {string} network - Network key
@@ -54,7 +79,21 @@ export async function getTokenMetadata(network, tokenAddress) {
       contract.decimals()
     ]);
 
-    return { name, symbol, decimals: Number(decimals) };
+    // SECURITY: never propagate raw contract-supplied strings
+    const safeName = sanitizeTokenString(name, MAX_TOKEN_NAME_LENGTH);
+    const safeSymbol = sanitizeTokenString(symbol, MAX_TOKEN_SYMBOL_LENGTH);
+
+    if (!safeSymbol) {
+      throw new Error('Token symbol is empty or invalid');
+    }
+
+    // decimals must be a sane uint8; reject nonsense so formatting can't be broken
+    const safeDecimals = Number(decimals);
+    if (!Number.isInteger(safeDecimals) || safeDecimals < 0 || safeDecimals > 36) {
+      throw new Error('Token decimals out of range');
+    }
+
+    return { name: safeName || safeSymbol, symbol: safeSymbol, decimals: safeDecimals };
   } catch (error) {
     throw new Error(`Failed to fetch token metadata: ${error.message}`);
   }

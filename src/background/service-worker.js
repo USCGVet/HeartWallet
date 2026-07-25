@@ -374,13 +374,40 @@ async function getCurrentChainId() {
   return CHAIN_IDS[network || 'pulsechainTestnet'];
 }
 
+// SECURITY: Methods any site may call without an approved connection.
+// Everything else - including read-only chain queries - requires a connection, so a
+// page the user never approved cannot use the wallet as a free RPC proxy (which
+// leaks the user's configured endpoint and IP) or probe chain state through them.
+//
+// eth_chainId/net_version stay public because EIP-1193 wallet detection reads them
+// before connecting; eth_accounts is public because it already returns [] for an
+// unconnected site; eth_requestAccounts IS the connection request.
+const PUBLIC_METHODS = new Set([
+  'eth_chainId',
+  'net_version',
+  'eth_accounts',
+  'eth_requestAccounts'
+]);
+
 // Handle wallet requests from content scripts
 async function handleWalletRequest(message, sender) {
   const { method, params } = message;
 
-  // SECURITY: Get origin from Chrome API, not message payload (prevents spoofing)
-  const url = new URL(sender.url);
-  const origin = url.origin;
+  // SECURITY: Get origin from Chrome API, not message payload (prevents spoofing).
+  // If we cannot determine an origin we cannot make an authorization decision, so refuse.
+  let origin;
+  try {
+    origin = new URL(sender.url).origin;
+  } catch {
+    console.warn('🫀 SECURITY: Rejecting wallet request with undeterminable origin:', sender?.url);
+    return { error: { code: 4100, message: 'Unauthorized: could not determine request origin' } };
+  }
+
+  // SECURITY: Single choke point for the connection requirement, so a newly added
+  // method cannot accidentally ship without an authorization check.
+  if (!PUBLIC_METHODS.has(method) && !(await isSiteConnected(origin))) {
+    return { error: { code: 4100, message: 'Not authorized. Please connect your wallet first.' } };
+  }
 
   // Handling wallet request
 
@@ -1087,6 +1114,57 @@ setInterval(() => {
   }
 }, REPLAY_PROTECTION_CONFIG.CLEANUP_INTERVAL);
 
+// Last gas price actually observed per network, so the sanity cap below can degrade
+// to a real bound instead of switching off whenever the RPC is briefly unreachable.
+const LAST_GOOD_GAS_PRICE_KEY = 'last_good_gas_price';
+
+/**
+ * Resolves the maximum gas price a dApp may request, in Gwei.
+ *
+ * SECURITY: this used to fall back to 10,000,000 Gwei ("essentially no limit") the
+ * moment the RPC call failed, which switched the check off exactly when the network
+ * was flaky. Instead, remember the last price we actually saw on this network and
+ * derive the fallback from that.
+ *
+ * @param {string} network - Network key
+ * @returns {Promise<{maxGasPriceGwei: number|null, source: 'live'|'cached'|'unknown'}>}
+ *          maxGasPriceGwei is null only when no price has ever been observed for the
+ *          network, meaning there is no honest basis for a bound.
+ */
+async function resolveMaxGasPriceGwei(network) {
+  try {
+    const currentGasPrice = await rpc.getGasPrice(network);
+    const gwei = Number(BigInt(currentGasPrice)) / 1e9;
+
+    if (Number.isFinite(gwei) && gwei > 0) {
+      const cache = (await load(LAST_GOOD_GAS_PRICE_KEY)) || {};
+      cache[network] = { gwei, observedAt: Date.now() };
+      await save(LAST_GOOD_GAS_PRICE_KEY, cache);
+
+      // 3x the live price absorbs normal volatility; floor of 100 Gwei keeps
+      // very cheap networks from producing an absurdly tight cap.
+      return { maxGasPriceGwei: Math.max(Math.ceil(gwei * 3), 100), source: 'live' };
+    }
+  } catch (error) {
+    console.warn('🫀 Gas price fetch failed, falling back to last known price:', error);
+  }
+
+  const cache = (await load(LAST_GOOD_GAS_PRICE_KEY)) || {};
+  const cached = cache[network];
+  if (cached && Number.isFinite(cached.gwei) && cached.gwei > 0) {
+    // Looser multiplier than the live path, since a cached price may be stale -
+    // still a finite bound rather than none at all.
+    return { maxGasPriceGwei: Math.max(Math.ceil(cached.gwei * 6), 100), source: 'cached' };
+  }
+
+  // No live price and nothing cached: we have no basis for a numeric bound, and
+  // inventing one would just be an arbitrary constant. Note that a dApp-supplied
+  // gasPrice is discarded before signing (see txToSend below) - the fee actually
+  // used is computed by the wallet from the network base fee - so this check is a
+  // request-sanity filter, not the control on what the user ends up paying.
+  return { maxGasPriceGwei: null, source: 'unknown' };
+}
+
 // Handle eth_sendTransaction - Sign and send a transaction
 async function handleSendTransaction(params, origin) {
   if (!params || !params[0]) {
@@ -1110,19 +1188,10 @@ async function handleSendTransaction(params, origin) {
   // Get current network from storage
   const currentNetwork = await load('currentNetwork') || 'pulsechain';
 
-  // Dynamically fetch current gas price and use 3x as max (to allow for volatility)
-  let maxGasPriceGwei;
-  try {
-    const currentGasPrice = await rpc.getGasPrice(currentNetwork);
-    const currentGasPriceGwei = Number(BigInt(currentGasPrice)) / 1e9;
-    // Use 3x current price as max to allow for network volatility
-    maxGasPriceGwei = Math.ceil(currentGasPriceGwei * 3);
-    // Ensure minimum of 100 Gwei for very low gas networks
-    maxGasPriceGwei = Math.max(maxGasPriceGwei, 100);
-  } catch (error) {
-    console.warn('Failed to fetch gas price, using high default:', error);
-    // If we can't fetch gas price, use a very high default to avoid blocking transactions
-    maxGasPriceGwei = 10000000; // 10M Gwei - essentially no limit
+  // Sanity-bound the gas price the dApp asked for, relative to the live network price.
+  const { maxGasPriceGwei, source: gasCapSource } = await resolveMaxGasPriceGwei(currentNetwork);
+  if (gasCapSource !== 'live') {
+    console.warn(`🫀 Gas price cap derived from ${gasCapSource} price (RPC unavailable)`);
   }
 
   // SECURITY: Comprehensive transaction validation
@@ -1502,11 +1571,50 @@ async function handleWatchAsset(params, origin, tab) {
     return { error: { code: -32602, message: 'Token must have address and symbol' } };
   }
 
+  // SECURITY: every field here is dApp-controlled and gets shown on an approval
+  // screen, so validate/bound all of it. An unbounded symbol can push the real
+  // origin and address out of view; an arbitrary image URL both beacons the user's
+  // IP and lets a scam token wear a legitimate token's logo.
+  if (typeof options.address !== 'string' || !ethers.isAddress(options.address)) {
+    return { error: { code: -32602, message: 'Token address is not a valid address' } };
+  }
+
+  if (typeof options.symbol !== 'string') {
+    return { error: { code: -32602, message: 'Token symbol must be a string' } };
+  }
+
+  const symbol = options.symbol
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '')
+    .trim()
+    .slice(0, 16);
+  if (!symbol) {
+    return { error: { code: -32602, message: 'Token symbol is empty or invalid' } };
+  }
+
+  const decimals = Number(options.decimals ?? 18);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+    return { error: { code: -32602, message: 'Token decimals out of range' } };
+  }
+
+  // Only allow https image URLs, and cap the length. Anything else is dropped
+  // rather than rejected, so a bad image does not block an otherwise valid request.
+  let image = null;
+  if (typeof options.image === 'string' && options.image.length <= 2048) {
+    try {
+      if (new URL(options.image).protocol === 'https:') {
+        image = options.image;
+      }
+    } catch {
+      // Not a parseable URL - drop it
+    }
+  }
+
   const tokenInfo = {
     address: options.address.toLowerCase(),
-    symbol: options.symbol,
-    decimals: options.decimals || 18,
-    image: options.image || null
+    symbol,
+    decimals,
+    image
   };
 
   // Requesting to add token
