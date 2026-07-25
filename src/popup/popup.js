@@ -35,7 +35,8 @@ import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD, getNativeTokenPrice, getNativeTokenSymbol } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
-import { escapeHtml, sanitizeError } from './lib/html.js';
+import { escapeHtml, sanitizeError, replaceChildren } from './lib/html.js';
+import { tokenRow, emptyTokenList } from './render/tokenRow.js';
 import { formatGweiSmart, formatBalanceWithCommas } from './lib/format.js';
 import { hashPrivacyPin } from './lib/crypto.js';
 import {
@@ -2813,115 +2814,94 @@ async function renderTokensScreen() {
   }
 }
 
+/**
+ * Loads the balance/USD strings for one token row.
+ * Shared by the default and custom token lists.
+ */
+async function loadTokenBalanceForRow(network, token, priceSymbol) {
+  if (!currentState.address) {
+    return { text: '-', tooltip: '', usdText: null };
+  }
+
+  try {
+    const balanceWei = await erc20.getTokenBalance(network, token.address, currentState.address);
+    const rawBalance = erc20.formatTokenBalance(balanceWei, token.decimals, 4);
+    const formatted = formatBalanceWithCommas(rawBalance, token.decimals);
+
+    let usdText = null;
+    if (currentState.tokenPrices) {
+      const usdValue = getTokenValueUSD(
+        priceSymbol, balanceWei, token.decimals, currentState.tokenPrices
+      );
+      if (usdValue !== null) usdText = formatUSD(usdValue);
+    }
+
+    return { text: formatted.display, tooltip: formatted.tooltip, usdText };
+  } catch (error) {
+    return { text: 'Error', tooltip: '', usdText: null };
+  }
+}
+
+// Copies an address and briefly shows a checkmark on the button that was clicked.
+async function copyAddressWithFeedback(address, button) {
+  try {
+    await navigator.clipboard.writeText(address);
+    const originalText = button.textContent;
+    button.textContent = '✓';
+    setTimeout(() => { button.textContent = originalText; }, 1000);
+  } catch (error) {
+    console.error('Failed to copy address:', error);
+  }
+}
+
+function openUrlInTab(url) {
+  if (url) chrome.tabs.create({ url });
+}
+
+function defaultTokenLogoUrl(token) {
+  return token.logo ? chrome.runtime.getURL(`assets/logos/${token.logo}`) : '';
+}
+
 async function renderDefaultTokens(network) {
   const defaultTokensEl = document.getElementById('default-tokens-list');
   const networkDefaults = tokens.DEFAULT_TOKENS[network] || {};
   const enabledDefaults = await tokens.getEnabledDefaultTokens(network);
 
   if (Object.keys(networkDefaults).length === 0) {
-    defaultTokensEl.innerHTML = '<p class="text-center text-dim" style="font-size: 11px; padding: 16px;">No default tokens for this network</p>';
+    replaceChildren(defaultTokensEl, emptyTokenList('No default tokens for this network'));
     return;
   }
 
-  let html = '';
+  const rows = [];
   for (const symbol in networkDefaults) {
     const token = networkDefaults[symbol];
     const isEnabled = enabledDefaults.includes(symbol);
 
-    // Fetch balance if enabled
-    let balanceText = '-';
-    let balanceTooltip = '';
-    let usdValue = null;
-    if (isEnabled && currentState.address) {
-      try {
-        const balanceWei = await erc20.getTokenBalance(network, token.address, currentState.address);
-        const rawBalance = erc20.formatTokenBalance(balanceWei, token.decimals, 4);
-        const formatted = formatBalanceWithCommas(rawBalance, token.decimals);
-        balanceText = formatted.display;
-        balanceTooltip = formatted.tooltip;
+    // Balance is only shown for enabled tokens, and only then is it fetched.
+    const balance = isEnabled ? await loadTokenBalanceForRow(network, token, symbol) : null;
 
-        // Calculate USD value if prices available
-        if (currentState.tokenPrices) {
-          usdValue = getTokenValueUSD(symbol, balanceWei, token.decimals, currentState.tokenPrices);
-        }
-      } catch (error) {
-        balanceText = 'Error';
+    rows.push(tokenRow(
+      {
+        symbol: token.symbol,
+        name: token.name,
+        address: token.address,
+        logoUrl: defaultTokenLogoUrl(token),
+        homeUrl: token.homeUrl,
+        dexScreenerUrl: token.dexScreenerUrl
+      },
+      {
+        balanceText: balance ? balance.text : null,
+        balanceTooltip: balance ? balance.tooltip : null,
+        usdText: balance ? balance.usdText : null,
+        actions: 'info',
+        onViewDetails: () => showTokenDetails(symbol, true),
+        onCopyAddress: copyAddressWithFeedback,
+        onOpenUrl: openUrlInTab
       }
-    }
-
-    const logoUrl = token.logo ? chrome.runtime.getURL(`assets/logos/${token.logo}`) : '';
-
-    html += `
-      <div class="token-item" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 8px; border-bottom: 1px solid var(--terminal-border);">
-        ${token.logo ?
-          (token.homeUrl ?
-            `<img src="${logoUrl}" alt="${escapeHtml(token.symbol)}" style="width: 32px; height: 32px; margin-right: 12px; border-radius: 50%; cursor: pointer;" class="token-logo-link" data-url="${token.homeUrl}" title="Visit ${escapeHtml(token.name)} homepage" />` :
-            `<img src="${logoUrl}" alt="${escapeHtml(token.symbol)}" style="width: 32px; height: 32px; margin-right: 12px; border-radius: 50%;" />`) :
-          '<div style="width: 32px; height: 32px; margin-right: 12px; background: var(--terminal-border); border-radius: 50%;"></div>'}
-        <div style="flex: 1;">
-          <p style="font-size: 15px; font-weight: bold;">${escapeHtml(token.symbol)}</p>
-          <p class="text-dim ${token.dexScreenerUrl ? 'token-name-link' : ''}" style="font-size: 13px; ${token.dexScreenerUrl ? 'cursor: pointer; text-decoration: underline;' : ''}" ${token.dexScreenerUrl ? `data-url="${token.dexScreenerUrl}" title="View ${escapeHtml(token.name)} on DexScreener"` : ''}>${escapeHtml(token.name)}</p>
-          <p class="text-dim" style="font-size: 11px; font-family: var(--font-mono); display: flex; align-items: center; gap: 4px;">
-            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(token.address)}</span>
-            <button class="copy-address-btn" data-address="${escapeHtml(token.address)}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
-          </p>
-          ${isEnabled ? `
-            <p class="text-dim" style="font-size: 13px; cursor: help;" title="${balanceTooltip}">Balance: ${balanceText}</p>
-            ${usdValue !== null ? `<p class="text-dim" style="font-size: 12px; margin-top: 2px;">${formatUSD(usdValue)}</p>` : ''}
-          ` : ''}
-        </div>
-        <div style="display: flex; align-items: center; margin-left: 8px;">
-          <button class="view-token-details-btn" data-token-symbol="${symbol}" data-is-default="true" style="background: var(--terminal-accent); border: none; color: #000; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px;" title="View token details">ℹ️</button>
-        </div>
-      </div>
-    `;
+    ));
   }
 
-  defaultTokensEl.innerHTML = html;
-
-  // Add event listeners for view details buttons
-  defaultTokensEl.querySelectorAll('.view-token-details-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const symbol = e.target.dataset.tokenSymbol;
-      const isDefault = e.target.dataset.isDefault === 'true';
-      showTokenDetails(symbol, isDefault);
-    });
-  });
-
-  // Add event listeners for copy address buttons
-  defaultTokensEl.querySelectorAll('.copy-address-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const address = e.target.dataset.address;
-      try {
-        await navigator.clipboard.writeText(address);
-        const originalText = e.target.textContent;
-        e.target.textContent = '✓';
-        setTimeout(() => {
-          e.target.textContent = originalText;
-        }, 1000);
-      } catch (error) {
-        console.error('Failed to copy address:', error);
-      }
-    });
-  });
-
-  // Add event listeners for logo clicks (open homepage)
-  defaultTokensEl.querySelectorAll('.token-logo-link').forEach(img => {
-    img.addEventListener('click', (e) => {
-      const url = e.target.dataset.url;
-      chrome.tabs.create({ url });
-    });
-  });
-
-  // Add event listeners for name clicks (open DexScreener)
-  defaultTokensEl.querySelectorAll('.token-name-link').forEach(p => {
-    p.addEventListener('click', (e) => {
-      const url = e.currentTarget.dataset.url;
-      if (url) {
-        chrome.tabs.create({ url });
-      }
-    });
-  });
+  replaceChildren(defaultTokensEl, rows);
 }
 
 async function renderCustomTokens(network) {
@@ -2929,117 +2909,42 @@ async function renderCustomTokens(network) {
   const customTokens = await tokens.getCustomTokens(network);
 
   if (customTokens.length === 0) {
-    customTokensEl.innerHTML = '<p class="text-center text-dim" style="font-size: 11px; padding: 16px;">No custom tokens added</p>';
+    replaceChildren(customTokensEl, emptyTokenList('No custom tokens added'));
     return;
   }
 
-  let html = '';
+  const rows = [];
   for (const token of customTokens) {
-    // Fetch balance
-    let balanceText = '-';
-    let balanceTooltip = '';
-    let usdValue = null;
-    if (currentState.address) {
-      try {
-        const balanceWei = await erc20.getTokenBalance(network, token.address, currentState.address);
-        const rawBalance = erc20.formatTokenBalance(balanceWei, token.decimals, 4);
-        const formatted = formatBalanceWithCommas(rawBalance, token.decimals);
-        balanceText = formatted.display;
-        balanceTooltip = formatted.tooltip;
+    const balance = await loadTokenBalanceForRow(network, token, token.symbol);
 
-        // Calculate USD value if prices available and token is known
-        if (currentState.tokenPrices) {
-          usdValue = getTokenValueUSD(token.symbol, balanceWei, token.decimals, currentState.tokenPrices);
+    rows.push(tokenRow(
+      {
+        symbol: token.symbol,
+        name: token.name,
+        address: token.address,
+        logoUrl: defaultTokenLogoUrl(token),
+        homeUrl: token.homeUrl,
+        dexScreenerUrl: token.dexScreenerUrl
+      },
+      {
+        balanceText: balance.text,
+        balanceTooltip: balance.tooltip,
+        usdText: balance.usdText,
+        actions: 'info+remove',
+        onViewDetails: () => showTokenDetails(token.symbol, false, token.address),
+        onCopyAddress: copyAddressWithFeedback,
+        onOpenUrl: openUrlInTab,
+        onRemove: async (address) => {
+          if (confirm('Remove this token from your list?')) {
+            await tokens.removeCustomToken(network, address);
+            await renderTokensScreen();
+          }
         }
-      } catch (error) {
-        balanceText = 'Error';
       }
-    }
-
-    const logoUrl = token.logo ? chrome.runtime.getURL(`assets/logos/${token.logo}`) : '';
-
-    html += `
-      <div class="token-item" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 8px; border-bottom: 1px solid var(--terminal-border);">
-        ${token.logo ?
-          (token.homeUrl ?
-            `<img src="${logoUrl}" alt="${escapeHtml(token.symbol)}" style="width: 32px; height: 32px; margin-right: 12px; border-radius: 50%; cursor: pointer;" class="token-logo-link" data-url="${token.homeUrl}" title="Visit ${escapeHtml(token.name)} homepage" />` :
-            `<img src="${logoUrl}" alt="${escapeHtml(token.symbol)}" style="width: 32px; height: 32px; margin-right: 12px; border-radius: 50%;" />`) :
-          '<div style="width: 32px; height: 32px; margin-right: 12px; background: var(--terminal-border); border-radius: 50%;"></div>'}
-        <div style="flex: 1;">
-          <p style="font-size: 15px; font-weight: bold;">${escapeHtml(token.symbol)}</p>
-          <p class="text-dim ${token.dexScreenerUrl ? 'token-name-link' : ''}" style="font-size: 13px; ${token.dexScreenerUrl ? 'cursor: pointer; text-decoration: underline;' : ''}" ${token.dexScreenerUrl ? `data-url="${token.dexScreenerUrl}" title="View ${escapeHtml(token.name)} on DexScreener"` : ''}>${escapeHtml(token.name)}</p>
-          <p class="text-dim" style="font-size: 11px; font-family: var(--font-mono); display: flex; align-items: center; gap: 4px;">
-            <span style="max-width: 80px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(token.address)}</span>
-            <button class="copy-address-btn" data-address="${escapeHtml(token.address)}" style="background: none; border: none; color: var(--terminal-accent); cursor: pointer; font-size: 11px; padding: 2px 4px;" title="Copy contract address">📋</button>
-          </p>
-          <p class="text-dim" style="font-size: 13px; cursor: help;" title="${balanceTooltip}">Balance: ${balanceText}</p>
-          ${usdValue !== null ? `<p class="text-dim" style="font-size: 12px; margin-top: 2px;">${formatUSD(usdValue)}</p>` : ''}
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 6px; align-items: center; margin-left: 8px; min-width: 80px;">
-          <button class="view-token-details-btn" data-token-symbol="${escapeHtml(token.symbol)}" data-is-default="false" data-token-address="${escapeHtml(token.address)}" style="background: var(--terminal-accent); border: none; color: #000; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px;" title="View token details">ℹ️</button>
-          <button class="btn-danger btn-small remove-token-btn" data-token-address="${escapeHtml(token.address)}" style="width: 100%; font-size: 9px; padding: 2px 4px;">REMOVE</button>
-        </div>
-      </div>
-    `;
+    ));
   }
 
-  customTokensEl.innerHTML = html;
-
-  // Add event listeners for view details buttons
-  customTokensEl.querySelectorAll('.view-token-details-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const symbol = e.target.dataset.tokenSymbol;
-      const isDefault = e.target.dataset.isDefault === 'true';
-      const address = e.target.dataset.tokenAddress;
-      showTokenDetails(symbol, isDefault, address);
-    });
-  });
-
-  // Add event listeners for remove buttons
-  customTokensEl.querySelectorAll('.remove-token-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const address = e.target.dataset.tokenAddress;
-      if (confirm('Remove this token from your list?')) {
-        await tokens.removeCustomToken(network, address);
-        await renderTokensScreen();
-      }
-    });
-  });
-
-  // Add event listeners for copy address buttons
-  customTokensEl.querySelectorAll('.copy-address-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const address = e.target.dataset.address;
-      try {
-        await navigator.clipboard.writeText(address);
-        const originalText = e.target.textContent;
-        e.target.textContent = '✓';
-        setTimeout(() => {
-          e.target.textContent = originalText;
-        }, 1000);
-      } catch (error) {
-        console.error('Failed to copy address:', error);
-      }
-    });
-  });
-
-  // Add event listeners for logo clicks (open homepage)
-  customTokensEl.querySelectorAll('.token-logo-link').forEach(img => {
-    img.addEventListener('click', (e) => {
-      const url = e.target.dataset.url;
-      chrome.tabs.create({ url });
-    });
-  });
-
-  // Add event listeners for name clicks (open DexScreener)
-  customTokensEl.querySelectorAll('.token-name-link').forEach(p => {
-    p.addEventListener('click', (e) => {
-      const url = e.currentTarget.dataset.url;
-      if (url) {
-        chrome.tabs.create({ url });
-      }
-    });
-  });
+  replaceChildren(customTokensEl, rows);
 }
 
 // ===== TOKEN DETAILS SCREEN =====
