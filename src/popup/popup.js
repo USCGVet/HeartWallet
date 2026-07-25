@@ -35,7 +35,7 @@ import { decodeTransaction } from '../core/contractDecoder.js';
 import { fetchTokenPrices, getTokenValueUSD, formatUSD, getNativeTokenPrice, getNativeTokenSymbol } from '../core/priceOracle.js';
 import * as erc20 from '../core/erc20.js';
 import * as ledger from '../core/ledger.js';
-import { escapeHtml, sanitizeError, h, replaceChildren } from './lib/html.js';
+import { sanitizeError, h, replaceChildren } from './lib/html.js';
 import { tokenRow, emptyTokenList } from './render/tokenRow.js';
 import { txParamsList } from './render/txParams.js';
 import { walletCard } from './render/walletCard.js';
@@ -1312,23 +1312,33 @@ function renderLedgerAddresses() {
     item.className = 'panel';
     item.style.cssText = 'margin-bottom: 8px; cursor: pointer; padding: 8px;';
 
-    item.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <input type="radio" name="ledger-address" value="${addr.index}"
-               id="ledger-addr-${addr.index}" style="cursor: pointer; flex-shrink: 0; width: 16px; height: 16px; margin: 0;">
-        <label for="ledger-addr-${addr.index}" style="flex: 1; cursor: pointer; font-size: 11px; margin: 0;">
-          <div style="color: var(--terminal-text); margin-bottom: 4px;">
-            <strong>Account ${addr.index}</strong>
-          </div>
-          <div style="color: var(--terminal-dim); font-size: 10px; word-break: break-all;">
-            ${escapeHtml(addr.address)}
-          </div>
-          <div style="color: var(--terminal-dim); font-size: 9px; margin-top: 2px;">
-            ${escapeHtml(addr.path)}
-          </div>
-        </label>
-      </div>
-    `;
+    const radioId = `ledger-addr-${addr.index}`;
+
+    replaceChildren(item, h('div', { style: 'display: flex; align-items: center; gap: 12px;' }, [
+      h('input', {
+        type: 'radio',
+        name: 'ledger-address',
+        value: addr.index,
+        id: radioId,
+        style: 'cursor: pointer; flex-shrink: 0; width: 16px; height: 16px; margin: 0;'
+      }),
+      h('label', {
+        for: radioId,
+        style: 'flex: 1; cursor: pointer; font-size: 11px; margin: 0;'
+      }, [
+        h('div', { style: 'color: var(--terminal-text); margin-bottom: 4px;' }, [
+          h('strong', { text: `Account ${addr.index}` })
+        ]),
+        h('div', {
+          style: 'color: var(--terminal-dim); font-size: 10px; word-break: break-all;',
+          text: addr.address
+        }),
+        h('div', {
+          style: 'color: var(--terminal-dim); font-size: 9px; margin-top: 2px;',
+          text: addr.path
+        })
+      ])
+    ]));
 
     // Make entire panel clickable
     item.addEventListener('click', () => {
@@ -2992,9 +3002,15 @@ async function showTokenDetails(symbol, isDefault, customAddress = null) {
   const logoContainer = document.getElementById('token-details-logo-container');
   if (tokenData.logo) {
     const logoUrl = chrome.runtime.getURL(`assets/logos/${tokenData.logo}`);
-    logoContainer.innerHTML = `<img src="${logoUrl}" alt="${escapeHtml(symbol)}" style="width: 48px; height: 48px; border-radius: 50%;" />`;
+    replaceChildren(logoContainer, h('img', {
+      src: logoUrl,
+      alt: symbol,
+      style: 'width: 48px; height: 48px; border-radius: 50%;'
+    }));
   } else {
-    logoContainer.innerHTML = '<div style="width: 48px; height: 48px; background: var(--terminal-border); border-radius: 50%;"></div>';
+    replaceChildren(logoContainer, h('div', {
+      style: 'width: 48px; height: 48px; background: var(--terminal-border); border-radius: 50%;'
+    }));
   }
 
   // Fetch and update balance
@@ -3812,13 +3828,22 @@ function renderRpcPriorityList() {
     item.draggable = true;
     item.dataset.index = index;
 
-    item.innerHTML = `
-      <span class="rpc-item-handle">☰</span>
-      <span class="rpc-item-priority">#${index + 1}</span>
-      <span class="rpc-item-url">${url}</span>
-      <span class="rpc-item-status"></span>
-      <button class="rpc-item-remove ${isDefault ? 'hidden' : ''}" title="Remove">×</button>
-    `;
+    // SECURITY: `url` is user-entered (Add Custom RPC), so it goes in as text.
+    replaceChildren(item, [
+      h('span', { class: 'rpc-item-handle', text: '☰' }),
+      h('span', { class: 'rpc-item-priority', text: `#${index + 1}` }),
+      h('span', { class: 'rpc-item-url', text: url }),
+      h('span', { class: 'rpc-item-status' }),
+      h('button', {
+        class: isDefault ? 'rpc-item-remove hidden' : 'rpc-item-remove',
+        title: 'Remove',
+        text: '×',
+        onClick: () => {
+          currentRpcPriorityList.splice(index, 1);
+          renderRpcPriorityList();
+        }
+      })
+    ]);
 
     // Drag events
     item.addEventListener('dragstart', handleRpcDragStart);
@@ -3826,13 +3851,6 @@ function renderRpcPriorityList() {
     item.addEventListener('dragleave', handleRpcDragLeave);
     item.addEventListener('drop', handleRpcDrop);
     item.addEventListener('dragend', handleRpcDragEnd);
-
-    // Remove button
-    const removeBtn = item.querySelector('.rpc-item-remove');
-    removeBtn?.addEventListener('click', () => {
-      currentRpcPriorityList.splice(index, 1);
-      renderRpcPriorityList();
-    });
 
     listEl.appendChild(item);
   });
@@ -3948,18 +3966,22 @@ async function testRpcSpeeds() {
     return a.elapsed - b.elapsed;
   });
 
-  let html = '';
-  sortedResults.forEach((r, i) => {
+  // SECURITY: r.url is user-entered (Add Custom RPC), so it goes in as text.
+  const resultItems = sortedResults.map((r, i) => {
     const timeClass = r.success ? (r.elapsed < 300 ? 'fast' : r.elapsed < 700 ? 'medium' : 'slow') : 'slow';
-    html += `
-      <div class="speed-result-item">
-        <span class="speed-result-url">${i + 1}. ${r.url}</span>
-        <span class="speed-result-time ${timeClass}">${r.success ? r.elapsed + 'ms' : 'FAILED'}</span>
-      </div>
-    `;
+    return h('div', { class: 'speed-result-item' }, [
+      h('span', { class: 'speed-result-url', text: `${i + 1}. ${r.url}` }),
+      h('span', {
+        class: `speed-result-time ${timeClass}`,
+        text: r.success ? `${r.elapsed}ms` : 'FAILED'
+      })
+    ]);
   });
 
-  resultsContent.innerHTML = html || '<p class="text-dim">No results</p>';
+  replaceChildren(
+    resultsContent,
+    resultItems.length ? resultItems : h('p', { class: 'text-dim', text: 'No results' })
+  );
 
   // Re-enable button
   testBtn.disabled = false;
