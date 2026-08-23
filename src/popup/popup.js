@@ -11,6 +11,7 @@ import {
   importFromMnemonic,
   importFromPrivateKey,
   unlockWallet,
+  unlockSpecificWallet,
   walletExists,
   exportPrivateKey,
   exportMnemonic,
@@ -442,6 +443,10 @@ function setupEventListeners() {
 
       saveNetwork();
       updateNetworkDisplays();
+
+      // Tell connected dApps the chain changed (background broadcasts chainChanged)
+      chrome.runtime.sendMessage({ type: 'NETWORK_CHANGED', network }).catch(() => {});
+
       await fetchBalance();
     });
 
@@ -1163,11 +1168,11 @@ async function handleImportWallet() {
     let address;
     if (method === 'mnemonic') {
       const mnemonic = document.getElementById('import-mnemonic').value;
-      const result = await importFromMnemonic(mnemonic, password, { onProgress });
+      const result = await importFromMnemonic(mnemonic, password, onProgress);
       address = result.address;
     } else {
       const privateKey = document.getElementById('import-privatekey').value;
-      const result = await importFromPrivateKey(privateKey, password, { onProgress });
+      const result = await importFromPrivateKey(privateKey, password, onProgress);
       address = result.address;
     }
 
@@ -1659,11 +1664,11 @@ async function handleUnlock() {
 
       // Try to verify password by unlocking any software wallet
       const allWallets = await getAllWallets();
-      const softwareWallet = allWallets.find(w => !w.isHardwareWallet);
+      const softwareWallet = allWallets.walletList.find(w => !w.isHardwareWallet);
 
       if (softwareWallet) {
         // Verify password by attempting to unlock a software wallet
-        await unlockWallet(password, { walletId: softwareWallet.id });
+        await unlockSpecificWallet(softwareWallet.id, password);
       } else {
         // No software wallets - check stored privacy PIN
         const storedPrivacyHash = await load('privacyPinHash');
@@ -2342,6 +2347,26 @@ async function handleAssetChange() {
 }
 
 async function handleSendMax() {
+  // Token max: the full token balance - gas is paid in the native coin, and
+  // currentState.balance is the NATIVE balance, which has nothing to do with
+  // how many tokens can be sent. Use the exact formatUnits string; a
+  // parseFloat round trip fabricates digits and can exceed the true balance.
+  const assetSelect = document.getElementById('send-asset-select');
+  const selectedAsset = assetSelect ? assetSelect.value : 'native';
+  if (selectedAsset && selectedAsset !== 'native') {
+    try {
+      const allTokens = await tokens.getAllTokens(currentState.network);
+      const token = allTokens.find(t => t.address === selectedAsset);
+      if (token) {
+        const balanceWei = await erc20.getTokenBalance(currentState.network, token.address, currentState.address);
+        document.getElementById('send-amount').value = ethers.formatUnits(balanceWei, token.decimals);
+      }
+    } catch (error) {
+      console.error('Error fetching token balance for max:', error);
+    }
+    return;
+  }
+
   // Set amount to available balance (minus estimated gas fee)
   const balance = parseFloat(currentState.balance);
   if (balance <= 0) return;
@@ -2602,6 +2627,14 @@ async function handleSendTransaction() {
 
       const amountWei = erc20.parseTokenAmount(amount, token.decimals);
 
+      // Reject over-balance sends here with a clear message instead of a raw
+      // node error after the expensive unlock (the token-details path already
+      // does this; this path was missing it)
+      const tokenBalanceWei = await erc20.getTokenBalance(currentState.network, token.address, currentState.address);
+      if (amountWei > BigInt(tokenBalanceWei)) {
+        throw new Error(`Insufficient ${token.symbol} balance`);
+      }
+
       // For token transfers, pass EIP-1559 gas options (robust cap; only base + tip charged)
       const txOptions = {};
       {
@@ -2673,24 +2706,39 @@ async function handleSendTransaction() {
       symbol = token.symbol;
     }
 
-    // Save transaction to history and start monitoring
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_AND_MONITOR_TX',
-      address: currentState.address,
-      transaction: {
-        hash: txResponse.hash,
-        timestamp: Date.now(),
-        from: currentState.address,
-        to: toAddress,
-        value: selectedAsset === 'native' ? ethers.parseEther(amount).toString() : '0',
-        gasPrice: gasPrice || (await txResponse.provider.getFeeData()).gasPrice.toString(),
-        nonce: txResponse.nonce,
-        network: currentState.network,
-        status: 'pending',
-        blockNumber: null,
-        type: selectedAsset === 'native' ? 'send' : 'token'
-      }
-    });
+    // Save transaction to history and start monitoring.
+    // Store the actual signed fields (for a token transfer `to` is the token
+    // contract and `data` the transfer calldata) - speed-up/cancel rebuild
+    // the replacement transaction from this record, so saving the display
+    // recipient here would turn a speed-up into a 0-value native transfer
+    // that cancels the token transfer.
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_AND_MONITOR_TX',
+        address: currentState.address,
+        transaction: {
+          hash: txResponse.hash,
+          timestamp: Date.now(),
+          from: currentState.address,
+          to: txResponse.to,
+          value: txResponse.value?.toString() ?? '0',
+          data: txResponse.data || '0x',
+          gasLimit: txResponse.gasLimit?.toString() ?? null,
+          maxFeePerGas: txResponse.maxFeePerGas?.toString() ?? null,
+          maxPriorityFeePerGas: txResponse.maxPriorityFeePerGas?.toString() ?? null,
+          gasPrice: (gasPrice ?? txResponse.maxFeePerGas ?? txResponse.gasPrice ?? 0n).toString(),
+          nonce: txResponse.nonce,
+          network: currentState.network,
+          status: 'pending',
+          blockNumber: null,
+          type: selectedAsset === 'native' ? 'send' : 'token'
+        }
+      });
+    } catch (saveError) {
+      // The tx is already broadcast; a bookkeeping failure must not surface
+      // to the user as "Transaction failed"
+      console.error('Failed to save tx to history:', saveError);
+    }
 
     // Send desktop notification
     if (chrome.notifications) {
@@ -2711,7 +2759,7 @@ async function handleSendTransaction() {
 
     // Provide user-friendly error messages
     let errorMessage;
-    if (error.message.includes('incorrect password')) {
+    if (error.message.toLowerCase().includes('incorrect password')) {
       errorMessage = 'Incorrect password';
     } else if (error.message.includes('Blind signing') || error.message.includes('Contract data')) {
       // Ledger requires enabling contract data for token/contract interactions
@@ -3182,8 +3230,11 @@ async function handleTokenSendMax() {
 
   try {
     const balanceWei = await erc20.getTokenBalance(currentState.network, tokenData.address, currentState.address);
-    const balanceFormatted = erc20.formatTokenBalance(balanceWei, tokenData.decimals, 18);
-    document.getElementById('token-details-amount').value = balanceFormatted;
+    // Exact string, not formatTokenBalance: its parseFloat/toFixed round trip
+    // fabricates digits (Max then exceeds the real balance and is rejected)
+    // and renders >=1e21 balances as exponential notation, which parseUnits
+    // refuses outright
+    document.getElementById('token-details-amount').value = ethers.formatUnits(balanceWei, tokenData.decimals);
   } catch (error) {
     console.error('Error getting max balance:', error);
   }
@@ -3345,7 +3396,7 @@ async function handleTokenSend() {
             }
           },
           onUpgradeStart: (info) => {
-            console.log(`🔐 Auto-upgrading wallet: ${info.currentIterations.toLocaleString()} → ${info.recommendedIterations.toLocaleString()}`);
+            console.log(`🔐 Auto-upgrading wallet: v${info.versionBefore} → v${info.versionAfter} (${info.paramsAfter?.label || 'new params'})`);
           }
         });
 
@@ -3355,7 +3406,7 @@ async function handleTokenSend() {
         signer = unlockResult.signer;
 
         if (unlockResult.upgraded) {
-          console.log(`✅ Wallet upgraded: ${unlockResult.iterationsBefore.toLocaleString()} → ${unlockResult.iterationsAfter.toLocaleString()}`);
+          console.log(`✅ Wallet upgraded: v${unlockResult.versionBefore} → v${unlockResult.versionAfter}`);
         }
       } catch (err) {
         // Hide progress bar on error
@@ -3392,24 +3443,38 @@ async function handleTokenSend() {
       txResponse = await tokenContract.transfer(recipient, amountBN, txOptions);
     }
 
-    // Save transaction to history and start monitoring
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_AND_MONITOR_TX',
-      address: currentState.address,
-      transaction: {
-        hash: txResponse.hash,
-        timestamp: Date.now(),
-        from: currentState.address,
-        to: recipient,
-        value: '0',
-        gasPrice: gasPrice ? gasPrice.toString() : (await txResponse.provider.getFeeData()).gasPrice.toString(),
-        nonce: txResponse.nonce,
-        network: currentState.network,
-        status: 'pending',
-        blockNumber: null,
-        type: 'token'
-      }
-    });
+    // Save transaction to history and start monitoring.
+    // Store the actual signed fields (`to` is the token contract, `data` the
+    // transfer calldata) - speed-up/cancel rebuild the replacement from this
+    // record, so saving the human recipient here would turn a speed-up into a
+    // 0-value native transfer that cancels the token transfer.
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_AND_MONITOR_TX',
+        address: currentState.address,
+        transaction: {
+          hash: txResponse.hash,
+          timestamp: Date.now(),
+          from: currentState.address,
+          to: txResponse.to,
+          value: txResponse.value?.toString() ?? '0',
+          data: txResponse.data || '0x',
+          gasLimit: txResponse.gasLimit?.toString() ?? null,
+          maxFeePerGas: txResponse.maxFeePerGas?.toString() ?? null,
+          maxPriorityFeePerGas: txResponse.maxPriorityFeePerGas?.toString() ?? null,
+          gasPrice: (gasPrice ?? txResponse.maxFeePerGas ?? txResponse.gasPrice ?? 0n).toString(),
+          nonce: txResponse.nonce,
+          network: currentState.network,
+          status: 'pending',
+          blockNumber: null,
+          type: 'token'
+        }
+      });
+    } catch (saveError) {
+      // The tx is already broadcast; a bookkeeping failure must not surface
+      // to the user as a failed send
+      console.error('Failed to save tx to history:', saveError);
+    }
 
     // Send desktop notification
     if (chrome.notifications) {
@@ -3430,7 +3495,7 @@ async function handleTokenSend() {
 
     // Provide user-friendly error messages
     let errorMessage;
-    if (error.message.includes('incorrect password')) {
+    if (error.message.toLowerCase().includes('incorrect password')) {
       errorMessage = 'Incorrect password';
     } else if (error.message.includes('Blind signing') || error.message.includes('Contract data')) {
       // Ledger requires enabling contract data for token/contract interactions
@@ -3626,7 +3691,7 @@ async function updatePrivacyPinSetupVisibility() {
 
   // Check if user has any software wallets
   const allWallets = await getAllWallets();
-  const hasSoftwareWallet = allWallets.some(w => !w.isHardwareWallet);
+  const hasSoftwareWallet = allWallets.walletList.some(w => !w.isHardwareWallet);
 
   if (hasSoftwareWallet) {
     // User has software wallet - use that password, no need for separate PIN
@@ -5626,7 +5691,7 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
           setTimeout(() => {
             showScreen('screen-tokens');
             // Refresh tokens
-            loadTokensScreen();
+            renderTokensScreen();
           }, 2000);
         } else if (tx.status === 'failed') {
           statusMessage.textContent = '❌ Transaction Failed';
@@ -5658,7 +5723,7 @@ async function showTokenSendTransactionStatus(txHash, network, amount, symbol) {
       clearInterval(pollInterval);
     }
     showScreen('screen-tokens');
-    loadTokensScreen();
+    renderTokensScreen();
   };
 
   // Setup Speed Up button
@@ -5756,7 +5821,7 @@ async function handleTransactionApprovalScreen(requestId) {
 
     // Get active wallet
     const wallet = await getActiveWallet();
-    const network = await load('currentNetwork') || 'pulsechainTestnet';
+    const network = await load('currentNetwork') || 'pulsechain';
 
     // Populate transaction details
     document.getElementById('tx-site-origin').textContent = origin;
@@ -6026,12 +6091,22 @@ async function handleTransactionApprovalScreen(requestId) {
           // Show transaction status
           showTransactionStatus(txResponse.hash, wallet.address, requestId);
 
-          // Notify service worker that transaction was approved
+          // Notify service worker that transaction was approved.
+          // txDetails carries the actually-signed fields; without it the
+          // history record gets nonce null, which breaks speed-up/cancel.
           await chrome.runtime.sendMessage({
             type: 'TRANSACTION_APPROVAL',
             requestId,
             approved: true,
-            txHash: txResponse.hash
+            txHash: txResponse.hash,
+            txDetails: {
+              to: txResponse.to,
+              value: txResponse.value?.toString() ?? '0',
+              data: txResponse.data || '0x',
+              gasPrice: txResponse.gasPrice?.toString() ?? '0',
+              gasLimit: txResponse.gasLimit?.toString() ?? null,
+              nonce: txResponse.nonce
+            }
           });
 
         } else {
@@ -6177,11 +6252,33 @@ async function handleTransactionApprovalScreen(requestId) {
               // Show transaction status
               showTransactionStatus(txResponse.hash, activeWallet.address, requestId);
             } else {
-              errorEl.textContent = response.error || 'Transaction failed';
-              errorEl.classList.remove('hidden');
-              approveBtn.disabled = false;
-              approveBtn.style.opacity = '1';
-              approveBtn.style.cursor = 'pointer';
+              // The transaction is already on-chain; re-enabling Approve here
+              // would let the user broadcast a duplicate spend. Record the tx
+              // ourselves (the background couldn't - e.g. its pending request
+              // expired) and show its status.
+              console.warn('Approval bookkeeping failed after broadcast:', response.error);
+              await chrome.runtime.sendMessage({
+                type: 'SAVE_AND_MONITOR_TX',
+                address: activeWallet.address,
+                transaction: {
+                  hash: txResponse.hash,
+                  timestamp: Date.now(),
+                  from: activeWallet.address,
+                  to: tx.to,
+                  value: tx.value?.toString() || '0',
+                  data: tx.data || '0x',
+                  gasLimit: tx.gasLimit?.toString() ?? null,
+                  maxFeePerGas: tx.maxFeePerGas?.toString() ?? null,
+                  maxPriorityFeePerGas: tx.maxPriorityFeePerGas?.toString() ?? null,
+                  gasPrice: txDetailsForHistory.gasPrice || '0',
+                  nonce: tx.nonce,
+                  network,
+                  status: 'pending',
+                  blockNumber: null,
+                  type: 'contract'
+                }
+              }).catch(() => {});
+              showTransactionStatus(txResponse.hash, activeWallet.address, requestId);
             }
           } catch (unlockError) {
             // Hide progress bar on error
@@ -6312,7 +6409,7 @@ async function handleTokenAddApprovalScreen(requestId) {
 
         if (response.success) {
           // Add the token to storage using existing token management
-          const network = await load('currentNetwork') || 'pulsechainTestnet';
+          const network = await load('currentNetwork') || 'pulsechain';
           await tokens.addCustomToken(network, tokenInfo.address, tokenInfo.symbol, tokenInfo.decimals);
 
           // Close the popup window
@@ -6361,8 +6458,10 @@ async function handleTokenAddApprovalScreen(requestId) {
 // ===== MESSAGE SIGNING APPROVAL HANDLERS =====
 
 async function handleMessageSignApprovalScreen(requestId) {
-  // Load settings for theme
+  // Load settings for theme, and the real network for the badge (without this
+  // the badge shows the default network, not the one the signature is for)
   await loadSettings();
+  await loadNetwork();
   applyTheme();
 
   // Get sign request details from background
@@ -6603,8 +6702,10 @@ async function handleMessageSignApprovalScreen(requestId) {
 }
 
 async function handleTypedDataSignApprovalScreen(requestId) {
-  // Load settings for theme
+  // Load settings for theme, and the real network for the badge (without this
+  // the badge shows the default network, not the one the signature is for)
   await loadSettings();
+  await loadNetwork();
   applyTheme();
 
   // Get sign request details from background

@@ -82,7 +82,11 @@ export function safeUrl(url) {
 
   // A leading slash or bare path cannot carry a scheme, so it is safe as-is.
   // Reject anything containing a colon before the first slash - that is a scheme.
-  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url.trim());
+  // Browsers strip ASCII tab/newline (and other control chars) from URLs before
+  // parsing the scheme - "java\tscript:" parses as javascript: - so the scheme
+  // must be detected against the same stripped form, not the raw string.
+  const stripped = url.replace(/[\u0000-\u0020]/g, '');
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(stripped);
   if (!schemeMatch) return url;
 
   return SAFE_URL_SCHEMES.has(schemeMatch[1].toLowerCase() + ':') ? url : null;

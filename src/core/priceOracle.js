@@ -414,9 +414,9 @@ async function getETHPrice(provider) {
     const sqrtPrice = Number(sqrtPriceX96) / (2 ** 96);
     const price = sqrtPrice * sqrtPrice;
 
-    // Adjust for decimal difference (USDC has 6 decimals, ETH has 18)
-    // This gives us USDC per ETH
-    const ethPriceUSD = price * (10 ** 12);
+    // price is raw token1 per raw token0 = wei per USDC base unit, so
+    // USD per ETH = 1e18 wei / price / 1e6 USDC units = 1e12 / price
+    const ethPriceUSD = (10 ** 12) / price;
 
     console.log('✓ ETH price from Uniswap:', ethPriceUSD);
     return ethPriceUSD;

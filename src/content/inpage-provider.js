@@ -23,12 +23,16 @@ class HeartWalletProvider {
     this._events = {};
     this._pendingRequests = new Map();
 
-    // Listen for responses from content script
+    // Listen for responses and wallet-pushed events from content script
     window.addEventListener('message', (event) => {
       if (event.source !== window) return;
       if (event.data.target !== 'heartwallet-inpage') return;
 
-      this._handleResponse(event.data);
+      if (event.data.type === 'EVENT') {
+        this._handleEvent(event.data);
+      } else {
+        this._handleResponse(event.data);
+      }
     });
 
     // Provider initialized
@@ -55,14 +59,34 @@ class HeartWalletProvider {
         params
       }, window.location.origin);
 
-      // Timeout after 60 seconds
+      // Must exceed the background's 5-minute user-approval window, otherwise
+      // the dApp's promise is rejected while the user is still deciding and a
+      // late approval signs a transaction the dApp already saw fail
       setTimeout(() => {
         if (this._pendingRequests.has(requestId)) {
           this._pendingRequests.delete(requestId);
-          reject(new Error('Request timeout'));
+          const err = new Error('Request timeout');
+          err.code = -32603;
+          reject(err);
         }
-      }, 60000);
+      }, 310000);
     });
+  }
+
+  // Handle wallet-pushed events (account/chain changes) forwarded by the content script
+  _handleEvent(data) {
+    if (data.event === 'accountsChanged') {
+      const accounts = Array.isArray(data.data) ? data.data : [];
+      this._selectedAddress = accounts.length > 0 ? accounts[0] : null;
+      this._isConnected = accounts.length > 0;
+      this.emit('accountsChanged', accounts);
+    } else if (data.event === 'chainChanged') {
+      if (data.data && data.data !== this._chainId) {
+        this._chainId = data.data;
+        this._networkVersion = parseInt(data.data, 16).toString();
+        this.emit('chainChanged', data.data);
+      }
+    }
   }
 
   // Handle response from content script
@@ -77,7 +101,12 @@ class HeartWalletProvider {
     this._pendingRequests.delete(requestId);
 
     if (error) {
-      reject(new Error(error.message || error));
+      // Preserve the JSON-RPC / EIP-1193 error code (4001 user rejected,
+      // 4902 unknown chain, ...) — dApps branch on err.code
+      const err = new Error(error.message || String(error));
+      if (error.code !== undefined) err.code = error.code;
+      if (error.data !== undefined) err.data = error.data;
+      reject(err);
     } else {
       // Update internal state based on method
       if (data.method === 'eth_requestAccounts' || data.method === 'eth_accounts') {

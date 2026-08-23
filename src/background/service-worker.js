@@ -16,12 +16,20 @@ import { ethers } from 'ethers';
 // Service worker loaded
 
 // Network chain IDs
+// Lowercase hex: dApps compare eth_chainId/chainChanged values as strings
+// against lowercase registries (MetaMask convention), so '0x3AF' reads as a
+// different chain than '0x3af' to them.
 const CHAIN_IDS = {
-  'pulsechainTestnet': '0x3AF', // 943
+  'pulsechainTestnet': '0x3af', // 943
   'pulsechain': '0x171', // 369
   'ethereum': '0x1', // 1
-  'sepolia': '0xAA36A7' // 11155111
+  'sepolia': '0xaa36a7' // 11155111
 };
+
+// Fallback when the user has never switched networks. Must match the popup's
+// initial currentState.network, or the UI and the dApp-facing API disagree
+// about which chain is active on a fresh profile.
+const DEFAULT_NETWORK = 'pulsechain';
 
 const NETWORK_NAMES = {
   'pulsechainTestnet': 'PulseChain Testnet V4',
@@ -371,7 +379,7 @@ function notifyChainChanged(chainId) {
 // Get current network chain ID
 async function getCurrentChainId() {
   const network = await load('currentNetwork');
-  return CHAIN_IDS[network || 'pulsechainTestnet'];
+  return CHAIN_IDS[network || DEFAULT_NETWORK];
 }
 
 // SECURITY: Methods any site may call without an approved connection.
@@ -388,6 +396,15 @@ const PUBLIC_METHODS = new Set([
   'eth_accounts',
   'eth_requestAccounts'
 ]);
+
+// EIP-1193: code 4001 = user rejected the request. dApps branch on this code
+// to show a quiet "cancelled" state instead of an error, so rejections must
+// carry it all the way back to the page.
+function userRejection(message) {
+  const err = new Error(message);
+  err.code = 4001;
+  return err;
+}
 
 // Handle wallet requests from content scripts
 async function handleWalletRequest(message, sender) {
@@ -491,7 +508,7 @@ async function handleWalletRequest(message, sender) {
     }
   } catch (error) {
     console.error('🫀 Error handling request:', error);
-    return { error: { code: -32603, message: error.message } };
+    return { error: { code: error.code || -32603, message: error.message } };
   }
 }
 
@@ -624,20 +641,12 @@ async function handleAddChain(params, origin) {
   const chainInfo = params[0];
   console.log('🫀 Request to add chain:', chainInfo);
 
-  // For now, only support our predefined chains
-  // Check if it's one of our supported chains
-  const supportedChains = {
-    '0x3af': true,
-    '0x3AF': true,
-    '0x171': true,
-    '0x1': true,
-    '0xaa36a7': true,
-    '0xAA36A7': true
-  };
-
-  if (supportedChains[chainInfo.chainId]) {
+  // For now, only support our predefined chains (hex chain IDs are
+  // case-insensitive per EIP-695, so normalize before the lookup)
+  const requestedChainId = String(chainInfo.chainId).toLowerCase();
+  if (CHAIN_ID_TO_NETWORK[requestedChainId]) {
     // Chain is already supported, just switch to it
-    return await handleSwitchChain([{ chainId: chainInfo.chainId }], origin);
+    return await handleSwitchChain([{ chainId: requestedChainId }], origin);
   }
 
   // Custom chains not supported yet
@@ -674,7 +683,7 @@ async function handleConnectionApproval(requestId, approved) {
       return { success: false, error: 'No active wallet' };
     }
   } else {
-    reject(new Error('User rejected connection'));
+    reject(userRejection('User rejected connection'));
     return { success: false, error: 'User rejected' };
   }
 }
@@ -705,7 +714,7 @@ async function handleChainSwitchApproval(requestId, approved) {
   pendingChainSwitches.delete(requestId);
 
   if (!approved) {
-    reject(new Error('User rejected chain switch'));
+    reject(userRejection('User rejected chain switch'));
     return { success: false, error: 'User rejected' };
   }
 
@@ -737,7 +746,7 @@ async function getChainSwitchRequest(requestId) {
 // Get current network key
 async function getCurrentNetwork() {
   const network = await load('currentNetwork');
-  return network || 'pulsechainTestnet';
+  return network || DEFAULT_NETWORK;
 }
 
 // Handle eth_blockNumber - Get current block number
@@ -1186,7 +1195,7 @@ async function handleSendTransaction(params, origin) {
   const txRequest = params[0];
 
   // Get current network from storage
-  const currentNetwork = await load('currentNetwork') || 'pulsechain';
+  const currentNetwork = await load('currentNetwork') || DEFAULT_NETWORK;
 
   // Sanity-bound the gas price the dApp asked for, relative to the live network price.
   const { maxGasPriceGwei, source: gasCapSource } = await resolveMaxGasPriceGwei(currentNetwork);
@@ -1274,7 +1283,7 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
   decrementPendingCount(origin);
 
   if (!approved) {
-    reject(new Error('User rejected transaction'));
+    reject(userRejection('User rejected transaction'));
     return { success: false, error: 'User rejected' };
   }
 
@@ -1652,7 +1661,7 @@ async function handleTokenAddApproval(requestId, approved) {
   pendingTokenRequests.delete(requestId);
 
   if (!approved) {
-    reject(new Error('User rejected token'));
+    reject(userRejection('User rejected token'));
     return { success: false, error: 'User rejected' };
   }
 
@@ -2456,6 +2465,28 @@ async function handleSignTypedData(params, origin, method) {
     };
   }
 
+  // SECURITY: refuse a typed-data domain bound to a different chain. A
+  // signature whose domain says chainId 1 authorizes actions on Ethereum
+  // mainnet regardless of which network the user believes they are on.
+  const domainChainId = typedData?.domain?.chainId;
+  if (domainChainId !== undefined && domainChainId !== null) {
+    let requestedChain;
+    try {
+      requestedChain = BigInt(domainChainId);
+    } catch {
+      return { error: { code: -32602, message: 'Invalid typed data domain chainId' } };
+    }
+    const currentChainId = BigInt(await getCurrentChainId());
+    if (requestedChain !== currentChainId) {
+      return {
+        error: {
+          code: -32602,
+          message: `Typed data domain chainId ${requestedChain} does not match the active chain ${currentChainId}`
+        }
+      };
+    }
+  }
+
   // Need user approval - create a pending request
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
@@ -2513,7 +2544,7 @@ async function handleSignApproval(requestId, approved, sessionToken) {
   pendingSignRequests.delete(requestId);
 
   if (!approved) {
-    reject(new Error('User rejected the request'));
+    reject(userRejection('User rejected the request'));
     return { success: false, error: 'User rejected' };
   }
 
@@ -2609,7 +2640,7 @@ async function handleLedgerSignApproval(requestId, approved, signature) {
   pendingSignRequests.delete(requestId);
 
   if (!approved) {
-    reject(new Error('User rejected the request'));
+    reject(userRejection('User rejected the request'));
     return { success: false, error: 'User rejected' };
   }
 
@@ -2649,7 +2680,12 @@ async function handleLedgerSignApproval(requestId, approved, signature) {
 
 // Get sign request details (for popup)
 function getSignRequest(requestId) {
-  return pendingSignRequests.get(requestId);
+  const entry = pendingSignRequests.get(requestId);
+  if (!entry) return null;
+  // Only ship display data to the popup - the live resolve/reject functions
+  // and the one-time approvalToken stay in the background
+  const { origin, method, signRequest } = entry;
+  return { origin, method, signRequest };
 }
 
 // Listen for messages from content scripts and popup
@@ -2667,6 +2703,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'SPEED_UP_TX', 'CANCEL_TX', 'SPEED_UP_TX_COMPLETE', 'CANCEL_TX_COMPLETE',
     'GET_SIGNING_AUDIT_LOG', 'GET_TX_HISTORY', 'GET_PENDING_TX_COUNT', 'GET_PENDING_TXS',
     'GET_TX_BY_HASH', 'REFRESH_TX_STATUS', 'REBROADCAST_TX', 'GET_CURRENT_GAS_PRICE', 'ACTIVE_WALLET_CHANGED',
+    'NETWORK_CHANGED',
     'GET_CONNECTION_REQUEST', 'GET_CONNECTED_SITES', 'GET_TRANSACTION_REQUEST',
     'GET_SIGN_REQUEST', 'GET_TOKEN_ADD_REQUEST', 'GET_CHAIN_SWITCH_REQUEST'
   ]);
@@ -2718,6 +2755,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await notifyAccountsChanged();
           sendResponse({ success: true });
           break;
+
+        case 'NETWORK_CHANGED': {
+          // User switched networks in the popup UI; tell connected dApps
+          const newChainId = CHAIN_IDS[message.network];
+          if (newChainId) {
+            notifyChainChanged(newChainId);
+          }
+          sendResponse({ success: true });
+          break;
+        }
 
         case 'TRANSACTION_APPROVAL':
           const txApprovalResult = await handleTransactionApproval(message.requestId, message.approved, message.sessionToken, message.gasPrice, message.customNonce, message.txHash, message.txDetails);
@@ -2836,7 +2883,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // Start monitoring for confirmation in background
           (async () => {
             try {
-              const network = message.transaction.network || 'pulsechainTestnet';
+              const network = message.transaction.network || DEFAULT_NETWORK;
               const provider = await rpc.getProvider(network);
               const tx = { hash: message.transaction.hash };
               await waitForConfirmation(tx, provider, message.address);

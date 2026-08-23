@@ -30,14 +30,14 @@ export async function personalSign(signer, message) {
     let messageToSign = message;
 
     if (typeof message === 'string' && message.startsWith('0x')) {
-      // It's a hex string, convert to UTF-8
+      // Hex payload: sign the raw bytes. dApps recover the address against the
+      // bytes, so signing the hex string's ASCII characters (or anything else)
+      // produces a signature that never verifies. For valid UTF-8 payloads the
+      // signature over the bytes is identical to one over the decoded string.
       try {
-        // Try to decode as hex
-        const bytes = ethers.getBytes(message);
-        messageToSign = ethers.toUtf8String(bytes);
+        messageToSign = ethers.getBytes(message);
       } catch {
-        // If decoding fails, use the hex string as-is
-        // ethers will handle it
+        // Not actually valid hex — sign the literal string
         messageToSign = message;
       }
     }

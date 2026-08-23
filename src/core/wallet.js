@@ -681,10 +681,11 @@ export async function migrateToMultiWallet() {
 
     // Get address from old wallet (we'll need to temporarily decrypt it)
     // For now, we'll create a placeholder - the address will be populated on first unlock
+    const migratedId = 'wallet_migrated_' + Date.now();
     const newFormat = {
-      activeWalletId: 'wallet_migrated_' + Date.now(),
+      activeWalletId: migratedId,
       walletList: [{
-        id: 'wallet_migrated_' + Date.now(),
+        id: migratedId,
         nickname: 'Main Wallet',
         address: null, // Will be populated on unlock
         encryptedKeystore: oldWallet,
@@ -1203,16 +1204,21 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
             }
             console.log(`   Future-proof against GPU aftermarket through 2040`);
 
-            // Notify user via callback if provided
+            // Notify user via callback if provided. A throwing UI callback
+            // must not abort the unlock/upgrade itself.
             if (options.onUpgradeStart) {
               const estimatedTime = Math.floor(recommendedParams.memory / 100); // ~10-20ms per MiB
-              options.onUpgradeStart({
-                versionBefore: currentVersion,
-                versionAfter: 3,
-                paramsBefore,
-                paramsAfter: recommendedParams,
-                estimatedTimeMs: estimatedTime
-              });
+              try {
+                options.onUpgradeStart({
+                  versionBefore: currentVersion,
+                  versionAfter: 3,
+                  paramsBefore,
+                  paramsAfter: recommendedParams,
+                  estimatedTimeMs: estimatedTime
+                });
+              } catch (cbError) {
+                console.warn('onUpgradeStart callback failed:', cbError);
+              }
             }
 
             console.log(`🔄 Upgrading wallet security...`);
