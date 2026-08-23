@@ -16,7 +16,6 @@ import {
   exportPrivateKey,
   exportMnemonic,
   deleteWallet,
-  migrateToMultiWallet,
   getAllWallets,
   getActiveWallet,
   setActiveWallet,
@@ -162,9 +161,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Normal popup flow
-  // Run migration first (converts old single-wallet to multi-wallet format)
-  await migrateToMultiWallet();
-
   await loadSettings();
   await loadNetwork();
   applyTheme();

@@ -186,9 +186,6 @@ export function getCurrentRecommendedIterations(year = new Date().getFullYear())
   return Math.max(calculated, MINIMUM_ITERATIONS);
 }
 
-// Legacy iteration count for backward compatibility
-const LEGACY_ITERATIONS = 100000;
-
 // Security: Minimum iteration floor to prevent clock manipulation attacks
 // An attacker with local system access could backdate the clock to force lower iterations.
 // This floor ensures wallets created with this build always meet minimum security standards.
@@ -292,88 +289,6 @@ export function getRecommendedArgon2Params(year = new Date().getFullYear()) {
 // ===== SELF-DESCRIBING ENCRYPTION FORMAT =====
 // Format: [4 bytes: iteration count][16 bytes: salt][12 bytes: IV][variable: ciphertext]
 // This allows iteration count to evolve over time without breaking existing wallets
-
-/**
- * Derives an encryption key from password using PBKDF2
- * @param {string} password - User password
- * @param {Uint8Array} salt - Salt for key derivation (16 bytes)
- * @param {number} iterations - PBKDF2 iteration count
- * @returns {Promise<CryptoKey>}
- */
-async function deriveEncryptionKey(password, salt, iterations) {
-  const encoder = new TextEncoder();
-  const passwordBuffer = encoder.encode(password);
-
-  // Import password as key material
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    passwordBuffer,
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits', 'deriveKey']
-  );
-
-  // Derive AES-GCM key
-  return await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: iterations,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-/**
- * Derives two independent keys using HKDF for two-layer encryption (v2 LEGACY - PBKDF2)
- * SECURITY: Even if an attacker cracks one layer, they cannot access the other layer
- * without cracking it independently (adds ~40,000 years to attack time)
- *
- * @param {string} password - User password
- * @param {Uint8Array} salt - 32-byte salt (used for both PBKDF2 and HKDF)
- * @param {number} iterations - PBKDF2 iteration count
- * @returns {Promise<{layer1Password: string, layer2Key: Uint8Array}>}
- */
-async function deriveIndependentKeysPBKDF2(password, salt, iterations) {
-  // Step 1: Derive master key using PBKDF2
-  const masterKey = await deriveEncryptionKey(password, salt, iterations);
-  const masterKeyBytes = await crypto.subtle.exportKey('raw', masterKey);
-
-  // Step 2: Use HKDF to derive two cryptographically independent keys
-  // Context strings ensure keys are different even with same input
-  const encoder = new TextEncoder();
-  const context1 = encoder.encode('HeartWallet-v2-Layer1-Scrypt');
-  const context2 = encoder.encode('HeartWallet-v2-Layer2-AES');
-
-  const layer1Key = hkdf(
-    sha256,                                // Hash function
-    masterKeyBytes,                        // Input key material (master key)
-    salt,                                  // Salt (reuse same salt - standard practice)
-    context1,                              // Context for Layer 1 (ethers.js scrypt)
-    32                                     // Output length (32 bytes)
-  );
-
-  const layer2Key = hkdf(
-    sha256,                                // Hash function
-    masterKeyBytes,                        // Input key material (master key)
-    salt,                                  // Salt (reuse same salt - standard practice)
-    context2,                              // Context for Layer 2 (AES-GCM)
-    32                                     // Output length (32 bytes)
-  );
-
-  // Step 3: Convert layer1Key to base64 string for ethers.js
-  // ethers.js requires a string password, not raw bytes
-  const layer1Password = btoa(String.fromCharCode(...layer1Key));
-
-  return {
-    layer1Password,  // Base64 string for ethers.js scrypt encryption
-    layer2Key        // Raw 32-byte key for AES-GCM encryption
-  };
-}
 
 /**
  * Derives two independent keys using Argon2id + HKDF for two-layer encryption (v3)
@@ -505,17 +420,23 @@ async function deriveIndependentKeys(password, salt, params = null, onProgress =
 }
 
 /**
- * Encrypts data with AES-GCM and stores iteration count in metadata
+ * Encrypts data with AES-GCM using an HKDF-derived key
  * @param {string} data - Data to encrypt
- * @param {string|Uint8Array} passwordOrKey - User password OR raw key bytes (for v2 HKDF)
- * @param {number} iterations - PBKDF2 iterations (defaults to current recommendation)
+ * @param {Uint8Array} keyBytes - Raw 32-byte key (layer2Key from HKDF derivation)
+ * @param {number} iterations - Header sentinel (1 = HKDF-derived key, no PBKDF2)
  * @returns {Promise<string>} Base64 encoded encrypted data with metadata
  */
-async function encryptWithAES(data, passwordOrKey, iterations = getCurrentRecommendedIterations()) {
+async function encryptWithAES(data, keyBytes, iterations = 1) {
+  if (!(keyBytes instanceof Uint8Array)) {
+    // Password-based v1 encryption is decommissioned; every caller derives
+    // the key first
+    throw new Error('encryptWithAES requires a derived key (Uint8Array)');
+  }
+
   const encoder = new TextEncoder();
   const dataBuffer = encoder.encode(data);
 
-  // SECURITY: Generate cryptographically random salt and IV
+  // SECURITY: Generate cryptographically random IV
   // crypto.getRandomValues() uses the browser's CSPRNG (Cryptographically Secure
   // Pseudo-Random Number Generator), which ensures:
   // 1. True randomness from hardware entropy sources
@@ -524,30 +445,17 @@ async function encryptWithAES(data, passwordOrKey, iterations = getCurrentRecomm
   // Each encryption operation gets a unique IV, which is critical for AES-GCM security
   const iv = crypto.getRandomValues(new Uint8Array(12));
 
-  // Determine if we received a password string or raw key bytes
-  let key;
-  let salt;
+  // Salt slot is unused with HKDF keys (derivation already consumed the real
+  // salt) but stays in the blob layout: [iterations][salt][IV][ciphertext]
+  const salt = new Uint8Array(16);
 
-  if (passwordOrKey instanceof Uint8Array) {
-    // v2 HKDF: Raw key bytes provided (layer2Key from HKDF derivation)
-    // No PBKDF2 needed - key is already derived
-    // Salt is not used here (already used in PBKDF2 master key derivation)
-    salt = new Uint8Array(16); // Dummy salt (not used, but needed for format compatibility)
-
-    // Import raw key bytes as CryptoKey for AES-GCM
-    key = await crypto.subtle.importKey(
-      'raw',
-      passwordOrKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt']
-    );
-  } else {
-    // v1 legacy: Password string provided
-    // Derive key using PBKDF2
-    salt = crypto.getRandomValues(new Uint8Array(16));
-    key = await deriveEncryptionKey(passwordOrKey, salt, iterations);
-  }
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
 
   // Encrypt
   const encryptedBuffer = await crypto.subtle.encrypt(
@@ -574,63 +482,45 @@ async function encryptWithAES(data, passwordOrKey, iterations = getCurrentRecomm
 }
 
 /**
- * Decrypts AES-GCM encrypted data, reading iteration count from metadata
- * Handles both new format (with iteration metadata) and legacy format
+ * Decrypts AES-GCM encrypted data in the self-describing format
+ * [iterations][salt][IV][ciphertext]. The pre-release headerless format was
+ * decommissioned before any public build shipped, so a blob that does not
+ * parse as this format is corrupt, not legacy.
  *
  * @param {string} encryptedData - Base64 encoded encrypted data
- * @param {string|Uint8Array} passwordOrKey - User password OR raw key bytes (for v2 HKDF)
+ * @param {Uint8Array} keyBytes - Raw 32-byte key (layer2Key from HKDF derivation)
  * @returns {Promise<string>} Decrypted data
  */
-async function decryptWithAES(encryptedData, passwordOrKey) {
+async function decryptWithAES(encryptedData, keyBytes) {
+  if (!(keyBytes instanceof Uint8Array)) {
+    throw new Error('decryptWithAES requires a derived key (Uint8Array)');
+  }
+
   try {
     // Decode from base64
     const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
 
-    let iterationCount;
-    let salt, iv, encrypted;
-
-    // Auto-detect format: new (with metadata) vs legacy
-    if (combined.length >= 4) {
-      const possibleIterations = new DataView(combined.buffer, 0, 4).getUint32(0, false);
-
-      // Heuristic: valid iteration counts are 0-1 (HKDF-derived key sentinel) or 100k-5M
-      // If first 4 bytes are in this range, it's the new self-describing format
-      if (possibleIterations <= 1 || (possibleIterations >= 100000 && possibleIterations <= 5000000)) {
-        // ✅ NEW FORMAT - read iteration count from metadata
-        // Note: iterations=0 or 1 are sentinel values meaning "HKDF-derived key, no PBKDF2"
-        iterationCount = possibleIterations;
-        salt = combined.slice(4, 20);
-        iv = combined.slice(20, 32);
-        encrypted = combined.slice(32);
-      } else {
-        // ✅ LEGACY FORMAT - use hardcoded legacy iteration count
-        iterationCount = LEGACY_ITERATIONS;
-        salt = combined.slice(0, 16);
-        iv = combined.slice(16, 28);
-        encrypted = combined.slice(28);
-      }
-    } else {
+    if (combined.length < 33) {
       throw new Error('Invalid encrypted data format');
     }
 
-    // Derive key based on input type
-    let key;
-
-    if (passwordOrKey instanceof Uint8Array) {
-      // v2 HKDF: Raw key bytes provided (layer2Key from HKDF derivation)
-      // Import raw key bytes as CryptoKey for AES-GCM
-      key = await crypto.subtle.importKey(
-        'raw',
-        passwordOrKey,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['decrypt']
-      );
-    } else {
-      // v1 legacy: Password string provided
-      // Derive key using PBKDF2 with stored iteration count
-      key = await deriveEncryptionKey(passwordOrKey, salt, iterationCount);
+    // Header sanity check: 0-1 are HKDF-key sentinels, 100k-5M were valid
+    // PBKDF2 counts. Anything else means the blob is not ours.
+    const iterationCount = new DataView(combined.buffer, 0, 4).getUint32(0, false);
+    if (!(iterationCount <= 1 || (iterationCount >= 100000 && iterationCount <= 5000000))) {
+      throw new Error('Invalid encrypted data format');
     }
+
+    const iv = combined.slice(20, 32);
+    const encrypted = combined.slice(32);
+
+    const key = await crypto.subtle.importKey(
+      'raw',
+      keyBytes,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt']
+    );
 
     // Decrypt
     const decryptedBuffer = await crypto.subtle.decrypt(
@@ -652,61 +542,12 @@ async function decryptWithAES(encryptedData, passwordOrKey) {
 
 
 // Storage keys
-const OLD_WALLET_KEY = 'wallet_encrypted'; // Legacy single wallet
-const WALLETS_KEY = 'wallets_multi'; // New multi-wallet structure
+const WALLETS_KEY = 'wallets_multi'; // Multi-wallet structure
 
 // ===== CONCURRENCY CONTROL =====
 // Prevents race conditions when multiple tabs upgrade the same wallet simultaneously
 // Maps wallet ID to upgrade Promise
 const ongoingUpgrades = new Map();
-
-/**
- * Migration: Converts old single-wallet format to new multi-wallet format
- * Runs automatically on first load
- * @returns {Promise<boolean>} True if migration occurred, false if already migrated
- */
-export async function migrateToMultiWallet() {
-  try {
-    // Check if already using new format
-    const walletsData = await load(WALLETS_KEY);
-    if (walletsData) {
-      return false; // Already migrated
-    }
-
-    // Check for old format wallet
-    const oldWallet = await load(OLD_WALLET_KEY);
-    if (!oldWallet) {
-      return false; // No wallet to migrate
-    }
-
-    // Get address from old wallet (we'll need to temporarily decrypt it)
-    // For now, we'll create a placeholder - the address will be populated on first unlock
-    const migratedId = 'wallet_migrated_' + Date.now();
-    const newFormat = {
-      activeWalletId: migratedId,
-      walletList: [{
-        id: migratedId,
-        nickname: 'Main Wallet',
-        address: null, // Will be populated on unlock
-        encryptedKeystore: oldWallet,
-        createdAt: Date.now(),
-        importMethod: 'migrated'
-      }]
-    };
-
-    // Save new format
-    await save(WALLETS_KEY, newFormat);
-
-    // Keep old wallet for safety during transition
-    // Can be cleaned up later
-
-    // Migrated to multi-wallet format
-    return true;
-  } catch (error) {
-    console.error('Error during migration:', error);
-    return false;
-  }
-}
 
 /**
  * Gets all wallets data
@@ -1111,58 +952,27 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
 
       // Step 5: Decrypt Layer 1 (ethers.js scrypt) with layer1Password
       signer = await ethers.Wallet.fromEncryptedJson(keystoreJson, layer1Password);
-    } else if (wallet.version === 2) {
-      // v2 PBKDF2+HKDF encryption (LEGACY) - use independent keys for each layer
-      // Step 1: Retrieve the salt
-      const salt = Uint8Array.from(atob(wallet.keySalt), c => c.charCodeAt(0));
-
-      // Step 2: Derive both independent keys using PBKDF2 + HKDF (legacy)
-      const { layer1Password, layer2Key } = await deriveIndependentKeysPBKDF2(
-        password,
-        salt,
-        wallet.kdf.iterations
-      );
-
-      // Step 3: Decrypt Layer 2 (AES-GCM) with layer2Key
-      const keystoreJson = await decryptWithAES(wallet.encryptedKeystore, layer2Key);
-
-      // Step 4: Decrypt Layer 1 (ethers.js scrypt) with layer1Password
-      signer = await ethers.Wallet.fromEncryptedJson(keystoreJson, layer1Password);
     } else {
-      // v1 legacy encryption - same password for both layers
-      // Decrypt the AES-GCM layer
-      const keystoreJson = await decryptWithAES(wallet.encryptedKeystore, password);
-
-      // Then decrypt wallet using ethers.js keystore
-      signer = await ethers.Wallet.fromEncryptedJson(keystoreJson, password);
-    }
-
-    // Update address if it's null (migration case)
-    if (!wallet.address) {
-      wallet.address = signer.address;
-      await save(WALLETS_KEY, walletsData);
+      // v1/v2 formats were decommissioned before any public build shipped -
+      // every real wallet is v3. Refuse rather than guess at a format.
+      throw new Error(`Unsupported wallet format (version ${wallet.version ?? 'unknown'}). This wallet predates the first release; restore it from its recovery phrase.`);
     }
 
     // ===== AUTO-UPGRADE SYSTEM =====
-    // Check if wallet needs security upgrade (version or parameters)
+    // Check if the (always v3) wallet needs an Argon2id parameter upgrade
     if (!options.skipUpgrade) {
-      const currentVersion = wallet.version || 1;
+      const currentVersion = 3;
       const currentYear = new Date().getFullYear();
       const walletParamYear = wallet.parameterYear || 2025; // Default to 2025 if missing
       const recommendedParams = getRecommendedArgon2Params(currentYear);
 
-      // Check if upgrade needed:
-      // 1. Version upgrade (v1/v2 → v3)
-      // 2. Parameter upgrade (v3 with old year → v3 with new params)
-      const needsVersionUpgrade = currentVersion < 3;
       const needsParameterUpgrade = (
-        currentVersion === 3 &&
         wallet.kdf && // Ensure kdf exists before accessing properties
         walletParamYear < currentYear &&
         (wallet.kdf.memory < recommendedParams.memory || wallet.kdf.iterations < recommendedParams.iterations)
       );
 
-      if (needsVersionUpgrade || needsParameterUpgrade) {
+      if (needsParameterUpgrade) {
         // CONCURRENCY CONTROL: Check if upgrade already in progress for this wallet
         if (ongoingUpgrades.has(walletId)) {
           console.log(`⏳ Wallet upgrade already in progress, waiting for completion...`);
@@ -1192,16 +1002,10 @@ export async function unlockSpecificWallet(walletId, password, options = {}) {
             const paramsBefore = wallet.kdf;
 
             console.log(`🔐 Wallet security upgrade available:`);
-            if (needsVersionUpgrade) {
-              console.log(`   Type: Version upgrade`);
-              console.log(`   Current: v${currentVersion} ${currentVersion === 2 ? '(PBKDF2+HKDF)' : currentVersion === 1 ? '(Legacy)' : ''}`);
-              console.log(`   Target: v3 (Argon2id+HKDF) ${recommendedParams.label}`);
-            } else if (needsParameterUpgrade) {
-              const currentLabel = `${wallet.kdf.memory / 1024} MiB, ${wallet.kdf.iterations} passes`;
-              console.log(`   Type: Parameter upgrade`);
-              console.log(`   Current: v3 (${currentLabel}) - Year ${walletParamYear}`);
-              console.log(`   Target: v3 (${recommendedParams.label}) - Year ${currentYear}`);
-            }
+            const currentLabel = `${wallet.kdf.memory / 1024} MiB, ${wallet.kdf.iterations} passes`;
+            console.log(`   Type: Parameter upgrade`);
+            console.log(`   Current: v3 (${currentLabel}) - Year ${walletParamYear}`);
+            console.log(`   Target: v3 (${recommendedParams.label}) - Year ${currentYear}`);
             console.log(`   Future-proof against GPU aftermarket through 2040`);
 
             // Notify user via callback if provided. A throwing UI callback
