@@ -776,3 +776,96 @@ export async function getRawTransaction(network, txHash) {
   return null;
 }
 
+
+/**
+ * Broadcasts an already-signed raw transaction to EVERY healthy endpoint for the network.
+ *
+ * A single endpoint can accept a transaction (returning a valid hash) and then fail to
+ * gossip it onward. The transaction is never seen by a block producer, quietly ages out
+ * of that node's mempool, and the sender is left staring at "waiting for confirmation"
+ * for a transaction no longer in flight — with the nonce still free, so nothing errors.
+ * Flooding every endpoint makes that failure survivable: one well-connected peer is enough.
+ *
+ * @param {string} network - Network key
+ * @param {string} rawTx - Signed serialized transaction (0x-prefixed)
+ * @returns {Promise<{hash: string, accepted: string[], rejected: Array<{endpoint: string, error: string}>}>}
+ */
+export async function broadcastRawTransaction(network, rawTx) {
+  const all = await getRpcEndpoints(network);
+  const endpoints = (Array.isArray(all) ? all : [all]).filter((e) => !isEndpointBlacklisted(e));
+
+  if (endpoints.length === 0) {
+    throw new Error(`No healthy RPC endpoints available for ${network}`);
+  }
+
+  const hash = ethers.keccak256(rawTx);
+
+  const results = await Promise.all(
+    endpoints.map(async (endpoint) => {
+      try {
+        const provider = new ethers.JsonRpcProvider(endpoint);
+        await provider.send('eth_sendRawTransaction', [rawTx]);
+        recordEndpointSuccess(endpoint);
+        return { endpoint, ok: true };
+      } catch (error) {
+        // "already known" / "nonce too low" mean a peer already has it — that is a success
+        // for propagation purposes, not a failure.
+        const msg = (error?.message || String(error)).toLowerCase();
+        if (msg.includes('already known') || msg.includes('already exists') ||
+            msg.includes('duplicate') || msg.includes('nonce too low')) {
+          return { endpoint, ok: true, duplicate: true };
+        }
+        return { endpoint, ok: false, error: error?.message || String(error) };
+      }
+    })
+  );
+
+  const accepted = results.filter((r) => r.ok).map((r) => r.endpoint);
+  const rejected = results
+    .filter((r) => !r.ok)
+    .map((r) => ({ endpoint: r.endpoint, error: r.error }));
+
+  if (accepted.length === 0) {
+    const detail = rejected.map((r) => `${r.endpoint}: ${r.error}`).join(' | ');
+    throw new Error(`Transaction rejected by all ${endpoints.length} RPC endpoints — ${detail}`);
+  }
+
+  console.log(`🫀 Broadcast ${hash} accepted by ${accepted.length}/${endpoints.length} endpoints`);
+  if (rejected.length > 0) {
+    console.warn('🫀 Some endpoints rejected the broadcast:', rejected);
+  }
+
+  return { hash, accepted, rejected };
+}
+
+/**
+ * Signs a transaction locally and broadcasts it to every healthy endpoint.
+ *
+ * Drop-in replacement for `signer.sendTransaction(tx)` — returns an object with the same
+ * `hash` / `wait()` shape — but does not depend on a single endpoint both accepting AND
+ * propagating the transaction.
+ *
+ * @param {ethers.Wallet} signer - Wallet already connected to a provider
+ * @param {string} network - Network key
+ * @param {Object} tx - Transaction request
+ * @returns {Promise<{hash: string, wait: Function, accepted: string[], nonce: number}>}
+ */
+export async function sendTransactionResilient(signer, network, tx) {
+  const populated = await signer.populateTransaction(tx);
+
+  // populateTransaction returns `from`, which signTransaction rejects as unsigned-tx input.
+  delete populated.from;
+
+  const rawTx = await signer.signTransaction(populated);
+  const { hash, accepted } = await broadcastRawTransaction(network, rawTx);
+
+  return {
+    hash,
+    accepted,
+    nonce: Number(populated.nonce),
+    maxFeePerGas: populated.maxFeePerGas,
+    maxPriorityFeePerGas: populated.maxPriorityFeePerGas,
+    gasLimit: populated.gasLimit,
+    wait: (confirmations = 1) => signer.provider.waitForTransaction(hash, confirmations)
+  };
+}

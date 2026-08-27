@@ -1444,11 +1444,25 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
 
     // EIP-1559 fees: use a generous maxFeePerGas cap so PulseChain's volatile base fee
     // cannot strand the transaction (only the actual base fee + tip is charged, so the
-    // high cap costs nothing extra). Any UI-selected `gasPrice` is honored as a floor.
+    // high cap costs nothing extra). Any UI-selected `gasPrice` is honored as a floor,
+    // as is a higher cap the dApp asked for — a dApp that deliberately raises its fees
+    // for an urgent transaction should not be silently capped back down to our estimate.
     try {
-      const fees = await rpc.getEip1559Fees(network, gasPrice || null);
+      const dappMaxFee = txRequest.maxFeePerGas ? BigInt(txRequest.maxFeePerGas) : 0n;
+      const uiFloor = gasPrice ? BigInt(gasPrice) : 0n;
+      const preferred = dappMaxFee > uiFloor ? dappMaxFee : uiFloor;
+
+      const fees = await rpc.getEip1559Fees(network, preferred > 0n ? preferred : null);
       txToSend.maxFeePerGas = fees.maxFeePerGas;
       txToSend.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
+
+      // Honor a higher dApp-requested tip too (still clamped to maxFeePerGas).
+      const dappTip = txRequest.maxPriorityFeePerGas ? BigInt(txRequest.maxPriorityFeePerGas) : 0n;
+      if (dappTip > txToSend.maxPriorityFeePerGas) {
+        txToSend.maxPriorityFeePerGas = dappTip > txToSend.maxFeePerGas
+          ? txToSend.maxFeePerGas
+          : dappTip;
+      }
     } catch (error) {
       console.warn('EIP-1559 fee calc failed, falling back to provider fee data:', error);
       const fd = await provider.getFeeData();
@@ -1460,8 +1474,12 @@ async function handleTransactionApproval(requestId, approved, sessionToken, gasP
       }
     }
 
-    // Send transaction
-    const tx = await connectedSigner.sendTransaction(txToSend);
+    // Sign locally and broadcast to EVERY healthy endpoint rather than trusting one.
+    // A single endpoint can accept a transaction and then fail to gossip it: the hash is
+    // valid, the nonce stays free, and the transaction silently ages out of the mempool
+    // while the UI waits forever on a confirmation that can never come.
+    const tx = await rpc.sendTransactionResilient(connectedSigner, network, txToSend);
+    console.log(`🫀 Transaction ${tx.hash} broadcast to ${tx.accepted.length} endpoint(s)`);
 
     // Transaction sent
 
@@ -1784,25 +1802,45 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
       const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
       const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
 
-      if (customGasPrice) {
-        // Custom gas price: use it for maxFeePerGas, calculate priority fee
-        const customFee = BigInt(customGasPrice);
-        // Priority fee should be at least 12.5% higher than original
-        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
-        // Use at least 1 Gwei for priority fee if not set
-        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+      // Fee floors must be relative to the LIVE base fee, not absolute. A hardcoded 1 Gwei
+      // tip is meaningless on PulseChain, where the base fee runs ~1,000,000 Gwei — and if
+      // the base fee has climbed since the original was signed, a 12.5% bump on a now-stale
+      // cap can still be unminable. Both floors below are derived from the current base fee.
+      let currentBaseFee = 0n;
+      try {
+        currentBaseFee = BigInt(await rpc.getBaseFee(network));
+      } catch (feeErr) {
+        console.warn('🫀 Could not read live base fee for speed-up, using bump only:', feeErr.message);
+      }
+      const tipFloor = currentBaseFee / 20n;          // 5% of base fee
+      const capFloor = currentBaseFee * 4n + tipFloor; // same generous cap as a fresh send
 
-        newMaxFeePerGas = customFee;
-        newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
+      if (customGasPrice) {
+        // Custom gas price: use it for maxFeePerGas, but never BELOW the replacement
+        // threshold — a node still holding the original rejects an under-priced
+        // replacement outright ("replacement transaction underpriced"), so a speed-up
+        // that lowers the cap silently fails to replace anything.
+        const customFee = BigInt(customGasPrice);
+        const minReplacementFee = (originalMaxFee * bumpMultiplier) / bumpDivisor;
+        newMaxFeePerGas = customFee > minReplacementFee ? customFee : minReplacementFee;
+
+        // Priority fee: at least 12.5% over the original, never below the live floor.
+        // Deliberately NOT clamped up to the cap — tip == cap means paying the full cap
+        // on every block, and it is self-perpetuating across successive speed-ups.
+        const bumped = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        newMaxPriorityFeePerGas = bumped > tipFloor ? bumped : tipFloor;
       } else {
-        // Calculate bumped fees (12.5% higher)
+        // Calculate bumped fees (12.5% higher), then raise to the live-base-fee floors
         newMaxFeePerGas = (originalMaxFee * bumpMultiplier) / bumpDivisor;
         newMaxPriorityFeePerGas = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
 
-        // Ensure priority fee is at least 1 Gwei
-        if (newMaxPriorityFeePerGas < 1000000000n) {
-          newMaxPriorityFeePerGas = 1000000000n;
-        }
+        if (newMaxPriorityFeePerGas < tipFloor) newMaxPriorityFeePerGas = tipFloor;
+        if (newMaxFeePerGas < capFloor) newMaxFeePerGas = capFloor;
+      }
+
+      // Invariant: the tip can never exceed the cap.
+      if (newMaxPriorityFeePerGas > newMaxFeePerGas) {
+        newMaxPriorityFeePerGas = newMaxFeePerGas;
       }
 
       replacementTx.maxFeePerGas = newMaxFeePerGas;
@@ -1829,8 +1867,10 @@ async function handleSpeedUpTransaction(address, originalTxHash, sessionToken, g
 
     // Speeding up transaction
 
-    // Send replacement transaction
-    const tx = await wallet.sendTransaction(replacementTx);
+    // Send replacement transaction — broadcast wide, since a speed-up is often needed
+    // precisely because the first attempt failed to propagate from a single endpoint.
+    const tx = await rpc.sendTransactionResilient(wallet, network, replacementTx);
+    console.log(`🫀 Speed-up ${tx.hash} broadcast to ${tx.accepted.length} endpoint(s)`);
 
     // Save new transaction to history (include EIP-1559 fields if applicable)
     const historyEntry = {
@@ -1984,11 +2024,22 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
       const originalMaxFee = onChainMaxFeePerGas || BigInt(originalTx.maxFeePerGas || originalTx.gasPrice || '0');
       const originalPriorityFee = onChainMaxPriorityFeePerGas || BigInt(originalTx.maxPriorityFeePerGas || '0');
 
+      // Floors derived from the live base fee — a cancel that can't be mined is worse
+      // than useless, since the user believes the original was replaced.
+      let currentBaseFee = 0n;
+      try {
+        currentBaseFee = BigInt(await rpc.getBaseFee(network));
+      } catch (feeErr) {
+        console.warn('🫀 Could not read live base fee for cancel, using bump only:', feeErr.message);
+      }
+      const tipFloor = currentBaseFee / 20n;
+      const capFloor = currentBaseFee * 4n + tipFloor;
+
       if (customGasPrice) {
         // Custom gas price: use it for maxFeePerGas
         const customFee = BigInt(customGasPrice);
-        const minPriorityFee = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
-        const priorityFee = minPriorityFee > 0n ? minPriorityFee : 1000000000n;
+        const bumped = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
+        const priorityFee = bumped > tipFloor ? bumped : tipFloor;
 
         newMaxFeePerGas = customFee;
         newMaxPriorityFeePerGas = priorityFee < customFee ? priorityFee : customFee;
@@ -1997,9 +2048,12 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
         newMaxFeePerGas = (originalMaxFee * bumpMultiplier) / bumpDivisor;
         newMaxPriorityFeePerGas = (originalPriorityFee * bumpMultiplier) / bumpDivisor;
 
-        if (newMaxPriorityFeePerGas < 1000000000n) {
-          newMaxPriorityFeePerGas = 1000000000n;
-        }
+        if (newMaxPriorityFeePerGas < tipFloor) newMaxPriorityFeePerGas = tipFloor;
+        if (newMaxFeePerGas < capFloor) newMaxFeePerGas = capFloor;
+      }
+
+      if (newMaxPriorityFeePerGas > newMaxFeePerGas) {
+        newMaxPriorityFeePerGas = newMaxFeePerGas;
       }
 
       cancelTx.maxFeePerGas = newMaxFeePerGas;
@@ -2024,8 +2078,9 @@ async function handleCancelTransaction(address, originalTxHash, sessionToken, cu
 
     // Cancelling transaction
 
-    // Send cancellation transaction
-    const tx = await wallet.sendTransaction(cancelTx);
+    // Send cancellation transaction — broadcast wide for the same reason as speed-up.
+    const tx = await rpc.sendTransactionResilient(wallet, network, cancelTx);
+    console.log(`🫀 Cancel ${tx.hash} broadcast to ${tx.accepted.length} endpoint(s)`);
 
     // Save cancellation transaction to history
     const historyEntry = {
