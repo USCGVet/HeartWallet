@@ -871,8 +871,13 @@ async function handleSendRawTransaction(params, origin) {
   try {
     const signedTx = params[0];
     const network = await getCurrentNetwork();
-    const txHash = await rpc.sendRawTransaction(network, signedTx);
-    return { result: txHash };
+    // Fan out to ALL endpoints — a single blackholing gateway must not strand the tx.
+    const results = await rpc.broadcastToAllRpcs(network, signedTx);
+    if (!results.successes || results.successes.length === 0) {
+      const detail = (results.failures || []).map((f) => f.error).join(' | ');
+      return { error: { code: -32603, message: `Broadcast failed on all RPC endpoints: ${detail}` } };
+    }
+    return { result: results.txHash };
   } catch (error) {
     console.error('Error sending raw transaction:', error);
     return { error: { code: -32603, message: error.message } };

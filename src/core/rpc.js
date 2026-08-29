@@ -14,10 +14,14 @@ const DEFAULT_RPC_ENDPOINTS = {
     'https://rpc-testnet-pulsechain.g4mm4.io'
   ],
   'pulsechain': [
-    'https://pulsechain-rpc.publicnode.com',
-    'https://pulsechain.publicnode.com',
+    // Order matters for reads/primary: publicnode's gateway has been observed
+    // accepting transactions into an isolated mempool that never propagates to
+    // validators (2026-08-29: three consecutive dapp txs blackholed). Well-peered
+    // gateways first; publicnode kept as read fallback.
+    'https://rpc.pulsechain.com',
     'https://rpc-pulsechain.g4mm4.io',
-    'https://rpc.pulsechain.com'
+    'https://pulsechain-rpc.publicnode.com',
+    'https://pulsechain.publicnode.com'
   ],
   'ethereum': [
     'https://ethereum.publicnode.com',
@@ -31,6 +35,35 @@ const DEFAULT_RPC_ENDPOINTS = {
     'https://rpc.ankr.com/eth_sepolia'
   ]
 };
+
+/**
+ * JsonRpcProvider whose broadcastTransaction fans out to ALL configured endpoints
+ * for the network instead of only the primary. Any single endpoint with a
+ * non-propagating mempool (see publicnode note above) can no longer blackhole a
+ * transaction: as long as one endpoint accepts it, the send succeeds. Mirrors
+ * ethers v6's own broadcastTransaction return path so signer.sendTransaction and
+ * every caller of provider.broadcastTransaction work unchanged.
+ */
+class MultiBroadcastProvider extends ethers.JsonRpcProvider {
+  constructor(url, networkKey) {
+    super(url);
+    this._hwNetworkKey = networkKey;
+  }
+
+  async broadcastTransaction(signedTx) {
+    const blockNumber = await this.getBlockNumber();
+    const results = await broadcastToAllRpcs(this._hwNetworkKey, signedTx);
+    const total = results.successes.length + results.failures.length;
+    if (results.successes.length === 0) {
+      const detail = results.failures.map((f) => `${f.endpoint}: ${f.error}`).join(' | ');
+      throw new Error(`Transaction broadcast failed on all ${total} RPC endpoints — ${detail}`);
+    }
+    console.log(`🫀 Broadcast accepted by ${results.successes.length}/${total} endpoints`);
+    const tx = ethers.Transaction.from(signedTx);
+    const network = await this.getNetwork();
+    return this._wrapTransactionResponse(tx, network).replaceableTransaction(blockNumber);
+  }
+}
 
 // User-configured RPC priorities (loaded from storage)
 let userRpcPriorities = null;
@@ -189,9 +222,10 @@ export async function getProvider(network) {
     
     try {
       console.log(`🫀 Trying RPC endpoint (${i + 1}/${endpointsList.length}): ${endpoint}`);
-      
-      // Create provider and test it
-      const provider = new ethers.JsonRpcProvider(endpoint);
+
+      // Create provider and test it. MultiBroadcastProvider fans sends out to
+      // every endpoint, so a blackholing primary can't strand a transaction.
+      const provider = new MultiBroadcastProvider(endpoint, network);
       
       // Verify it works with a quick call
       await provider.getBlockNumber();
@@ -703,13 +737,15 @@ export function formatBalance(balanceWei, decimals = 4) {
  */
 export async function broadcastToAllRpcs(network, rawTx) {
   const endpoints = await getRpcEndpoints(network);
-  const results = {
-    successes: [],
-    failures: []
-  };
 
   // Compute expected txHash from signed raw transaction for validation
   const expectedHash = ethers.keccak256(rawTx);
+
+  const results = {
+    successes: [],
+    failures: [],
+    txHash: expectedHash
+  };
 
   // Broadcast to all endpoints in parallel
   const promises = endpoints.map(async (endpoint) => {
@@ -729,8 +765,9 @@ export async function broadcastToAllRpcs(network, rawTx) {
 
       if (data.error) {
         // Some errors are expected (e.g., "already known") - these are actually successes
-        const errorMsg = data.error.message || data.error;
-        if (errorMsg.includes('already known') || errorMsg.includes('already in pool')) {
+        const errorMsg = String(data.error.message || data.error);
+        if (errorMsg.includes('already known') || errorMsg.includes('already in pool') ||
+            errorMsg.includes('ALREADY_EXISTS')) {
           results.successes.push({ endpoint, result: 'already in mempool' });
         } else {
           results.failures.push({ endpoint, error: errorMsg });
